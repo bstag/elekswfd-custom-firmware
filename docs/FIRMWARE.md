@@ -13,8 +13,8 @@ driven; stale regions clear. Priorities and sources:
 - **Live regions** (spectrum, bars, message, grid, icons, logo, weather) — shown while a
   corresponding command arrived recently (≈1.5 s window).
 - **"App off" fallback** — `appTime` records the last serial command; if none for >2 s
-  the PC app is considered off, and the clock plays its **stored grid animation** and
-  **stored offline message** from flash. NTP and on‑device weather run regardless.
+  the PC app is considered off, and the clock plays its **stored grid animation** and runs
+  its own **message line** (see below). NTP and on‑device weather run regardless.
 
 WiFi/NTP/weather/web run from the same loop (`wifiLoop()`); the HTTPS weather fetch
 blocks briefly every 15 min. `WiFi.setSleep(false)` is required for a stable link.
@@ -37,8 +37,10 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `GRID r0..r6 frame` | 7×7 grid rows (bit c = column c) + border‑frame flag |
 | `GCLR` / `GADD r0..r6` / `GCOMMIT fps frame` | Upload a stored grid animation to flash |
 | `GAUTO 0/1` | Play the stored grid animation when the app is off |
-| `OMCLR` / `OMADD b0..b11` / `OMCOMMIT fps` | Upload a stored offline message to flash |
-| `OMAUTO 0/1` | Show the stored offline message when the app is off |
+| `OMTEXT <text>` | Message text for the on-device message line (≤ 96 chars, placeholders allowed) |
+| `MSGCFG mode rot dwell scroll` | Message line: mode `0`=temp `1`=text `2`=date `3`=rotate; `rot` bitmask (1 temp, 2 text, 4 date); seconds per item; ms per scroll step |
+| `MSGINFO` | Print the message line's settings and what it's showing now |
+| `OMAUTO 0/1` | Run the message line when the app is off (`0` = temperature only) |
 | `ICON mask` | Top‑row icons (13‑bit bitmask) |
 | `LOGO 0/1` | ELEKSMAKER logo |
 | `GEO lat lon unit` | Weather location for on‑device fetch (persisted) |
@@ -53,7 +55,7 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | Path | Purpose |
 |---|---|
 | `GET /` | Status page (time, NTP, WiFi, weather) |
-| `GET/POST /control` | Phone control panel (brightness, weather ZIP/units, timezone, offline message, standalone toggles) |
+| `GET/POST /control` | Phone control panel (brightness, weather ZIP/units, timezone, message line, standalone toggles) |
 | `GET /wifi`, `POST /save` | WiFi picker: scanned networks by signal, or type a hidden one (captive portal in AP mode) |
 | `GET/POST /update` | OTA firmware upload |
 | `GET /rescan` | Re‑scan WiFi networks |
@@ -64,10 +66,29 @@ Anyone on your LAN can reach these pages. Set `WEBPASS` over USB to put `/contro
 In AP (setup) mode the clock is `192.168.4.1` and a DNS captive portal redirects to the
 setup page.
 
+## Message line (when the app is off)
+
+The clock renders the 6‑character message line itself, so it needs no PC:
+
+| Mode | Shows |
+|---|---|
+| Temperature | Current temperature (blank until weather has loaded) |
+| Text | `omtext`, scrolling if longer than 6 chars |
+| Date | e.g. `TUE OCT 13` |
+| Rotate | Cycles through the ticked sources every *dwell* seconds; temperature is skipped while there's no weather |
+
+Text placeholders expand live from the RTC and weather: `{time}` (`17:05`), `{time12}`
+(`5:05PM`), `{date}` (`TUE OCT 13`), `{day}` (`TUESDAY`), `{temp}` (`91F`). The PC app
+expands the same set, so a text reads the same whether the app is running or not.
+
+Set it from the phone page (`/control`) or over serial (`OMTEXT`, `MSGCFG`). While the app
+is connected it drives the message line instead. Any serial command counts as the app being
+connected, so the line pauses for 2 s after each one.
+
 ## Persistent storage (NVS namespace `wfd`)
 
-`style`, `bright`, `clk24`, `webpass`; grid animation `gn/gfps/gflag/gauto` + `ganim` (blob); offline message
-`omn/omfps/omauto` + `om` (blob) + `omtext`; WiFi/location `ssid/pass/tz/lat/lon/wunit/zip`.
+`style`, `bright`, `clk24`, `webpass`; grid animation `gn/gfps/gflag/gauto` + `ganim` (blob); message line
+`omauto/mmode/mrot/mdwell/mscroll` + `omtext`; WiFi/location `ssid/pass/tz/lat/lon/wunit/zip`.
 Settings survive OTA and USB flashes (the `nvs` partition offset is unchanged).
 
 ## Partition table (`partitions_wfd.csv`, 4 MB, dual‑OTA)

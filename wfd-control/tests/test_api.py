@@ -51,10 +51,11 @@ def test_grid_save_refuses_live_only_animation(app, api):
     assert status == 400 and "live data" in body["error"]
 
 
-def test_om_save_renders_scroll_frames(app, api):
-    status, body = api("/api/om_save", {"text": "HELLO WORLD"})
-    assert status == 200 and body["queued"] == len("HELLO WORLD") + 3
-    assert app.uploads[-1]["fps"] == 3
+def test_om_save_queues_cleaned_text(app, api):
+    status, body = api("/api/om_save", {"text": "  HELLO {time}\n"})
+    assert status == 200 and body == {"queued": 1, "text": "HELLO {time}"}
+    assert app.uploads[-1] == {"type": "omtext", "text": "HELLO {time}"}
+    assert api("/api/om_save", {"text": 5})[0] == 400
 
 
 def test_unknown_paths_404(api):

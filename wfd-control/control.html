@@ -135,7 +135,7 @@
       <button data-m="rotate">Rotate</button>
     </div>
     <div class="row">
-      <input type="text" id="custom_text" placeholder="Custom text — use {date} {time} {time12} {day}" style="flex:1">
+      <input type="text" id="custom_text" placeholder="Custom text — use {date} {time} {time12} {day} {temp}" style="flex:1">
       <button class="primary" id="applyText">Set</button>
     </div>
     <div class="row" id="rotateRow">
@@ -148,12 +148,13 @@
     </div>
     <div class="row" style="border-top:1px solid var(--line); padding-top:12px">
       <label>Offline message</label>
-      <input type="text" id="offline_text" placeholder="shown on the clock when the app is off" style="flex:1">
+      <input type="text" id="offline_text" placeholder="shown when the app is off; {time} {date} {day} {temp} work too" style="flex:1">
       <button class="primary" id="omSave">Save to clock</button>
     </div>
     <div class="row">
       <label class="switch"><input type="checkbox" id="msg_standalone"><span class="slider"></span></label>
-      <label for="msg_standalone">Show offline message when app is off</label>
+      <label for="msg_standalone">Clock runs its own message line when the app is off
+        <span class="hint">(mode, rotation and speed: the clock's phone page)</span></label>
     </div>
     <p class="hint" id="msgInfo"></p>
   </section>

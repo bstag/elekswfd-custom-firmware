@@ -15,13 +15,22 @@ def firmware_commands():
 
 def test_firmware_understands_everything_the_app_sends(app, sim):
     app.cfg.update(message_mode="rotate", rotate_date=True, grid_enable=True, icon_mode="system", logo=True)
-    app.uploads.append({"type": "om", "frames": app.render_om_frames("HELLO WORLD"), "fps": 3})
+    app.uploads.append({"type": "omtext", "text": "HELLO WORLD"})
     app.uploads.append({"type": "grid", "frames": [[1] * 7], "fps": 8, "frame": False})
     s = sim(30, events={10: app.sync_now.set})
     s.run()
     sent = set(s.commands())
     unknown = sent - firmware_commands()
     assert not unknown, f"app sends commands the firmware doesn't handle: {sorted(unknown)}"
+
+
+def test_app_expands_every_firmware_placeholder(app, sim):
+    """Text written once should read the same on the clock (app off) and from the app."""
+    names = set(re.findall(r's\.replace\("\{(\w+)\}"', MAIN_CPP.read_text(encoding="utf-8")))
+    assert {"time", "time12", "date", "day", "temp"} <= names
+    app.cfg.update(message_mode="text", custom_text=" ".join("{%s}" % n for n in sorted(names)))
+    sim(1).run()
+    assert "{" not in app.state["message"], app.state["message"]
 
 
 def test_firmware_font_table_is_generated_from_font14():

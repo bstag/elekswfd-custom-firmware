@@ -135,11 +135,6 @@ def render_grid_frames(anim, custom):
     return [eng.frame(anim, {}) for _ in range(n)]
 
 
-def scroll_len(text):
-    """Number of scroll positions for text on the 6-char line (1 = fits, no scroll)."""
-    return 1 if len(text) <= 6 else len(text) + 3
-
-
 def scroll_frame(text, pos):
     """12 message bytes for text scrolled to pos (wraps with a 3-space gap)."""
     if len(text) <= 6:
@@ -148,9 +143,13 @@ def scroll_frame(text, pos):
     return font14.render6(padded + padded, pos % len(padded))
 
 
-def render_om_frames(text):
-    text = (text or "").strip() or " "
-    return [scroll_frame(text, pos) for pos in range(scroll_len(text))]
+OMTEXT_MAX = 96                          # firmware MSG_TEXT_MAX
+
+
+def clean_omtext(text):
+    """Offline-message text as the clock stores it: one line of printable ASCII, capped."""
+    text = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in (text or ""))
+    return text.strip()[:OMTEXT_MAX]
 
 
 def foreground_title():
@@ -479,24 +478,23 @@ class ClockLink:
             self.push("GEO", f"{g['lat']} {g['lon']} {g['unit']}")
 
     def run_upload(self):
-        """Perform one queued flash upload (grid animation / offline message), if any."""
+        """Perform one queued upload to the clock's flash (grid animation / offline text), if any."""
         with uploads_lock:
             job = uploads.pop(0) if uploads else None
         if not job:
             return
-        if job["type"] == "grid":
-            clr, add, cap, commit, what = "GCLR", "GADD", 80, f"GCOMMIT {job['fps']} {1 if job['frame'] else 0}", "grid"
-        else:
-            clr, add, cap, commit, what = "OMCLR", "OMADD", 100, f"OMCOMMIT {job['fps']}", "message"
-        self.send(clr)
+        if job["type"] == "omtext":        # the clock renders and scrolls the text itself
+            self.send(f"OMTEXT {job['text']}")
+            set_state(saved=f"message: {job['text']!r}")
+            return
+        self.send("GCLR")
         time.sleep(0.03)
-        for fr in job["frames"][:cap]:
-            self.send(_frame_cmd(add, fr))
+        for fr in job["frames"][:80]:
+            self.send(_frame_cmd("GADD", fr))
             time.sleep(0.015)
-        self.send(commit)
-        set_state(saved=f"{what}: {len(job['frames'])} frames")
+        self.send(f"GCOMMIT {job['fps']} {1 if job['frame'] else 0}")
+        set_state(saved=f"grid: {len(job['frames'])} frames")
         self.sent.pop("GAUTO", None)       # a commit turns auto on; re-assert the setting
-        self.sent.pop("OMAUTO", None)
 
     def audio_levels(self, c):
         """0..NLEV levels for output/mic (always computed: used by the spectrum and the icon row)."""
@@ -552,12 +550,14 @@ class ClockLink:
             fill = {"date": now.strftime("%a %b %d").upper(),
                     "time": now.strftime("%H:%M"),
                     "time12": now.strftime("%I:%M").lstrip("0") + now.strftime("%p"),
-                    "day": now.strftime("%A").upper()}
+                    "day": now.strftime("%A").upper(),
+                    "temp": f"{state['weather']['temp']}{'C' if state['weather']['unit'] else 'F'}"
+                            if state["weather"]["label"] else "--"}
             if cur == "window":
                 txt = foreground_title()
             elif cur == "date":
                 txt = fill["date"]
-            else:                          # custom text, with {date}/{time}/{time12}/{day} placeholders
+            else:                          # custom text, with {date}/{time}/{time12}/{day}/{temp} placeholders
                 txt = c["custom_text"]
                 for k, v in fill.items():
                     txt = txt.replace("{" + k + "}", v)
@@ -666,11 +666,12 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/om_save":
             with cfg_lock:
                 text = body.get("text", cfg["offline_text"])
-            frames = render_om_frames(text)
-            fps = 1 if len(frames) == 1 else 3
+            if not isinstance(text, str):
+                return self._send(400, {"error": "text: expected a string"})
+            text = clean_omtext(text)
             with uploads_lock:
-                uploads.append({"type": "om", "frames": frames, "fps": fps})
-            return self._send(200, {"queued": len(frames)})
+                uploads.append({"type": "omtext", "text": text})
+            return self._send(200, {"queued": 1, "text": text})
         self._send(404, {"error": "not found"})
 
 

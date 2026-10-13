@@ -13,7 +13,7 @@ def busy_scenario(app, sim):
     app.cfg.update(message_mode="rotate", rotate_weather=True, rotate_window=True, rotate_text=True,
                    rotate_date=True, rotate_dwell=6, custom_text="HI {time} {day}", icon_mode="system",
                    grid_enable=True, grid_anim="spin", grid_frame=True, grid_fps=12, logo=True)
-    app.uploads.append({"type": "om", "frames": app.render_om_frames("WFD CLOCK"), "fps": 3})
+    app.uploads.append({"type": "omtext", "text": "WFD {time}"})
 
     def preview():
         app.grid_preview.update(rows=[1, 2, 4, 8, 16, 32, 64], frame=1, at=app.time.time())
@@ -72,6 +72,21 @@ def test_uploads_send_clear_add_commit_then_reassert_auto(app, sim):
     assert sent[i:i + 4] == ["GCLR", "GADD 1 1 1 1 1 1 1", "GADD 2 2 2 2 2 2 2", "GCOMMIT 12 1"]
     assert "GAUTO 0" in sent[i + 4:], "GCOMMIT turns auto on; the user's 'off' must be re-sent"
     assert app.state["saved"] == "grid: 2 frames"
+
+
+def test_offline_text_is_sent_as_text(app, sim):
+    app.uploads.append({"type": "omtext", "text": "HELLO {day}"})
+    s = sim(1)
+    s.run()
+    assert [line.split(maxsplit=2)[2] for line in s.lines if " OMTEXT " in line] == ["OMTEXT HELLO {day}"]
+    assert app.state["saved"] == "message: 'HELLO {day}'"
+
+
+def test_temp_placeholder(app, sim):
+    app.cfg.update(message_mode="text", custom_text="{temp}")
+    s = sim(1)
+    s.run()
+    assert app.state["message"] == "92F"
 
 
 def test_sync_now_pushes_time(app, sim):

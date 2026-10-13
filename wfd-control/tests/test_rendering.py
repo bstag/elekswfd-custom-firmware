@@ -36,12 +36,14 @@ def test_every_default_passes_its_own_validation(app):
         assert app.coerce(key, value) == value, key
 
 
-@pytest.mark.parametrize("text", ["HI", "SIXCHR", "HELLO WORLD", "x" * 40])
-def test_offline_frames_match_live_scroll(app, text):
-    frames = app.render_om_frames(text)
-    assert len(frames) == app.scroll_len(text)
-    assert frames == [app.scroll_frame(text, i) for i in range(len(frames))]
-    assert all(len(f) == 12 for f in frames)
+@pytest.mark.parametrize("raw, clean", [
+    ("  HELLO  ", "HELLO"),
+    ("tab\there\nnewline", "tab here newline"),  # one line only: the serial protocol is line-based
+    ("café ☃", "caf"),                   # non-ASCII has no glyph -> space, then trimmed
+    ("x" * 200, "x" * 96),
+])
+def test_clean_omtext(app, raw, clean):
+    assert app.clean_omtext(raw) == clean
 
 
 def test_scroll_wraps_with_gap(app):
@@ -50,8 +52,8 @@ def test_scroll_wraps_with_gap(app):
 
 
 def test_short_text_does_not_scroll(app):
-    assert app.render_om_frames("") == [app.font14.render6(" " * 6, 0)]
-    assert len(app.render_om_frames("ABCDEF")) == 1
+    assert app.scroll_frame("ABCDEF", 0) == app.scroll_frame("ABCDEF", 5)
+    assert all(len(app.scroll_frame("HELLO WORLD", i)) == 12 for i in range(20))
 
 
 def test_icons_all_and_off(app):

@@ -85,13 +85,20 @@ static uint32_t wxTime = 0;
 static uint8_t msgRam[12] = {0};      // raw glyphs for the 6 message chars (lo,hi x6 = bytes 0..11)
 static uint32_t msgTime = 0;
 
-// stored offline message animation (plays on the message chars when the app isn't driving them)
-#define OM_MAX 100
-static uint8_t omFrames[OM_MAX * 12];
-static int omN = 0, omFps = 5, omAuto = 0, omIdx = 0;
-static uint32_t omStep = 0;
-static uint8_t omUp[OM_MAX * 12];
-static int omUpN = 0;
+// on-device message line (runs when the app isn't driving the message chars)
+enum { SRC_TEMP = 0, SRC_TEXT = 1, SRC_DATE = 2, N_SRC = 3, MODE_ROTATE = 3 };
+#define MSG_TEXT_MAX 96
+static int omAuto = 0;                // 1 = run this engine when the app is off, 0 = just the temperature
+static int msgMode = SRC_TEXT;        // SRC_TEMP / SRC_TEXT / SRC_DATE / MODE_ROTATE
+static int msgRot = 0b111;            // rotate: bit per SRC_*
+static int msgDwell = 8;              // rotate: seconds per source
+static int msgScroll = 350;           // ms per scroll step
+static String msgText = "WFD CLOCK";  // text source; {time} {time12} {date} {day} {temp} expand live
+static uint8_t engRam[12] = {0};      // engine output glyphs
+static bool engTemp = true;           // engine says: show the temperature (drawTemp) instead of engRam
+static String msgShown;               // text currently on the message line (MSGINFO, phone page)
+static void setMsgText(String t);
+static void setMsgCfg(int mode, int rot, int dwell, int scroll);
 static uint8_t gridRows[7] = {0};     // bit c (0..6) of row r = cell (r,c)
 static uint8_t gridFrame = 0;
 static uint32_t gridTime = 0;
@@ -209,10 +216,10 @@ static void draw() {
   if (wxLive) drawWeatherWord();
   if (millis() - msgTime < 1500) {                  // live scrolling text from the app
     for (int i = 0; i < 12; i++) ram[i] = msgRam[i];
+  } else if (!appOn && omAuto && !engTemp) {        // app off -> on-device message engine
+    for (int i = 0; i < 12; i++) ram[i] = engRam[i];
   } else if (wxLive) {
     drawTemp();                                     // live temperature
-  } else if (!appOn && omAuto && omN > 0) {         // app off -> stored offline message
-    for (int i = 0; i < 12; i++) ram[i] = omFrames[omIdx * 12 + i];
   }
   if (millis() - gridTime < 1500) drawGrid(gridRows, gridFrame);    // live grid from the app
   else if (!appOn && gaAuto && gaN > 0)                             // app off -> stored animation
@@ -303,25 +310,17 @@ static void handle(const String &s) {
     gaAuto = arg.toInt() ? 1 : 0;
     prefs.putInt("gauto", gaAuto);
     Serial.printf("OK auto %d\n", gaAuto);
-  } else if (cmd == "OMCLR") {
-    omUpN = 0;
-    Serial.println("OK");
-  } else if (cmd == "OMADD") {
-    int v[12] = {0};
-    parseInts(arg, v, 12);
-    if (omUpN < OM_MAX) {
-      for (int k = 0; k < 12; k++) omUp[omUpN * 12 + k] = (uint8_t)v[k];
-      omUpN++;
-    }
-  } else if (cmd == "OMCOMMIT") {
-    int v[1] = {5};
-    parseInts(arg, v, 1);
-    omN = omUpN; omFps = v[0] < 1 ? 1 : v[0];
-    omAuto = 1; omIdx = 0;
-    memcpy(omFrames, omUp, omN * 12);
-    prefs.putBytes("om", omFrames, omN * 12);
-    prefs.putInt("omn", omN); prefs.putInt("omfps", omFps); prefs.putInt("omauto", omAuto);
-    Serial.printf("OK stored %d msg frames\n", omN);
+  } else if (cmd == "OMTEXT") {                 // "OMTEXT <text>"  message text, placeholders allowed
+    setMsgText(arg);
+    Serial.printf("OK omtext '%s'\n", msgText.c_str());
+  } else if (cmd == "MSGCFG") {                 // "MSGCFG <mode> <rotmask> <dwell s> <scroll ms>"
+    int v[4] = {msgMode, msgRot, msgDwell, msgScroll};
+    parseInts(arg, v, 4);
+    setMsgCfg(v[0], v[1], v[2], v[3]);
+    Serial.printf("OK msgcfg %d %d %d %d\n", msgMode, msgRot, msgDwell, msgScroll);
+  } else if (cmd == "MSGINFO") {                // what the engine is showing right now (for testing)
+    Serial.printf("msg auto=%d mode=%d rot=%d dwell=%d scroll=%d src=%s text='%s'\n", omAuto, msgMode,
+                  msgRot, msgDwell, msgScroll, engTemp ? "temp" : "glyphs", msgShown.c_str());
   } else if (cmd == "OMAUTO") {
     omAuto = arg.toInt() ? 1 : 0;
     prefs.putInt("omauto", omAuto);
@@ -546,24 +545,90 @@ static void render6(const String &s, int start, uint8_t *out) {   // out[12]
     glyph14(c, &out[i * 2], &out[i * 2 + 1]);
   }
 }
-static void setOfflineText(String t) {
-  t.trim();
-  if (t.length() == 0) t = " ";
-  if (t.length() > OM_MAX - 3) t = t.substring(0, OM_MAX - 3);   // +3 gap = one frame per position
-  int n;
-  if (t.length() <= 6) {
-    n = 1;
-    render6(t, 0, omFrames);
-  } else {
-    String d = t + "   ";
-    n = d.length();
-    String dd = d + d;
-    for (int p = 0; p < n; p++) render6(dd, p, &omFrames[p * 12]);
+// ---- on-device message engine ----
+static const char *DAY_ABBR[7] = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"};
+static const char *DAY_FULL[7] = {"MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"};
+static const char *MON_ABBR[12] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+
+static bool wxFresh() { return millis() - wxTime < 1200000; }
+
+static String tempText() { return String(wxTemp) + (wxUnit ? "C" : "F"); }
+
+// Expand {time} {time12} {date} {day} {temp} from the RTC / weather (same as the PC app).
+static String expandMsg(String s) {
+  if (s.indexOf('{') < 0) return s;
+  const uint8_t *t = curT;
+  int hh = bcd2dec(t[2] & 0x3F), mi = bcd2dec(t[1]);
+  int dow = constrain((t[3] & 7) - 1, 0, 6), mo = constrain(bcd2dec(t[5] & 0x1F) - 1, 0, 11);
+  char buf[16];
+  snprintf(buf, sizeof buf, "%02d:%02d", hh, mi);
+  s.replace("{time}", buf);
+  snprintf(buf, sizeof buf, "%d:%02d%s", hh % 12 ? hh % 12 : 12, mi, hh < 12 ? "AM" : "PM");
+  s.replace("{time12}", buf);
+  snprintf(buf, sizeof buf, "%s %s %02d", DAY_ABBR[dow], MON_ABBR[mo], bcd2dec(t[4]));
+  s.replace("{date}", buf);
+  s.replace("{day}", DAY_FULL[dow]);
+  s.replace("{temp}", wxFresh() ? tempText() : String("--"));
+  return s;
+}
+
+static int rotSrc = N_SRC - 1, scrollPos = 0;
+static uint32_t rotAt = 0, msgStepAt = 0;
+
+static bool srcAvailable(int src) { return src != SRC_TEMP || wxFresh(); }
+
+// One engine step: choose the source, render the next scroll position into engRam.
+static void msgStep() {
+  int src = msgMode;
+  if (msgMode == MODE_ROTATE) {
+    bool cur = (msgRot & (1 << rotSrc)) && srcAvailable(rotSrc);
+    if (!cur || millis() - rotAt >= (uint32_t)msgDwell * 1000) {
+      for (int k = 1; k <= N_SRC; k++) {               // next enabled + available source
+        int c = (rotSrc + k) % N_SRC;
+        if ((msgRot & (1 << c)) && srcAvailable(c)) {
+          if (c != rotSrc || !cur) { rotSrc = c; scrollPos = 0; msgShown = ""; }
+          break;
+        }
+      }
+      rotAt = millis();
+    }
+    src = (msgRot & (1 << rotSrc)) && srcAvailable(rotSrc) ? rotSrc : SRC_TEMP;
   }
-  omN = n; omFps = (n == 1 ? 1 : 3); omAuto = 1; omIdx = 0;
-  prefs.putBytes("om", omFrames, omN * 12);
-  prefs.putInt("omn", omN); prefs.putInt("omfps", omFps); prefs.putInt("omauto", omAuto);
-  prefs.putString("omtext", t);
+  if (src == SRC_TEMP) { engTemp = true; msgShown = wxFresh() ? tempText() : ""; return; }
+  engTemp = false;
+  String txt = expandMsg(src == SRC_DATE ? String("{date}") : msgText);
+  txt.trim();
+  if (txt.length() == 0) txt = " ";
+  if (txt != msgShown) { msgShown = txt; scrollPos = 0; }
+  if (txt.length() <= 6) {
+    render6(txt, 0, engRam);
+  } else {                                             // wrap with a 3-space gap, like the app
+    String d = txt + "   ";
+    render6(d + d, scrollPos % d.length(), engRam);
+    scrollPos++;
+  }
+}
+
+static void setMsgText(String t) {
+  t.replace("\t", " ");
+  t.trim();
+  if (t.length() > MSG_TEXT_MAX) t = t.substring(0, MSG_TEXT_MAX);
+  if (t == msgText) return;
+  msgText = t;
+  prefs.putString("omtext", msgText);
+  msgStepAt = 0;                                       // show it now
+}
+
+static void setMsgCfg(int mode, int rot, int dwell, int scroll) {
+  mode = constrain(mode, 0, MODE_ROTATE);
+  rot &= (1 << N_SRC) - 1;
+  dwell = constrain(dwell, 2, 600);
+  scroll = constrain(scroll, 50, 5000);
+  if (mode == msgMode && rot == msgRot && dwell == msgDwell && scroll == msgScroll) return;
+  msgMode = mode; msgRot = rot; msgDwell = dwell; msgScroll = scroll;
+  prefs.putInt("mmode", msgMode); prefs.putInt("mrot", msgRot);
+  prefs.putInt("mdwell", msgDwell); prefs.putInt("mscroll", msgScroll);
+  rotAt = 0; msgStepAt = 0;
 }
 static bool setWeatherZip(const String &zip) {
   if (WiFi.status() != WL_CONNECTED) return false;
@@ -590,7 +655,6 @@ static bool setWeatherZip(const String &zip) {
 
 static String controlPage() {
   String zip = prefs.getString("zip", "");
-  String omt = prefs.getString("omtext", "");
   String s = "<h2>WFD Clock Control</h2><form method=POST action=/control>";
   s += "<label>Brightness</label><input type=range name=bright min=1 max=16 value=" + String(brightness) + ">";
   s += "<label>Clock format</label><select name=clk24><option value=1" + String(clock24 ? " selected" : "") +
@@ -604,11 +668,29 @@ static String controlPage() {
                          {"Pacific", "PST8PDT,M3.2.0,M11.1.0"}, {"UTC", "UTC0"}};
   for (auto &z : zn) s += "<option value='" + String(z[1]) + "'" + (g_tz == z[1] ? " selected" : "") + ">" + z[0] + "</option>";
   s += "</select>";
-  s += "<label>Offline message (when the app is off)</label><input name=omtext maxlength=" + String(OM_MAX - 3) + " value='" + esc(omt) + "'>";
-  s += "<div class=row><input type=checkbox name=gauto " + String(gaAuto ? "checked" : "") +
-       "><label>Play stored grid animation when app is off</label></div>";
-  s += "<div class=row><input type=checkbox name=omauto " + String(omAuto ? "checked" : "") +
-       "><label>Show offline message when app is off</label></div>";
+  s += "<div class=row><input type=checkbox name=gauto id=gauto " + String(gaAuto ? "checked" : "") +
+       "><label for=gauto>Play stored grid animation when app is off</label></div>";
+
+  s += "<h3>Message line <small class=dim>when the app is off</small></h3>";
+  s += "<div class=row><input type=checkbox name=omauto id=omauto " + String(omAuto ? "checked" : "") +
+       "><label for=omauto>Use these settings (off = temperature only)</label></div>";
+  const char *modes[] = {"Temperature", "Text", "Date", "Rotate"};
+  s += "<label>Show</label><select name=mmode>";
+  for (int i = 0; i <= MODE_ROTATE; i++)
+    s += "<option value=" + String(i) + (msgMode == i ? " selected" : "") + ">" + modes[i] + "</option>";
+  s += "</select>";
+  s += "<label>Text</label><input name=omtext maxlength=" + String(MSG_TEXT_MAX) + " value='" + esc(msgText) + "'>";
+  s += "<p class=dim style='margin:4px 0;font-size:13px'>Placeholders: {time} {time12} {date} {day} {temp}</p>";
+  s += "<label>Rotate through</label><div class=row style=margin-top:4px>";
+  const char *srcs[] = {"Temperature", "Text", "Date"};
+  for (int i = 0; i < N_SRC; i++)
+    s += "<input type=checkbox name=rot" + String(i) + " id=rot" + String(i) + ((msgRot >> i) & 1 ? " checked" : "") +
+         "><label for=rot" + String(i) + ">" + srcs[i] + "</label>";
+  s += "</div>";
+  s += "<label>Seconds per item (rotate)</label><input type=number name=mdwell min=2 max=600 value=" + String(msgDwell) + ">";
+  s += "<label>Scroll speed <small>(ms per step, lower = faster)</small></label>"
+       "<input type=range name=mscroll min=100 max=1000 step=50 value=" + String(msgScroll) + ">";
+  s += "<p class=dim style=font-size:13px>Now showing: <b>" + esc(msgShown.length() ? msgShown : String("—")) + "</b></p>";
   s += "<button type=submit>Apply</button></form>";
   s += "<p class=dim><a href=/>Status</a> &middot; <a href=/update>Firmware update</a></p>";
   return page("WFD Control", s);
@@ -627,9 +709,11 @@ static void handleControlPost() {
   }
   String zip = web.arg("zip"); zip.trim();
   if (zip.length() >= 5 && zip != prefs.getString("zip", "")) setWeatherZip(zip);
-  if (web.hasArg("omtext")) {
-    String t = web.arg("omtext"); t.trim();
-    if (t != prefs.getString("omtext", "")) setOfflineText(t);
+  if (web.hasArg("omtext")) setMsgText(web.arg("omtext"));
+  if (web.hasArg("mmode")) {
+    int rot = 0;
+    for (int i = 0; i < N_SRC; i++) if (web.hasArg("rot" + String(i))) rot |= 1 << i;
+    setMsgCfg(web.arg("mmode").toInt(), rot, web.arg("mdwell").toInt(), web.arg("mscroll").toInt());
   }
   gaAuto = web.hasArg("gauto") ? 1 : 0; prefs.putInt("gauto", gaAuto);
   omAuto = web.hasArg("omauto") ? 1 : 0; prefs.putInt("omauto", omAuto);
@@ -817,13 +901,16 @@ void setup() {
   gaFlag = prefs.getInt("gflag", 0);
   gaAuto = prefs.getInt("gauto", 0);
   if (gaN > 0 && prefs.getBytes("ganim", gaFrames, gaN * 7) != (size_t)gaN * 7) gaN = 0;
-  omN = constrain(prefs.getInt("omn", 0), 0, OM_MAX);  // restore stored offline message
-  omFps = prefs.getInt("omfps", 5);
-  omAuto = prefs.getInt("omauto", 0);
-  if (omN > 0 && prefs.getBytes("om", omFrames, omN * 12) != (size_t)omN * 12) omN = 0;
+  omAuto = prefs.getInt("omauto", 0);    // restore the message-line engine
+  msgMode = constrain(prefs.getInt("mmode", SRC_TEXT), 0, MODE_ROTATE);
+  msgRot = prefs.getInt("mrot", 0b111);
+  msgDwell = prefs.getInt("mdwell", 8);
+  msgScroll = prefs.getInt("mscroll", 350);
+  msgText = prefs.getString("omtext", "WFD CLOCK");
+  prefs.remove("om"); prefs.remove("omn"); prefs.remove("omfps");   // pre-rendered frames: no longer used
   wifiBegin();
-  Serial.printf("wfd-clock ready, style %d, bright %d, grid %d auto %d, ommsg %d auto %d, wifi %s\n",
-                specStyle, brightness, gaN, gaAuto, omN, omAuto, apMode ? "setup-AP" : "connecting");
+  Serial.printf("wfd-clock ready, style %d, bright %d, grid %d auto %d, msg mode %d auto %d, wifi %s\n",
+                specStyle, brightness, gaN, gaAuto, msgMode, omAuto, apMode ? "setup-AP" : "connecting");
 }
 
 static void checkButtons() {
@@ -861,10 +948,9 @@ void loop() {
     gaIdx = (gaIdx + 1) % gaN;
     redraw = true;
   }
-  if (appOff && omAuto && omN > 0 &&
-      millis() - omStep > (uint32_t)(1000 / (omFps < 1 ? 1 : omFps))) {
-    omStep = millis();
-    omIdx = (omIdx + 1) % omN;
+  if (appOff && omAuto && (msgStepAt == 0 || millis() - msgStepAt >= (uint32_t)msgScroll)) {
+    msgStepAt = millis();
+    msgStep();
     redraw = true;
   }
   if (millis() - last >= 250) {
