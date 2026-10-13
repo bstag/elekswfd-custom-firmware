@@ -1,0 +1,65 @@
+# WFD Control (PC app)
+
+A local web app (`wfd-control/app.py`) that serves a dashboard **and** runs the
+background services that feed the clock the live, PC‑only data over USB serial.
+
+## Running
+
+```bash
+cd wfd-control
+uv run app.py              # uv reads the inline deps; or use a venv:
+# python -m venv .venv && .venv/Scripts/pip install pyserial numpy pyaudiowpatch psutil
+# .venv/Scripts/python app.py
+```
+Dashboard: **http://127.0.0.1:8737**. Add `--no-browser` to not auto‑open.
+
+Dependencies: `pyserial`, `numpy`, `pyaudiowpatch` (WASAPI loopback), `psutil`. The
+drawing tool and fonts use `font14.py` / `grid_anim.py` (in the same folder).
+
+## What it provides
+
+- **Clock** — time sync (DST‑aware), brightness
+- **Spectrum** — PC audio output (WASAPI loopback) on the left column, default mic on the
+  right; five styles; gain sliders
+- **System bars** — live CPU (psutil) / GPU (`nvidia-smi`) / RAM
+- **Weather** — resolves a ZIP or "Town, State" and pushes it; shows condition + temp
+- **Message line** — weather temp / scrolling window title / custom text / rotation
+- **Grid** — 13 animations incl. audio/CPU‑reactive; **Save to clock** stores repeatable
+  ones to flash; the **grid animator** (`/draw`) is a 7×7 frame editor with live preview
+- **Top row** — icon modes (audio meter / system status) and the logo toggle
+- **Offline message** + standalone toggles — what the clock shows when the app is off
+
+## How it drives the clock
+
+A worker thread connects to the CH340 port (auto‑found by VID/PID `1A86:7523`), then at
+~30 fps sends `SPEC`, and as needed `BARS`, `WX`, `MSG`, `GRID`, `ICON`, `LOGO`,
+`STYLE`, `BRIGHT`, `GEO`, plus `SET` every 10 min. Uploads (`Save to clock`) go through
+`GCLR/GADD/GCOMMIT` and `OMCLR/OMADD/OMCOMMIT`. It reconnects automatically if the clock
+is unplugged.
+
+**It holds the serial port.** Stop the app (end `pythonw.exe` / `app.py`) before flashing
+over USB or running the old vendor tool. (OTA over WiFi does **not** need the port free.)
+
+## Settings
+
+All UI settings persist in `wfd-control/wfd_config.json` (location, units, style, gains,
+brightness, message mode, grid animation, icon mode, logo, offline text, standalone
+toggles, …). Edit the file directly or use the UI; changes apply live.
+
+## Auto‑start at login (Windows)
+
+`wfd-control/wfd_control.vbs` launches the app hidden with `pythonw.exe`. Put a copy in
+your Startup folder (`shell:startup`) — e.g. named "WFD Clock Helper.vbs". To disable,
+delete it from Startup. Point its paths at a **persistent** Python env (not a temp venv).
+
+## Phone vs app — who wins
+
+Brightness, weather location, and the offline message can be set from **either** the
+clock's phone page **or** this app, so last‑writer‑wins for those three. Everything else
+is cleanly split: the phone page owns standalone behavior; the app owns the live,
+PC‑fed features (spectrum, bars, window title, generated animations).
+
+## Note on the older headless helper
+
+`wfd-firmware/wfd_daemon.py` is a superseded headless version (time + mic spectrum only).
+`wfd-control/app.py` replaces it with the full UI and feature set.

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "wfd-control",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "wfd-control/wfd.py", "--no-browser"],
+      "port": 8737
+    }
+  ]
+}

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WFD Segment Selector</title>
+<style>
+  :root { --bg:#0e1013; --panel:#161a1f; --line:#2a3038; --text:#e6e9ee; --muted:#8b95a3;
+          --off:#2a313a; --done:#2f7a52; --hot:#72d3ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 "Segoe UI",system-ui,sans-serif; }
+  header { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:12px 18px;
+           background:var(--panel); border-bottom:1px solid var(--line); }
+  h1 { font-size:16px; margin:0 10px 0 0; }
+  #status { font-size:16px; font-weight:600; }
+  button { background:#1d2228; color:var(--text); border:1px solid var(--line); border-radius:7px;
+           padding:8px 14px; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--hot); }
+  .hint { color:var(--muted); font-size:13px; margin:0 0 6px; }
+  main { padding:18px; display:flex; gap:40px; align-items:flex-start; flex-wrap:wrap; }
+  svg { background:#050607; border-radius:12px; border:1px solid var(--line); }
+  .seg { cursor:pointer; }
+  .seg line { stroke:var(--off); stroke-width:22; stroke-linecap:round; }
+  .seg .hit { stroke:transparent; stroke-width:40; }
+  .seg:hover line.v { stroke:var(--hot); }
+  .seg.done line.v { stroke:var(--done); }
+  #log { color:var(--muted); font-size:12px; white-space:pre-wrap; max-width:360px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WFD Segment Selector</h1>
+  <span id="status"></span>
+  <button id="btnNothing">Nothing lit (N)</button>
+  <button id="btnUndo">Undo (⌫)</button>
+  <button id="btnOff">Blank clock</button>
+</header>
+<main>
+  <div>
+    <p class="hint" id="phaseHint"></p>
+    <svg id="fig" width="320" height="440" viewBox="0 0 280 400" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+  <div id="log"></div>
+</main>
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+const fig = document.getElementById('fig');
+
+// grid points for both figures
+const P = {
+  TL:[50,50], TM:[140,50], TR:[230,50],
+  ML:[50,200], C:[140,200], MR:[230,200],
+  BL:[50,350], BM:[140,350], BR:[230,350],
+};
+const DIGIT_SEGS = {               // 7-segment
+  a:['TL','TR'], g:['ML','MR'], d:['BL','BR'],
+  f:['TL','ML'], b:['TR','MR'], e:['ML','BL'], c:['MR','BR'],
+};
+const CHAR_SEGS = {                // 16-segment starburst
+  a1:['TL','TM'], a2:['TM','TR'],
+  f:['TL','ML'], b:['TR','MR'],
+  g1:['ML','C'], g2:['C','MR'],
+  e:['ML','BL'], c:['MR','BR'],
+  d1:['BL','BM'], d2:['BM','BR'],
+  h:['TL','C'], i:['TM','C'], j:['TR','C'],
+  k:['BL','C'], l:['BM','C'], m:['BR','C'],
+};
+
+const DIGIT_LABELS = { a:'top', b:'top-right', c:'bottom-right', d:'bottom', e:'bottom-left', f:'top-left', g:'middle' };
+
+let phase = 'digit', step = 0, saved = { digit:{}, char:{} };
+const DIGIT_N = 7, CHAR_N = 13;
+
+function drawFig(segs) {
+  fig.innerHTML = '';
+  for (const name in segs) {
+    const [p1, p2] = segs[name];
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('class', 'seg'); g.dataset.seg = name;
+    const t = document.createElementNS(NS, 'title'); t.textContent = name; g.appendChild(t);
+    for (const cls of ['hit', 'v']) {
+      const l = document.createElementNS(NS, 'line');
+      l.setAttribute('x1', P[p1][0]); l.setAttribute('y1', P[p1][1]);
+      l.setAttribute('x2', P[p2][0]); l.setAttribute('y2', P[p2][1]);
+      l.setAttribute('class', cls);
+      g.appendChild(l);
+    }
+    g.addEventListener('click', () => pick(name));
+    fig.appendChild(g);
+  }
+  markDone();
+}
+function markDone() {
+  const done = new Set(Object.values(saved[phase]));
+  fig.querySelectorAll('.seg').forEach(s => s.classList.toggle('done', done.has(s.dataset.seg)));
+}
+
+async function api(path, body) {
+  const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  return r.json();
+}
+function setPhase(p) {
+  phase = p;
+  drawFig(p === 'digit' ? DIGIT_SEGS : CHAR_SEGS);
+  document.getElementById('phaseHint').textContent = p === 'digit'
+    ? 'Watch the LEFTMOST clock digit (bottom-right block). Click the segment that is lit.'
+    : 'Watch the FIRST message character (top-right block). Click the segment that is lit.';
+}
+async function show() {
+  const n = phase === 'digit' ? DIGIT_N : CHAR_N;
+  if (step >= n) {
+    if (phase === 'digit') { phase = 'char'; step = 0; setPhase('char'); return show(); }
+    document.getElementById('status').textContent = 'All done — tell Claude.';
+    await api('/api/off', {});
+    return;
+  }
+  await api('/api/show', { mode: phase, step });
+  document.getElementById('status').textContent =
+    `${phase === 'digit' ? 'Digit' : 'Character'} segment ${step + 1} / ${n}`;
+  markDone();
+}
+async function pick(name) {
+  await api('/api/save', { mode: phase, step, segment: name });
+  saved[phase][String(step)] = name;
+  log(`${phase} step ${step} -> ${name}` + (phase === 'digit' ? ` (${DIGIT_LABELS[name]})` : ''));
+  step++; await show();
+}
+async function nothing() {
+  await api('/api/save', { mode: phase, step, segment: null });
+  delete saved[phase][String(step)];
+  log(`${phase} step ${step} -> nothing`);
+  step++; await show();
+}
+async function undo() {
+  if (step === 0 && phase === 'char') { phase = 'digit'; step = DIGIT_N; setPhase('digit'); }
+  step = Math.max(0, step - 1);
+  await api('/api/save', { mode: phase, step, segment: null });
+  delete saved[phase][String(step)];
+  log(`undo ${phase} step ${step}`);
+  await show();
+}
+function log(s) { const l = document.getElementById('log'); l.textContent = s + '\n' + l.textContent; }
+
+document.getElementById('btnNothing').onclick = nothing;
+document.getElementById('btnUndo').onclick = undo;
+document.getElementById('btnOff').onclick = () => api('/api/off', {});
+addEventListener('keydown', e => {
+  if (e.key === 'n' || e.key === 'N') nothing();
+  else if (e.key === 'Backspace') { e.preventDefault(); undo(); }
+});
+
+fetch('/api/map').then(r => r.json()).then(m => { saved = m; setPhase('digit'); show(); });
+</script>
+</body>
+</html>

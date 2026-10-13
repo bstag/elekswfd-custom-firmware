@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WFD Control</title>
+<style>
+  :root {
+    --bg: #0e1013; --panel: #161a1f; --panel2: #1d2228; --line: #2a3038;
+    --text: #e6e9ee; --muted: #8b95a3; --accent: #72d3ff; --accent-dim: #1f4a5c;
+    --ok: #3ccf7f; --warn: #f5b445; --bad: #ff5d5d; --off: #2b3036;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+  header h1 { font-size: 17px; margin: 0 auto 0 0; letter-spacing: .3px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); display: inline-block; margin-right: 6px; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px; display: grid; gap: 18px;
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+  section.wide { grid-column: 1 / -1; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  label { color: var(--muted); font-size: 12px; }
+  input[type=text], select, textarea { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 7px; padding: 8px 10px; font: inherit; width: 100%; }
+  textarea { resize: vertical; min-height: 64px; }
+  input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 7px;
+    padding: 7px 12px; font: inherit; cursor: pointer; white-space: nowrap; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #06212c; border-color: var(--accent); font-weight: 600; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button.toggle.on { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .row.tight { margin-top: 6px; }
+  .grow { flex: 1; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  /* stats bars — mirrors the clock's three 20-LED rows */
+  .bars { display: grid; gap: 10px; margin-top: 4px; }
+  .bar { display: grid; grid-template-columns: 38px 1fr 44px; gap: 10px; align-items: center; }
+  .leds { display: grid; grid-template-columns: repeat(20, 1fr); gap: 3px; }
+  .leds i { height: 12px; border-radius: 2px; background: var(--off); }
+  .leds i.on { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .bar b { font-weight: 600; font-size: 12px; color: var(--muted); }
+  .bar span { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* animation editor */
+  .editor { display: grid; grid-template-columns: auto 1fr; gap: 22px; align-items: start; }
+  @media (max-width: 760px) { .editor { grid-template-columns: 1fr; } }
+  .grid { display: grid; grid-template-columns: repeat(7, 38px); gap: 5px; padding: 12px; background: #000;
+    border-radius: 10px; user-select: none; touch-action: none; width: max-content; }
+  .grid div { width: 38px; height: 38px; border-radius: 50%; background: #1b1f24; cursor: pointer; }
+  .grid div.on { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  .tools { display: grid; grid-template-columns: repeat(4, auto); gap: 6px; margin-top: 10px; width: max-content; }
+  .strip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px 8px; min-height: 64px; }
+  .thumb { flex: 0 0 auto; display: grid; grid-template-columns: repeat(7, 6px); gap: 1px; padding: 5px;
+    background: #000; border: 2px solid transparent; border-radius: 6px; cursor: pointer; position: relative; }
+  .thumb i { width: 6px; height: 6px; background: #20252b; border-radius: 1px; }
+  .thumb i.on { background: var(--accent); }
+  .thumb.sel { border-color: var(--accent); }
+  .thumb em { position: absolute; bottom: -1px; right: 3px; font-size: 9px; color: var(--muted); font-style: normal; }
+  .progress { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; flex: 1; min-width: 120px; }
+  .progress div { height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  input[type=range] { accent-color: var(--accent); }
+
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel2);
+    border: 1px solid var(--line); padding: 9px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  #toast.show { opacity: 1; }
+  #toast.err { border-color: var(--bad); color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>WFD Control</h1>
+  <span><span class="dot" id="dot"></span><span id="connText">Not connected</span></span>
+  <select id="ports" style="width:auto;min-width:200px"></select>
+  <button id="btnRefresh" title="Rescan COM ports">Rescan</button>
+  <button id="btnConnect" class="primary">Connect</button>
+</header>
+
+<main>
+  <section>
+    <h2>Scrolling text</h2>
+    <textarea id="text" maxlength="250" placeholder="Type a message…">HELLO</textarea>
+    <div class="row">
+      <button class="primary" id="btnText">Send</button>
+      <label><input type="checkbox" id="repeat"> Repeat every</label>
+      <input type="text" id="every" value="60" style="width:60px"> <label>sec</label>
+      <button id="btnTextStop">Stop repeating</button>
+    </div>
+    <div class="row tight">
+      <label>Insert:</label>
+      <button data-ins="{time}">time</button><button data-ins="{time12}">12h time</button>
+      <button data-ins="{date}">date</button><button data-ins="{cpu}">cpu</button>
+      <button data-ins="{gpu}">gpu</button><button data-ins="{ram}">ram</button>
+    </div>
+    <p class="hint">Basic Latin letters only; anything else is sent as <code>?</code>. Placeholders are filled in when sent, so
+      “Repeat” with <code>{time}</code> keeps the text current.</p>
+  </section>
+
+  <section>
+    <h2>System info sync</h2>
+    <div class="bars">
+      <div class="bar"><b>CPU</b><div class="leds" data-bar="cpu"></div><span id="vcpu">0%</span></div>
+      <div class="bar"><b>GPU</b><div class="leds" data-bar="gpu"></div><span id="vgpu">0%</span></div>
+      <div class="bar"><b>RAM</b><div class="leds" data-bar="ram"></div><span id="vram">0%</span></div>
+    </div>
+    <div class="row">
+      <button class="toggle" id="btnSync">Start sync</button>
+    </div>
+    <p class="hint">Updates the clock's three 20-LED bars every second. GPU uses <code>nvidia-smi</code> (NVIDIA only; 0 otherwise).</p>
+  </section>
+
+  <section class="wide">
+    <h2>Custom animation</h2>
+    <div class="editor">
+      <div>
+        <div class="grid" id="grid"></div>
+        <div class="tools">
+          <button data-t="clear">Clear</button><button data-t="fill">Fill</button>
+          <button data-t="invert">Invert</button><button data-t="mirror">Mirror</button>
+          <button data-t="up">↑</button><button data-t="down">↓</button>
+          <button data-t="left">←</button><button data-t="right">→</button>
+        </div>
+      </div>
+      <div>
+        <label>Frames — click to select</label>
+        <div class="strip" id="strip"></div>
+        <div class="row tight">
+          <button id="fAdd">+ Blank</button>
+          <button id="fDup">Duplicate</button>
+          <button id="fCopyPrev">Copy previous</button>
+          <button id="fDel" class="danger">Delete</button>
+          <span class="grow"></span>
+          <span id="fCount" class="hint" style="margin:0"></span>
+        </div>
+        <div class="row">
+          <label>Speed</label>
+          <input type="range" id="speed" min="1" max="10" value="5">
+          <span id="speedVal">5</span>
+          <button id="btnPlay" class="toggle">▶ Preview</button>
+          <button id="btnLive" class="toggle" title="Mirror the editor onto the clock as you draw">Live on clock</button>
+        </div>
+        <div class="row">
+          <button class="primary" id="btnUpload">Upload to clock</button>
+          <div class="progress"><div id="prog"></div></div>
+          <span id="progText" class="hint" style="margin:0"></span>
+        </div>
+        <div class="row">
+          <button id="btnLoad">Open .WFD…</button>
+          <button id="btnSave">Save .WFD</button>
+          <button id="btnReset" class="danger">Restore factory animation</button>
+          <input type="file" id="file" accept=".wfd,.WFD" hidden>
+        </div>
+        <p class="hint">Max 255 frames. Uploading stores the animation on the clock (about 0.1 s per frame).
+          “Live on clock” shows the current frame right away without saving it; turn it off to return to normal.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wide">
+    <h2>Advanced — raw packet</h2>
+    <div class="row" style="margin-top:0">
+      <input type="text" id="raw" class="grow" placeholder="hex bytes, e.g. EF 04" style="flex:1;width:auto">
+      <button id="btnRaw">Send</button>
+    </div>
+    <p class="hint">Known commands: <code>FA</code>+text · <code>EB AA c g r 00 00 00 00</code> bars ·
+      <code>EB 00…</code> bars off · <code>EF 04</code> normal mode · <code>EC AA</code>+7 frame bytes live ·
+      <code>EA</code> factory animation. See PROTOCOL.md.</p>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+async function call(path, body) {
+  const opt = body === undefined ? {} :
+    { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-WFD': '1' }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+let toastT;
+function toast(msg, err) {
+  const t = $('#toast'); t.textContent = msg; t.className = 'show' + (err ? ' err' : '');
+  clearTimeout(toastT); toastT = setTimeout(() => t.className = '', 2600);
+}
+async function act(path, body, okMsg) {
+  try { const r = await call(path, body); if (okMsg) toast(okMsg); return r; }
+  catch (e) { toast(e.message, true); throw e; }
+}
+
+/* ---------- connection ---------- */
+async function loadPorts() {
+  const { ports } = await call('/api/ports');
+  const sel = $('#ports'); const cur = sel.value; sel.innerHTML = '';
+  if (!ports.length) sel.innerHTML = '<option value="">No COM ports</option>';
+  for (const p of ports) {
+    const o = document.createElement('option'); o.value = p.device;
+    o.textContent = `${p.device} — ${p.is_clock ? 'EleksWFD (CH340)' : p.description}`;
+    sel.appendChild(o);
+  }
+  if (cur) sel.value = cur;
+}
+$('#btnRefresh').onclick = loadPorts;
+$('#btnConnect').onclick = async () => {
+  const r = await act('/api/connect', { port: $('#ports').value }); toast('Connected on ' + r.port); poll();
+};
+
+/* ---------- text ---------- */
+$('#btnText').onclick = async () => {
+  const repeat = $('#repeat').checked;
+  const r = await act('/api/text', { text: $('#text').value, repeat, every: +$('#every').value || 60 });
+  toast((repeat ? 'Repeating: ' : 'Sent: ') + r.sent);
+};
+$('#btnTextStop').onclick = () => { $('#repeat').checked = false; act('/api/text/stop', {}, 'Repeat stopped'); };
+$$('[data-ins]').forEach(b => b.onclick = () => {
+  const ta = $('#text'), s = ta.selectionStart, e = ta.selectionEnd;
+  ta.value = ta.value.slice(0, s) + b.dataset.ins + ta.value.slice(e); ta.focus();
+  ta.selectionStart = ta.selectionEnd = s + b.dataset.ins.length;
+});
+
+/* ---------- stats ---------- */
+$$('.leds').forEach(l => { for (let i = 0; i < 20; i++) l.appendChild(document.createElement('i')); });
+function showStats(s) {
+  for (const k of ['cpu', 'gpu', 'ram']) {
+    const n = Math.min(20, Math.floor((s[k] || 0) / 5));
+    [...document.querySelector(`[data-bar=${k}]`).children].forEach((d, i) => d.classList.toggle('on', i < n));
+    $('#v' + k).textContent = Math.round(s[k] || 0) + '%';
+  }
+}
+let syncing = false;
+function setSyncBtn(on) { syncing = on; $('#btnSync').classList.toggle('on', on); $('#btnSync').textContent = on ? 'Stop sync' : 'Start sync'; }
+$('#btnSync').onclick = async () => { const r = await act('/api/stats', { enabled: !syncing }); setSyncBtn(r.stats_sync); };
+
+/* ---------- animation ---------- */
+let frames = [new Array(49).fill(0)], cur = 0, live = false, playT = null;
+const gridEl = $('#grid');
+for (let i = 0; i < 49; i++) { const d = document.createElement('div'); d.dataset.i = i; gridEl.appendChild(d); }
+
+let painting = null;
+gridEl.addEventListener('pointerdown', e => {
+  const i = e.target.dataset.i; if (i === undefined) return;
+  painting = frames[cur][i] ? 0 : 1; setCell(+i); gridEl.setPointerCapture(e.pointerId);
+});
+gridEl.addEventListener('pointermove', e => {
+  if (painting === null) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  if (el && el.parentNode === gridEl) setCell(+el.dataset.i);
+});
+addEventListener('pointerup', () => { if (painting !== null) { painting = null; changed(); } });
+function setCell(i) {
+  if (frames[cur][i] === painting) return;
+  frames[cur][i] = painting; renderGrid(); renderThumb(cur);
+  sendLive();
+}
+
+function renderGrid() { [...gridEl.children].forEach((d, i) => d.classList.toggle('on', !!frames[cur][i])); }
+function thumbEl(idx) {
+  const t = document.createElement('div'); t.className = 'thumb';
+  for (let i = 0; i < 49; i++) t.appendChild(document.createElement('i'));
+  const em = document.createElement('em'); t.appendChild(em);
+  t.onclick = () => { stopPlay(); select(idx); };
+  return t;
+}
+function renderThumb(idx) {
+  const t = $('#strip').children[idx]; if (!t) return;
+  [...t.querySelectorAll('i')].forEach((d, i) => d.classList.toggle('on', !!frames[idx][i]));
+  t.querySelector('em').textContent = idx + 1;
+  t.classList.toggle('sel', idx === cur);
+}
+function renderStrip() {
+  const s = $('#strip'); s.innerHTML = '';
+  frames.forEach((_, i) => { s.appendChild(thumbEl(i)); renderThumb(i); });
+  $('#fCount').textContent = `${cur + 1} / ${frames.length} frames`;
+  s.children[cur]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+function select(i) { cur = Math.max(0, Math.min(frames.length - 1, i)); renderGrid(); renderStrip(); sendLive(); }
+function changed() { renderGrid(); renderStrip(); sendLive(); }
+
+let liveBusy = false, livePending = false;
+async function sendLive() {
+  if (!live) return;
+  if (liveBusy) { livePending = true; return; }
+  liveBusy = true;
+  try { await call('/api/live', { cells: frames[cur] }); } catch (e) { toast(e.message, true); }
+  liveBusy = false;
+  if (livePending) { livePending = false; sendLive(); }
+}
+
+const T = {
+  clear: f => f.map(() => 0), fill: f => f.map(() => 1), invert: f => f.map(v => v ? 0 : 1),
+  mirror: f => f.map((_, i) => f[Math.floor(i / 7) * 7 + 6 - i % 7]),
+  up: f => f.map((_, i) => i < 42 ? f[i + 7] : 0), down: f => f.map((_, i) => i >= 7 ? f[i - 7] : 0),
+  left: f => f.map((_, i) => i % 7 < 6 ? f[i + 1] : 0), right: f => f.map((_, i) => i % 7 > 0 ? f[i - 1] : 0),
+};
+$$('[data-t]').forEach(b => b.onclick = () => { frames[cur] = T[b.dataset.t](frames[cur]); changed(); });
+
+$('#fAdd').onclick = () => { if (frames.length >= 255) return toast('255 frames max', true); frames.splice(cur + 1, 0, new Array(49).fill(0)); select(cur + 1); };
+$('#fDup').onclick = () => { if (frames.length >= 255) return toast('255 frames max', true); frames.splice(cur + 1, 0, [...frames[cur]]); select(cur + 1); };
+$('#fCopyPrev').onclick = () => { if (cur > 0) { frames[cur] = [...frames[cur - 1]]; changed(); } };
+$('#fDel').onclick = () => { if (frames.length > 1) { frames.splice(cur, 1); select(Math.min(cur, frames.length - 1)); } else { frames[0] = frames[0].map(() => 0); changed(); } };
+
+$('#speed').oninput = () => { $('#speedVal').textContent = $('#speed').value; if (playT) { stopPlay(); startPlay(); } };
+function startPlay() {
+  $('#btnPlay').classList.add('on'); $('#btnPlay').textContent = '■ Stop';
+  const ms = 80 + (11 - +$('#speed').value) * 60;   // preview only; clock timing may differ
+  playT = setInterval(() => select((cur + 1) % frames.length), ms);
+}
+function stopPlay() { clearInterval(playT); playT = null; $('#btnPlay').classList.remove('on'); $('#btnPlay').textContent = '▶ Preview'; }
+$('#btnPlay').onclick = () => playT ? stopPlay() : startPlay();
+
+$('#btnLive').onclick = async () => {
+  live = !live; $('#btnLive').classList.toggle('on', live);
+  if (live) sendLive(); else act('/api/live/exit', {}, 'Clock back to normal');
+};
+
+$('#btnUpload').onclick = async () => {
+  stopPlay();
+  await act('/api/upload', { frames, speed: +$('#speed').value });
+  $('#btnUpload').disabled = true; pollUpload();
+};
+async function pollUpload() {
+  const { upload: u } = await call('/api/status');
+  $('#prog').style.width = (u.total ? 100 * u.done / u.total : 0) + '%';
+  $('#progText').textContent = u.busy ? `${u.done}/${u.total}` : (u.error ? 'Failed' : 'Done');
+  if (u.busy) return setTimeout(pollUpload, 150);
+  $('#btnUpload').disabled = false;
+  u.error ? toast(u.error, true) : toast(`Uploaded ${u.total} frames`);
+}
+$('#btnReset').onclick = () => { if (confirm('Replace the animation stored on the clock with the factory default?')) act('/api/reset', {}, 'Factory animation restored'); };
+
+/* .WFD: 10000 bytes; frame i (1-based) = 7 bytes at 7*i; [9998]=count, [9999]=speed; row byte, bit6 = left */
+function packRow(f, r) { let b = 0; for (let c = 0; c < 7; c++) if (f[r * 7 + c]) b |= 1 << (6 - c); return b; }
+$('#btnSave').onclick = () => {
+  const buf = new Uint8Array(10000);
+  frames.forEach((f, k) => { for (let r = 0; r < 7; r++) buf[7 * (k + 1) + r] = packRow(f, r); });
+  buf[9998] = frames.length; buf[9999] = +$('#speed').value;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([buf]));
+  a.download = 'animation.WFD'; a.click(); URL.revokeObjectURL(a.href);
+};
+$('#btnLoad').onclick = () => $('#file').click();
+$('#file').onchange = async e => {
+  const file = e.target.files[0]; if (!file) return;
+  const b = new Uint8Array(await file.arrayBuffer());
+  if (b.length < 10000) return toast('Not a .WFD file (expected 10000 bytes)', true);
+  const n = Math.max(1, Math.min(255, b[9998]));
+  frames = [];
+  for (let k = 1; k <= n; k++) {
+    const f = [];
+    for (let r = 0; r < 7; r++) for (let c = 0; c < 7; c++) f.push((b[7 * k + r] >> (6 - c)) & 1);
+    frames.push(f);
+  }
+  const sp = b[9999]; if (sp >= 1 && sp <= 10) { $('#speed').value = sp; $('#speedVal').textContent = sp; }
+  cur = 0; changed(); toast(`Loaded ${n} frames`); e.target.value = '';
+};
+
+/* ---------- raw ---------- */
+$('#btnRaw').onclick = async () => { const r = await act('/api/raw', { hex: $('#raw').value }); toast('Sent ' + r.sent); };
+
+/* ---------- status polling ---------- */
+async function poll() {
+  try {
+    const s = await call('/api/status');
+    $('#dot').classList.toggle('on', s.connected);
+    $('#connText').textContent = s.connected ? 'Connected · ' + s.port : (s.error ? 'Disconnected · ' + s.error : 'Not connected');
+    if (s.connected && s.port) $('#ports').value = s.port;
+    showStats(s.stats); setSyncBtn(s.stats_sync);
+  } catch { $('#dot').classList.remove('on'); $('#connText').textContent = 'App not running'; }
+}
+loadPorts().then(poll); setInterval(poll, 1000);
+renderGrid(); renderStrip();
+</script>
+</body>
+</html>

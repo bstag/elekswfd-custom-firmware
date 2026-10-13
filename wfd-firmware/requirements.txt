@@ -1,0 +1,3 @@
+# For flash_usb.py (first-time USB flashing)
+esptool>=4.0
+pyserial>=3.5

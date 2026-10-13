@@ -1,0 +1,4 @@
+pyserial>=3.5
+numpy>=1.24
+psutil>=5.9
+PyAudioWPatch>=0.2.12

@@ -1,0 +1,48 @@
+{
+  "time_sync": true,
+  "spectrum": true,
+  "style": 4,
+  "gain_out": 1.0,
+  "gain_mic": 0.3,
+  "bars": true,
+  "weather": true,
+  "location": "",
+  "units": "fahrenheit",
+  "brightness": 7,
+  "message_mode": "rotate",
+  "custom_text": "WFD CLOCK",
+  "scroll_ms": 350,
+  "rotate_weather": true,
+  "rotate_window": true,
+  "rotate_text": false,
+  "rotate_dwell": 8,
+  "grid_enable": true,
+  "grid_anim": "pulse",
+  "grid_frame": true,
+  "grid_fps": 4,
+  "grid_custom": [
+    [
+      8,
+      8,
+      8,
+      127,
+      8,
+      8,
+      8
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  ],
+  "grid_standalone": true,
+  "offline_text": "WFD CLOCK",
+  "msg_standalone": true,
+  "icon_mode": "off",
+  "logo": false
+}

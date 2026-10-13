@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WFD LED Mapper</title>
+<style>
+  :root { --bg:#0e1013; --panel:#161a1f; --line:#2a3038; --text:#e6e9ee; --muted:#8b95a3;
+          --off:#262c33; --done:#2f7a52; --hot:#72d3ff; --cur:#ffcc4d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 "Segoe UI",system-ui,sans-serif; }
+  header { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:12px 18px;
+           background:var(--panel); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; }
+  h1 { font-size:16px; margin:0 10px 0 0; }
+  #status { font-size:17px; font-weight:600; min-width:150px; }
+  button { background:#1d2228; color:var(--text); border:1px solid var(--line); border-radius:7px;
+           padding:7px 12px; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--hot); }
+  button.big { font-size:15px; padding:9px 16px; border-color:#555; }
+  .hint { color:var(--muted); font-size:12px; }
+  .bar { height:6px; background:#1d2228; border-radius:3px; width:200px; overflow:hidden; }
+  .bar div { height:100%; background:var(--done); width:0; transition:width .15s; }
+  main { padding:14px 18px; }
+  svg { width:100%; height:auto; background:#050607; border-radius:10px; border:1px solid var(--line); }
+  .el { cursor:pointer; }
+  .el .vis { stroke:var(--off); fill:var(--off); }
+  .el.line .vis { fill:none; stroke-width:7; stroke-linecap:round; }
+  .el.line .hit { stroke:transparent; stroke-width:20; fill:none; }
+  .el.frame .vis { fill:none; stroke:var(--off); stroke-width:8; pointer-events:stroke; }
+  .el.frame .hit { fill:none; stroke:transparent; stroke-width:24; pointer-events:stroke; }
+  .el:hover .vis { stroke:var(--hot); fill:var(--hot); }
+  .el.line:hover .vis, .el.frame:hover .vis { fill:none; }
+  .el.done .vis { stroke:var(--done); fill:var(--done); }
+  .el.line.done .vis, .el.frame.done .vis { fill:none; }
+  .el.cur .vis { stroke:var(--cur); fill:var(--cur); }
+  .el.line.cur .vis, .el.frame.cur .vis { fill:none; }
+  text.lbl { fill:#0b0d10; font:700 15px "Segoe UI",sans-serif; pointer-events:none; }
+  text.cap { fill:var(--muted); font:11px "Segoe UI",sans-serif; pointer-events:none; }
+  #log { color:var(--muted); font-size:12px; margin-top:10px; max-height:140px; overflow:auto; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WFD LED Mapper</h1>
+  <span id="status">LED – / 384</span>
+  <div class="bar"><div id="prog"></div></div>
+  <button class="big" id="btnNothing">Nothing lit (N)</button>
+  <button id="btnUndo">Undo (⌫)</button>
+  <button id="btnPrev">◀ Prev</button><button id="btnNext">Next ▶</button>
+  <button id="btnAll">All on/off</button>
+  <span class="hint">Click the part of the drawing that lit on the clock. Green = mapped, yellow = the LED showing now.</span>
+</header>
+<main>
+  <svg id="svg" viewBox="0 0 1640 430" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div id="log"></div>
+</main>
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+const svg = document.getElementById('svg');
+const els = {};
+let map = { bits: {} }, cur = 0, allOn = false;
+const NBITS = 384;
+
+function node(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  (parent || svg).appendChild(e);
+  return e;
+}
+function group(id, cls, title) {
+  const e = node('g', { class: 'el ' + (cls || ''), 'data-id': id });
+  node('title', {}, e).textContent = title || id;
+  e.addEventListener('click', () => pick(id));
+  els[id] = e;
+  return e;
+}
+function rect(id, x, y, w, h, label, title) {
+  const e = group(id, '', title);
+  node('rect', { x, y, width: w, height: h, rx: 3, class: 'vis' }, e);
+  if (label) {
+    const t = node('text', { class: 'lbl', x: x + w / 2, y: y + h / 2 + 5, 'text-anchor': 'middle' }, e);
+    t.textContent = label;
+  }
+}
+function cap(x, y, s) { node('text', { class: 'cap', x, y }, svg).textContent = s; }
+
+/* ---------- panel layout, left-to-right as on the clock ---------- */
+['MON','TUE','WED','THU','FRI','SAT','SUN'].forEach((d,i)=>rect('day_'+d, 20+i*78, 16, 68, 32, d));
+
+const icons = ['speaker','mic','headphones','vinyl','mixer','monitor','tower','server',
+               'clock','hourglass','battery','calendar','wifi'];
+icons.forEach((n,i)=>rect('icon_'+n, 590+i*78, 16, 66, 32, String(i+1), 'icon '+(i+1)+': '+n));
+cap(590, 62, 'icons: 1 speaker 2 mic 3 headphones 4 vinyl 5 mixer 6 monitor 7 tower 8 server 9 clock 10 hourglass 11 battery 12 calendar 13 wifi');
+
+'ELEKSMAKER'.split('').forEach((c,i)=>rect('logo_'+(i+1), 20+i*52, 84, 44, 52, c, 'logo letter '+(i+1)+': '+c));
+
+['cpu','gpu','ram'].forEach((r,ri)=>{
+  const y = 166 + ri*58;
+  rect('label_'+r, 20, y, 58, 32, r.toUpperCase());
+  for (let i=0;i<20;i++) rect(`bar_${r}_${i+1}`, 86+i*20, y, 13, 32, '', `${r.toUpperCase()} bar seg ${i+1} (from left)`);
+  rect('pct_'+r, 490, y, 28, 32, '%', r.toUpperCase()+' percent sign');
+  const w = ['SUNNY','CLOUD','RAINS'][ri];
+  rect('word_'+w.toLowerCase(), 526, y, 90, 32, w);
+});
+
+const GX = 650, GY = 84, GS = 32;
+// clickable border all around the 7x7 grid (hollow, so interior clicks reach the cells)
+(function(){
+  const e = group('grid_frame', 'frame', 'grid frame / outline (the box around the grid)');
+  const a = { x: GX-14, y: GY+2, width: GS*7+22, height: GS*7+30, rx: 8 };
+  node('rect', Object.assign({ class: 'hit' }, a), e);
+  node('rect', Object.assign({ class: 'vis' }, a), e);
+})();
+for (let r=0;r<7;r++) for (let c=0;c<7;c++)
+  rect(`grid_r${r+1}c${c+1}`, GX + c*GS, GY + 12 + r*GS, GS-6, GS-6, '', `grid row ${r+1} col ${c+1} (top-left origin)`);
+
+const SX = 650 + GS*7 + 24;
+for (let col=0; col<2; col++) for (let i=0;i<12;i++)
+  rect(`spec_c${col+1}_${i+1}`, SX + col*26, 92 + (11-i)*24, 20, 18, '', `spectrum col ${col+1} level ${i+1} (bottom=1)`);
+cap(SX, 86, 'spectrum');
+
+const AX = SX + 90;
+for (let d=0; d<6; d++) rect(`alnum_${d+1}`, AX + d*86, 90, 70, 96, String(d+1), 'alphanumeric char '+(d+1));
+cap(AX, 86, 'top: 6 alphanumeric characters (click the whole character that lit — we refine segments after)');
+
+for (let d=0; d<6; d++) rect(`digit_${d+1}`, AX + d*86, 296, 70, 110, String(d+1), '7-seg digit '+(d+1));
+['1','2'].forEach((n,i)=>rect('colon_'+n, AX + 172 + i*172 - 16, 330, 16, 44, ':', 'colon '+n));
+cap(AX, 292, 'bottom: 6 seven-segment digits + 2 colons (click the whole digit that lit — we refine segments after)');
+
+group('OTHER', '', 'something lit that is not drawn here');  // keyboard "O"
+
+/* ---------- interaction ---------- */
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} :
+    { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  return r.json();
+}
+function refresh() {
+  for (const id in els) els[id].classList.remove('done', 'cur');
+  const counts = {};
+  for (const bit in map.bits) {
+    const el = map.bits[bit];
+    if (els[el]) els[el].classList.add('done');
+    counts[el] = (counts[el]||0)+1;
+  }
+  const el = map.bits[String(cur)];
+  if (el && els[el]) els[el].classList.add('cur');
+  document.getElementById('status').textContent =
+    `LED ${cur} / ${NBITS-1}   (${Object.keys(map.bits).length} mapped)`;
+  document.getElementById('prog').style.width = (100*Object.keys(map.bits).length/NBITS)+'%';
+}
+async function show(bit) { cur = (bit+NBITS)%NBITS; await api('/api/show', { bit: cur }); refresh(); }
+async function pick(id) {
+  const r = await api('/api/save', { bit: cur, element: id === 'OTHER' ? '?' : id });
+  map.bits[String(cur)] = id === 'OTHER' ? '?' : id;
+  log(`LED ${cur} -> ${id}`);
+  await show(cur + 1);
+}
+async function nothing() {
+  await api('/api/save', { bit: cur, element: null });
+  delete map.bits[String(cur)];
+  log(`LED ${cur} -> (nothing)`);
+  await show(cur + 1);
+}
+async function undo() {
+  await show(cur - 1);
+  await api('/api/save', { bit: cur, element: null });
+  delete map.bits[String(cur)];
+  log(`undo LED ${cur}`);
+  refresh();
+}
+function log(s) { const l = document.getElementById('log'); l.textContent = s + '\n' + l.textContent; }
+
+document.getElementById('btnNothing').onclick = nothing;
+document.getElementById('btnUndo').onclick = undo;
+document.getElementById('btnPrev').onclick = () => show(cur - 1);
+document.getElementById('btnNext').onclick = () => show(cur + 1);
+document.getElementById('btnAll').onclick = async () => { allOn = !allOn; await api('/api/all', { on: allOn }); };
+addEventListener('keydown', e => {
+  if (e.key === 'n' || e.key === 'N') nothing();
+  else if (e.key === 'o' || e.key === 'O') pick('OTHER');
+  else if (e.key === 'Backspace') { e.preventDefault(); undo(); }
+  else if (e.key === 'ArrowRight') show(cur + 1);
+  else if (e.key === 'ArrowLeft') show(cur - 1);
+});
+
+(async () => {
+  map = await api('/api/map');
+  const keys = Object.keys(map.bits).map(Number);
+  const start = keys.length ? Math.min(Math.max(...keys) + 1, NBITS - 1) : 0;
+  await show(start);   // resume at the first un-mapped LED
+})();
+</script>
+</body>
+</html>

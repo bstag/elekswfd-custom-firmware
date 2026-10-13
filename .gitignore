@@ -1,0 +1,32 @@
+# ---- stock vendor tool (proprietary; not ours to redistribute) ----
+EleksWFD_EN.exe
+CH341SER.EXE
+Config.ini
+*.dll
+bearer/
+iconengines/
+imageformats/
+platforms/
+styles/
+translations/
+esptool/
+nvtools/
+
+# ---- device-specific flash dumps (per-clock; keep local, don't publish) ----
+firmware-backup/*.bin
+
+# ---- build artifacts ----
+.pio/
+**/__pycache__/
+*.pyc
+
+# ---- virtualenvs ----
+.venv/
+venv/
+wfd-firmware/.venv/
+
+# ---- personal/runtime config & logs ----
+wfd-control/wfd_config.json
+wfd-firmware/wfd_config.json
+wfd-firmware/wfd_daemon.log
+wfd-control/firmware/*.bin
