@@ -66,7 +66,7 @@ setup page.
 
 ## Persistent storage (NVS namespace `wfd`)
 
-`style`, `bright`; grid animation `gn/gfps/gflag/gauto` + `ganim` (blob); offline message
+`style`, `bright`, `clk24`, `webpass`; grid animation `gn/gfps/gflag/gauto` + `ganim` (blob); offline message
 `omn/omfps/omauto` + `om` (blob) + `omtext`; WiFi/location `ssid/pass/tz/lat/lon/wunit/zip`.
 Settings survive OTA and USB flashes (the `nvs` partition offset is unchanged).
 

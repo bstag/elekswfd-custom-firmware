@@ -19,11 +19,12 @@ from pathlib import Path
 from serial.tools import list_ports
 
 OUT_DIR = Path(__file__).parent.parent / "firmware-backup"
+CH340_VID, CH340_PID = 0x1A86, 0x7523    # the clock's USB-serial chip
 
 
 def find_port():
     for p in list_ports.comports():
-        if p.vid == 0x1A86 and p.pid == 0x7523:
+        if p.vid == CH340_VID and p.pid == CH340_PID:
             return p.device
     return None
 

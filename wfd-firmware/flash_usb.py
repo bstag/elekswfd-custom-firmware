@@ -15,24 +15,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-from serial.tools import list_ports
-
 import backup_usb
 
 MERGED = Path(__file__).parent / "releases" / "wfd-clock-merged.bin"
 
 
-def find_port():
-    for p in list_ports.comports():
-        if p.vid == 0x1A86 and p.pid == 0x7523:   # CH340
-            return p.device
-    return None
-
-
 def main():
     if not MERGED.exists():
         sys.exit(f"missing {MERGED} — build it with PlatformIO or get it from releases/")
-    port = find_port()
+    port = backup_usb.find_port()
     if not port:
         sys.exit("CH340 clock not found. Plug it into a USB 2.0 port and install the CH340 driver.")
     if "--no-backup" not in sys.argv:

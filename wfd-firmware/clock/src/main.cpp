@@ -440,21 +440,34 @@ static bool webAuthed() {
   return false;
 }
 
+// Shared shell for every device page: charset (the pages use non-ASCII), viewport, one stylesheet.
+static const char PAGE_CSS[] =
+    "body{font-family:sans-serif;background:#0e1013;color:#e6e9ee;padding:18px;max-width:480px;margin:auto}"
+    "a{color:#72d3ff}b{color:#72d3ff}.dim{color:#8b95a3}.warn{color:#ff5d5d}"
+    "label{display:block;color:#8b95a3;margin-top:14px;font-size:13px}"
+    "input,select,button{width:100%;font-size:16px;padding:9px;margin-top:4px;box-sizing:border-box;"
+    "border-radius:6px;border:1px solid #2a3038;background:#1d2228;color:#eee}"
+    "button{margin-top:18px;padding:12px;border:0;background:#72d3ff;color:#06212c;font-weight:600}"
+    ".row{display:flex;gap:10px;align-items:center;margin-top:14px}.row input{width:auto}.row label{margin:0}";
+
+static String page(const char *title, const String &body, const char *head = "") {
+  return String("<!doctype html><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'>") +
+         head + "<title>" + title + "</title><style>" + PAGE_CSS + "</style>" + body;
+}
+
 static String setupPage() {
   int n = WiFi.scanComplete();
   String opts;
   for (int i = 0; i < n; i++) opts += "<option>" + esc(WiFi.SSID(i)) + "</option>";
-  return "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-         "<title>WFD WiFi Setup</title><style>body{font-family:sans-serif;background:#111;color:#eee;padding:22px}"
-         "input,button{font-size:16px;padding:9px;width:100%;margin:6px 0;box-sizing:border-box;border-radius:6px;border:1px solid #444;background:#1d2228;color:#eee}"
-         "button{background:#72d3ff;color:#06212c;font-weight:600;border:0}</style>"
+  return page("WFD WiFi Setup",
          "<h2>WFD Clock WiFi</h2><form method=POST action=/save>"
          "<label>Network</label><input list=nets name=ssid placeholder='WiFi name' autocomplete=off>"
          "<datalist id=nets>" + opts + "</datalist>"
          "<label>Password</label><input name=pass type=password placeholder='WiFi password'>"
          "<button type=submit>Save &amp; Connect</button></form>"
-         "<p style=color:#8b95a3>The clock restarts and joins your network. "
-         "<a href=/rescan style=color:#72d3ff>Re-scan</a> to refresh the list.</p>";
+         "<p class=dim>The clock restarts and joins your network. "
+         "<a href=/rescan>Re-scan</a> to refresh the list.</p>");
 }
 
 static void handleSave() {
@@ -462,9 +475,8 @@ static void handleSave() {
   if (web.arg("ssid").length() == 0) { web.sendHeader("Location", "/wifi"); web.send(303); return; }
   prefs.putString("ssid", web.arg("ssid"));
   prefs.putString("pass", web.arg("pass"));
-  web.send(200, "text/html", "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-           "<body style='font-family:sans-serif;background:#111;color:#eee;padding:22px'>"
-           "<h2>Saved — connecting…</h2><p>Rejoin your normal WiFi. The clock is restarting.</p>");
+  web.send(200, "text/html", page("WFD WiFi Setup",
+           "<h2>Saved — connecting…</h2><p>Rejoin your normal WiFi. The clock is restarting.</p>"));
   delay(900);
   ESP.restart();
 }
@@ -529,13 +541,7 @@ static bool setWeatherZip(const String &zip) {
 static String controlPage() {
   String zip = prefs.getString("zip", "");
   String omt = prefs.getString("omtext", "");
-  String s = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>WFD Control</title>"
-    "<style>body{font-family:sans-serif;background:#0e1013;color:#e6e9ee;padding:18px;max-width:480px;margin:auto}"
-    "label{display:block;color:#8b95a3;margin-top:14px;font-size:13px}"
-    "input,select{width:100%;font-size:16px;padding:9px;margin-top:4px;box-sizing:border-box;border-radius:6px;border:1px solid #2a3038;background:#1d2228;color:#eee}"
-    "button{margin-top:18px;width:100%;font-size:16px;padding:12px;border:0;border-radius:6px;background:#72d3ff;color:#06212c;font-weight:600}"
-    ".row{display:flex;gap:10px;align-items:center;margin-top:14px}.row input{width:auto}.row label{margin:0}</style>"
-    "<h2>WFD Clock Control</h2><form method=POST action=/control>";
+  String s = "<h2>WFD Clock Control</h2><form method=POST action=/control>";
   s += "<label>Brightness</label><input type=range name=bright min=1 max=16 value=" + String(brightness) + ">";
   s += "<label>Clock format</label><select name=clk24><option value=1" + String(clock24 ? " selected" : "") +
        ">24-hour</option><option value=0" + String(clock24 ? "" : " selected") + ">12-hour</option></select>";
@@ -554,9 +560,8 @@ static String controlPage() {
   s += "<div class=row><input type=checkbox name=omauto " + String(omAuto ? "checked" : "") +
        "><label>Show offline message when app is off</label></div>";
   s += "<button type=submit>Apply</button></form>";
-  s += "<p style=color:#8b95a3><a href=/ style=color:#72d3ff>Status</a> &middot; "
-       "<a href=/update style=color:#72d3ff>Firmware update</a></p>";
-  return s;
+  s += "<p class=dim><a href=/>Status</a> &middot; <a href=/update>Firmware update</a></p>";
+  return page("WFD Control", s);
 }
 static void handleControlPost() {
   if (!webAuthed()) return;
@@ -602,12 +607,9 @@ static void handleUpdateUpload() {
 }
 
 static const char *UPDATE_FORM =
-    "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>WFD Update</title>"
-    "<style>body{font-family:sans-serif;background:#0e1013;color:#e6e9ee;padding:22px}"
-    "input,button{font-size:16px;margin:8px 0}button{background:#72d3ff;color:#06212c;border:0;padding:10px 16px;border-radius:6px;font-weight:600}</style>"
     "<h2>Firmware Update</h2><form method=POST action=/update enctype=multipart/form-data>"
-    "<input type=file name=fw accept=.bin><br><button type=submit>Upload &amp; Flash</button></form>"
-    "<p style=color:#8b95a3>Upload a firmware .bin for this clock. It reboots when done. <a href=/ style=color:#72d3ff>Back</a></p>";
+    "<input type=file name=fw accept=.bin><button type=submit>Upload &amp; Flash</button></form>"
+    "<p class=dim>Upload a firmware .bin for this clock. It reboots when done. <a href=/>Back</a></p>";
 
 static void startWebRoutes() {
   web.on("/", []() { web.send(200, "text/html", apMode ? setupPage() : statusPage()); });
@@ -623,14 +625,14 @@ static void startWebRoutes() {
   });
   web.on("/control", HTTP_GET, []() { if (webAuthed()) web.send(200, "text/html", controlPage()); });
   web.on("/control", HTTP_POST, handleControlPost);
-  web.on("/update", HTTP_GET, []() { if (webAuthed()) web.send(200, "text/html", UPDATE_FORM); });
+  web.on("/update", HTTP_GET, []() { if (webAuthed()) web.send(200, "text/html", page("WFD Update", UPDATE_FORM)); });
   web.on("/update", HTTP_POST, []() {
     if (!webAuthed()) return;
     bool ok = otaOk && !Update.hasError();
     if (!ok) Update.printError(Serial);
     web.send(ok ? 200 : 500, "text/html", ok
-      ? "<!doctype html><meta http-equiv=refresh content='6;url=/'><body style='font-family:sans-serif;background:#0e1013;color:#e6e9ee;padding:22px'><h2>Update OK — rebooting…</h2>"
-      : "<body style='font-family:sans-serif;background:#0e1013;color:#ff5d5d;padding:22px'><h2>Update FAILED</h2>");
+      ? page("WFD Update", "<h2>Update OK — rebooting…</h2>", "<meta http-equiv=refresh content='6;url=/'>")
+      : page("WFD Update", "<h2 class=warn>Update FAILED</h2><p><a href=/update>Try again</a></p>"));
     if (!ok) return;                    // keep running the current firmware
     delay(700);
     ESP.restart();
@@ -735,9 +737,7 @@ static String statusPage() {
     snprintf(tm, sizeof tm, "20%02d-%02d-%02d %02d:%02d:%02d",
              bcd2dec(t[6]), bcd2dec(t[5] & 0x1F), bcd2dec(t[4]),
              bcd2dec(t[2] & 0x3F), bcd2dec(t[1]), bcd2dec(t[0] & 0x7F));
-  String s = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-             "<title>WFD Clock</title><style>body{font-family:sans-serif;background:#0e1013;color:#e6e9ee;padding:22px}"
-             "b{color:#72d3ff}</style><h2>WFD Clock <small style=color:#8b95a3>fw: OTA-OK</small></h2>";
+  String s = "<h2>WFD Clock <small class=dim>fw: OTA-OK</small></h2>";
   s += "<p>Time: <b>" + String(tm) + "</b></p>";
   s += "<p>NTP: <b>" + String(ntpSynced ? "synced" : "waiting…") + "</b> &nbsp; WiFi: <b>" + esc(WiFi.SSID()) +
        "</b> (" + WiFi.localIP().toString() + ", " + String(WiFi.RSSI()) + " dBm)</p>";
@@ -745,10 +745,9 @@ static String statusPage() {
   bool wxfresh = millis() - wxTime < 1200000;
   s += "<p>Weather: <b>" + (wxfresh ? String(wxTemp) + (wxUnit ? "C " : "F ") + cond : String("—")) +
        "</b> &nbsp; loc " + (g_lat.length() ? g_lat + "," + g_lon : String("unset")) + "</p>";
-  s += "<p><a href=/control style='color:#72d3ff;font-weight:600'>⚙ Control panel</a></p>";
-  s += "<p><a href=/update style='color:#72d3ff'>Firmware update</a> &nbsp; "
-       "<a href=/wifi style='color:#ff5d5d'>Change WiFi</a></p>";
-  return s;
+  s += "<p><a href=/control style=font-weight:600>⚙ Control panel</a></p>";
+  s += "<p><a href=/update>Firmware update</a> &nbsp; <a href=/wifi class=warn>Change WiFi</a></p>";
+  return page("WFD Clock", s);
 }
 
 void setup() {
