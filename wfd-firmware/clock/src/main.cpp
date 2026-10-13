@@ -448,7 +448,11 @@ static const char PAGE_CSS[] =
     "input,select,button{width:100%;font-size:16px;padding:9px;margin-top:4px;box-sizing:border-box;"
     "border-radius:6px;border:1px solid #2a3038;background:#1d2228;color:#eee}"
     "button{margin-top:18px;padding:12px;border:0;background:#72d3ff;color:#06212c;font-weight:600}"
-    ".row{display:flex;gap:10px;align-items:center;margin-top:14px}.row input{width:auto}.row label{margin:0}";
+    ".row{display:flex;gap:10px;align-items:center;margin-top:14px}.row input{width:auto}.row label{margin:0}"
+    ".net{display:flex;align-items:center;gap:10px;padding:11px 12px;margin-top:6px;border:1px solid #2a3038;"
+    "border-radius:6px;background:#1d2228;color:#e6e9ee;font-size:16px;cursor:pointer}"
+    ".net input{width:auto;margin:0}.net span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+    ".net:has(input:checked){border-color:#72d3ff}.sig{color:#72d3ff;letter-spacing:-2px}";
 
 static String page(const char *title, const String &body, const char *head = "") {
   return String("<!doctype html><meta charset=utf-8>"
@@ -456,24 +460,70 @@ static String page(const char *title, const String &body, const char *head = "")
          head + "<title>" + title + "</title><style>" + PAGE_CSS + "</style>" + body;
 }
 
+static const char *signalBars(int rssi) {
+  return rssi > -55 ? "▂▄▆█" : rssi > -67 ? "▂▄▆" : rssi > -78 ? "▂▄" : "▂";
+}
+
+// WiFi picker: tap a scanned network (strongest first) or type one under "Other".
+// Works without JS; the inline script only focuses the right field and hides the
+// password box for open networks.
 static String setupPage() {
   int n = WiFi.scanComplete();
-  String opts;
-  for (int i = 0; i < n; i++) opts += "<option>" + esc(WiFi.SSID(i)) + "</option>";
+  if (n == WIFI_SCAN_FAILED) { WiFi.scanNetworks(true); n = WIFI_SCAN_RUNNING; }
+  if (n == WIFI_SCAN_RUNNING)
+    return page("WFD WiFi Setup", "<h2>WFD Clock WiFi</h2><p>Scanning for networks…</p>",
+                "<meta http-equiv=refresh content=2>");
+
+  // dedupe by SSID (keep the strongest), drop hidden ones, sort by signal
+  const int MAXN = 20;
+  int idx[MAXN], m = 0;
+  for (int i = 0; i < n; i++) {
+    if (WiFi.SSID(i).length() == 0) continue;
+    int dup = -1;
+    for (int k = 0; k < m; k++) if (WiFi.SSID(idx[k]) == WiFi.SSID(i)) { dup = k; break; }
+    if (dup >= 0) { if (WiFi.RSSI(i) > WiFi.RSSI(idx[dup])) idx[dup] = i; continue; }
+    if (m < MAXN) idx[m++] = i;
+  }
+  for (int a = 1; a < m; a++)                     // insertion sort, strongest first
+    for (int b = a; b > 0 && WiFi.RSSI(idx[b]) > WiFi.RSSI(idx[b - 1]); b--) {
+      int tmp = idx[b]; idx[b] = idx[b - 1]; idx[b - 1] = tmp;
+    }
+
+  String current = prefs.getString("ssid", "");
+  String list;
+  for (int k = 0; k < m; k++) {
+    int i = idx[k];
+    bool open = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
+    String s = esc(WiFi.SSID(i));
+    list += "<label class=net><input type=radio name=ssid value='" + s + "' data-open=" + (open ? "1" : "0") +
+            (WiFi.SSID(i) == current ? " checked" : "") + "><span>" + s + "</span>" +
+            (open ? "" : "🔒") + "<b class=sig>" + signalBars(WiFi.RSSI(i)) + "</b></label>";
+  }
+  if (m == 0) list = "<p class=dim>No networks found.</p>";
+  list += "<label class=net><input type=radio name=ssid value='' id=oth data-open=0><span>Other network…</span></label>"
+          "<input name=other id=othname placeholder='Network name (hidden networks)' autocomplete=off>";
+
   return page("WFD WiFi Setup",
          "<h2>WFD Clock WiFi</h2><form method=POST action=/save>"
-         "<label>Network</label><input list=nets name=ssid placeholder='WiFi name' autocomplete=off>"
-         "<datalist id=nets>" + opts + "</datalist>"
-         "<label>Password</label><input name=pass type=password placeholder='WiFi password'>"
+         "<label>Choose a network <a href=/rescan style=float:right>↻ Scan again</a></label>" + list +
+         "<div id=pw><label>Password</label><input name=pass id=pass type=password placeholder='WiFi password'></div>"
          "<button type=submit>Save &amp; Connect</button></form>"
-         "<p class=dim>The clock restarts and joins your network. "
-         "<a href=/rescan>Re-scan</a> to refresh the list.</p>");
+         "<p class=dim>The clock restarts and joins the network. 2.4 GHz only.</p>"
+         "<script>"
+         "const f=document.forms[0],pw=document.getElementById('pw'),on=document.getElementById('othname');"
+         "f.onchange=e=>{const r=f.querySelector('input[name=ssid]:checked');if(!r)return;"
+         "pw.style.display=r.dataset.open=='1'?'none':'';"
+         "if(e.target==r)(r.id=='oth'?on:document.getElementById('pass')).focus()};"
+         "on.onfocus=()=>{document.getElementById('oth').checked=true;f.onchange({})};"
+         "</script>");
 }
 
 static void handleSave() {
   if (!webAuthed()) return;
-  if (web.arg("ssid").length() == 0) { web.sendHeader("Location", "/wifi"); web.send(303); return; }
-  prefs.putString("ssid", web.arg("ssid"));
+  String ssid = web.arg("ssid");
+  if (ssid.length() == 0) { ssid = web.arg("other"); ssid.trim(); }   // typed under "Other network…"
+  if (ssid.length() == 0) { web.sendHeader("Location", "/wifi"); web.send(303); return; }
+  prefs.putString("ssid", ssid);
   prefs.putString("pass", web.arg("pass"));
   web.send(200, "text/html", page("WFD WiFi Setup",
            "<h2>Saved — connecting…</h2><p>Rejoin your normal WiFi. The clock is restarting.</p>"));
@@ -616,7 +666,6 @@ static void startWebRoutes() {
   web.on("/save", HTTP_POST, handleSave);
   web.on("/wifi", HTTP_GET, []() {                // change networks (also reachable in AP mode)
     if (!webAuthed()) return;
-    if (WiFi.scanComplete() == WIFI_SCAN_FAILED) WiFi.scanNetworks(true);
     web.send(200, "text/html", setupPage());
   });
   web.on("/rescan", []() {

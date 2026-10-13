@@ -54,7 +54,7 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 |---|---|
 | `GET /` | Status page (time, NTP, WiFi, weather) |
 | `GET/POST /control` | Phone control panel (brightness, weather ZIP/units, timezone, offline message, standalone toggles) |
-| `GET /wifi`, `POST /save` | Change WiFi network (captive portal in AP mode) |
+| `GET /wifi`, `POST /save` | WiFi picker: scanned networks by signal, or type a hidden one (captive portal in AP mode) |
 | `GET/POST /update` | OTA firmware upload |
 | `GET /rescan` | Re‑scan WiFi networks |
 
