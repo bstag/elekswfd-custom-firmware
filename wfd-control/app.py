@@ -5,7 +5,7 @@
 """WFD Control - unified app for the custom EleksWFD firmware.
 
 Runs the background services (time sync, audio spectrum, CPU/GPU/RAM bars, weather)
-and serves a local control UI at http://127.0.0.1:8737.
+and serves a local control UI at http://127.0.0.1:8737 (HTTP_ADDR).
 
     uv run app.py            (or: python app.py)
 
@@ -40,7 +40,10 @@ import grid_anim  # noqa: E402
 
 HERE = Path(__file__).parent
 CONFIG = HERE / "wfd_config.json"
-NLEV = 12
+HTTP_ADDR = ("127.0.0.1", 8737)
+CH340_VID, CH340_PID = 0x1A86, 0x7523    # the clock's USB-serial chip
+BAUD = 115200
+NLEV = 12                                # spectrum column height
 
 DEFAULTS = {
     "time_sync": True, "clock_24h": True,
@@ -189,6 +192,15 @@ state = {
     "battery": None,
     "geo": None,
 }
+state_lock = threading.Lock()           # writers replace whole values via set_state(); readers of a
+                                        # single key need no lock, /api/status serializes under it
+
+
+def set_state(**kv):
+    with state_lock:
+        state.update(kv)
+
+
 cfg = load_config()
 cfg_lock = threading.Lock()
 stop = threading.Event()
@@ -199,6 +211,7 @@ _band_peak = [1e-4] * 7
 _BAND_EDGES = [60, 160, 320, 640, 1280, 2560, 5120, 12000]
 grid_engine = grid_anim.GridEngine()
 grid_preview = {"rows": [0] * 7, "frame": 0, "at": 0.0}   # live frame from the drawing tool
+sync_now = threading.Event()           # set by /api/sync: push the PC time to the clock now
 uploads = []                           # queued serial uploads for the worker to perform
 uploads_lock = threading.Lock()
 
@@ -229,7 +242,8 @@ def audio_reader(kind):
                 sr = int(dev["defaultSampleRate"])
                 st = p.open(format=pa.paInt16, channels=ch, rate=sr, input=True,
                             input_device_index=dev["index"], frames_per_buffer=1024)
-            state["audio"][kind] = dev["name"]
+            with state_lock:
+                state["audio"] = {**state["audio"], kind: dev["name"]}
             while not stop.is_set():
                 raw = st.read(1024, exception_on_overflow=False)
                 x = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
@@ -276,13 +290,13 @@ def metrics_reader():
                 gpu = int(max(vals)) if vals else 0
             except Exception:
                 gpu = 0
-        state["metrics"] = {"cpu": int(psutil.cpu_percent(None)), "gpu": gpu,
-                            "ram": int(psutil.virtual_memory().percent)}
         try:
             b = psutil.sensors_battery()
-            state["battery"] = int(b.percent) if b else None
+            battery = int(b.percent) if b else None
         except Exception:
-            state["battery"] = None
+            battery = None
+        set_state(metrics={"cpu": int(psutil.cpu_percent(None)), "gpu": gpu,
+                           "ram": int(psutil.virtual_memory().percent)}, battery=battery)
         time.sleep(1.0)
 
 
@@ -326,24 +340,24 @@ def weather_reader():
             if loc != cur_loc or lat is None:
                 lat, lon, label = resolve_location(loc)
                 cur_loc = loc
-                state["geo"] = {"lat": round(float(lat), 4), "lon": round(float(lon), 4),
-                                "unit": 1 if units.startswith("c") else 0}
+                set_state(geo={"lat": round(float(lat), 4), "lon": round(float(lon), 4),
+                               "unit": 1 if units.startswith("c") else 0})
             uname = "celsius" if units.startswith("c") else "fahrenheit"
             c = _get(f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
                      f"&current=temperature_2m,weather_code&temperature_unit={uname}")["current"]
             code = _wmo(int(c["weather_code"]))
-            state["weather"] = {"code": code, "temp": int(round(c["temperature_2m"])),
-                                "unit": 1 if uname == "celsius" else 0, "label": label, "cond": _COND[code]}
-            state["online"] = True
+            set_state(weather={"code": code, "temp": int(round(c["temperature_2m"])),
+                               "unit": 1 if uname == "celsius" else 0, "label": label, "cond": _COND[code]},
+                      online=True)
         except Exception:
-            state["online"] = False
+            set_state(online=False)
         stop.wait(900)
 
 
-# ============================================================ serial worker
+# ============================================================ serial link to the clock
 def find_port():
     for p in list_ports.comports():
-        if p.vid == 0x1A86 and p.pid == 0x7523:
+        if p.vid == CH340_VID and p.pid == CH340_PID:
             return p.device
     return None
 
@@ -354,8 +368,8 @@ def open_serial():
         return None
     try:
         s = serial.Serial()
-        s.port, s.baudrate, s.timeout = port, 115200, 1
-        s.dtr = s.rts = False
+        s.port, s.baudrate, s.timeout = port, BAUD, 1
+        s.dtr = s.rts = False              # don't reset the ESP32 on open
         s.open()
         time.sleep(0.2)
         return s
@@ -363,177 +377,216 @@ def open_serial():
         return None
 
 
-def set_time(s):
-    now = datetime.datetime.now()
-    s.write(f"SET {now.year%100} {now.month} {now.day} {now.isoweekday()} "
-            f"{now.hour} {now.minute} {now.second}\n".encode())
-    time.sleep(0.15)
-    s.reset_input_buffer()
-    state["time"] = now.strftime("%a %H:%M:%S")
+def _frame_cmd(cmd, values):
+    return cmd + " " + " ".join(map(str, values))
 
 
-def worker():
-    peak = {"out": 1e-5, "mic": 1e-5}
-    disp = {"out": 0.0, "mic": 0.0}
-    s = None
-    last_sync = last_bars = last_wx = last_scroll = 0.0
-    sent = {}                          # command -> last value sent; cleared on (re)connect
-    last_err = None
-    cur_src = None
-    scroll_pos = 0
-    rot_idx = -1
-    rot_until = 0.0
-    last_grid = 0.0
-    worker.sync_now = False
+class ClockLink:
+    """Owns the serial port and pushes everything the clock shows, ~30 times a second."""
 
-    def push(cmd, value):
-        """Send 'CMD value' only when value differs from what the clock last got."""
-        if sent.get(cmd) != value:
-            s.write(f"{cmd} {value}\n".encode())
-            sent[cmd] = value
+    TICK = 1.0 / 30
 
-    while not stop.is_set():
-        if s is None or not s.is_open:
-            s = open_serial()
-            state["connected"] = bool(s)
-            state["port"] = s.port if s else None
-            if not s:
+    def __init__(self):
+        self.s = None
+        self.sent = {}                     # command -> last value sent; cleared on (re)connect
+        self.last_err = None
+        self.last_sync = self.last_bars = self.last_wx = self.last_scroll = self.last_grid = 0.0
+        self.peak = {"out": 1e-5, "mic": 1e-5}     # audio level auto-gain
+        self.disp = {"out": 0.0, "mic": 0.0}       # displayed level (fast rise, slow fall)
+        self.cur_src = None                # message text currently scrolling
+        self.scroll_pos = 0
+        self.rot_idx = -1
+        self.rot_until = 0.0
+
+    def run(self):
+        while not stop.is_set():
+            if not self.connect():
                 time.sleep(2)
                 continue
             with cfg_lock:
-                if cfg["time_sync"]:
-                    set_time(s)
-            last_sync = time.time()
-            sent.clear()                    # a fresh (or power-cycled) clock needs everything again
+                c = dict(cfg)
+            try:
+                self.tick(c)
+            except serial.SerialException:
+                self.s = None
+                set_state(connected=False)
+            except Exception as e:         # never let a transient error kill the link, but say what it was
+                if repr(e) != self.last_err:
+                    self.last_err = repr(e)
+                    traceback.print_exc()
+            time.sleep(self.TICK)
+
+    # ---------------------------------------------------------------- plumbing
+    def connect(self):
+        """Ensure the port is open; on a fresh connection, sync time and forget what was sent."""
+        if self.s is not None and self.s.is_open:
+            return True
+        self.s = open_serial()
+        set_state(connected=bool(self.s), port=self.s.port if self.s else None)
+        if not self.s:
+            return False
         with cfg_lock:
-            c = dict(cfg)
-        try:
-            if (c["time_sync"] and time.time() - last_sync > 600) or worker.sync_now:
-                set_time(s)
-                last_sync = time.time()
-                worker.sync_now = False
-            push("STYLE", c["style"])
-            push("BRIGHT", c["brightness"])
-            push("CLK24", int(c["clock_24h"]))
-            push("GAUTO", int(c["grid_standalone"]))
-            push("OMAUTO", int(c["msg_standalone"]))
-            if state["geo"]:                                 # location for on-device weather
-                g = state["geo"]
-                push("GEO", f"{g['lat']} {g['lon']} {g['unit']}")
-            # perform any queued flash uploads (grid animation / offline message)
-            job = None
-            with uploads_lock:
-                if uploads:
-                    job = uploads.pop(0)
-            if job:
-                if job["type"] == "grid":
-                    s.write(b"GCLR\n"); time.sleep(0.03)
-                    for fr in job["frames"][:80]:
-                        s.write(("GADD " + " ".join(map(str, fr)) + "\n").encode()); time.sleep(0.015)
-                    s.write(f"GCOMMIT {job['fps']} {1 if job['frame'] else 0}\n".encode())
-                    state["saved"] = f"grid: {len(job['frames'])} frames"
-                elif job["type"] == "om":
-                    s.write(b"OMCLR\n"); time.sleep(0.03)
-                    for fr in job["frames"][:100]:
-                        s.write(("OMADD " + " ".join(map(str, fr)) + "\n").encode()); time.sleep(0.015)
-                    s.write(f"OMCOMMIT {job['fps']}\n".encode())
-                    state["saved"] = f"message: {len(job['frames'])} frames"
-                sent.pop("GAUTO", None)            # a commit turns auto on; re-assert the setting
-                sent.pop("OMAUTO", None)
-            # audio levels (always computed, used by the spectrum and the icon row)
-            levels = {"out": 0, "mic": 0}
-            for k, g in (("out", c["gain_out"]), ("mic", c["gain_mic"])):
-                e = energy[k] * g
-                peak[k] = max(e, peak[k] * 0.995)
-                frac = 0.0 if peak[k] < 1e-5 else e / peak[k]
-                target = NLEV * max(0.0, (frac - 0.12) / 0.88)
-                disp[k] = target if target >= disp[k] else max(target, disp[k] - 0.8)
-                levels[k] = int(round(min(NLEV, disp[k])))
-            state["levels"] = levels
-            vals = levels if c["spectrum"] else {"out": 0, "mic": 0}
-            s.write(f"SPEC {vals['out']} {vals['mic']}\n".encode())
-            # top-row icons + logo
-            s.write(f"ICON {compute_icons(c['icon_mode'], levels, state['metrics'], state['online'], state['battery'])}\n".encode())
-            s.write(f"LOGO {1 if c['logo'] else 0}\n".encode())
-            now = datetime.datetime.now()
-            state["time"] = now.strftime("%a %H:%M:%S")
-            if c["bars"] and time.time() - last_bars > 1.0:
+            if cfg["time_sync"]:
+                self.set_time()
+        self.last_sync = time.time()
+        self.sent.clear()                  # a fresh (or power-cycled) clock needs everything again
+        return True
+
+    def send(self, line):
+        self.s.write((line + "\n").encode())
+
+    def push(self, cmd, value):
+        """Send 'CMD value' only when value differs from what the clock last got."""
+        if self.sent.get(cmd) != value:
+            self.send(f"{cmd} {value}")
+            self.sent[cmd] = value
+
+    def set_time(self):
+        now = datetime.datetime.now()
+        self.send(f"SET {now.year%100} {now.month} {now.day} {now.isoweekday()} "
+                  f"{now.hour} {now.minute} {now.second}")
+        time.sleep(0.15)
+        self.s.reset_input_buffer()
+        set_state(time=now.strftime("%a %H:%M:%S"))
+
+    # ---------------------------------------------------------------- one frame
+    def tick(self, c):
+        if (c["time_sync"] and time.time() - self.last_sync > 600) or sync_now.is_set():
+            self.set_time()
+            self.last_sync = time.time()
+            sync_now.clear()
+        self.push_settings(c)
+        self.run_upload()
+        levels = self.audio_levels(c)
+        vals = levels if c["spectrum"] else {"out": 0, "mic": 0}
+        self.send(f"SPEC {vals['out']} {vals['mic']}")
+        self.send(f"ICON {compute_icons(c['icon_mode'], levels, state['metrics'], state['online'], state['battery'])}")
+        self.send(f"LOGO {1 if c['logo'] else 0}")
+        now = datetime.datetime.now()
+        set_state(time=now.strftime("%a %H:%M:%S"))
+        self.send_bars_weather(c)
+        self.send_message(c, now)
+        self.send_grid(c)
+
+    def push_settings(self, c):
+        self.push("STYLE", c["style"])
+        self.push("BRIGHT", c["brightness"])
+        self.push("CLK24", int(c["clock_24h"]))
+        self.push("GAUTO", int(c["grid_standalone"]))
+        self.push("OMAUTO", int(c["msg_standalone"]))
+        g = state["geo"]
+        if g:                                          # location for on-device weather
+            self.push("GEO", f"{g['lat']} {g['lon']} {g['unit']}")
+
+    def run_upload(self):
+        """Perform one queued flash upload (grid animation / offline message), if any."""
+        with uploads_lock:
+            job = uploads.pop(0) if uploads else None
+        if not job:
+            return
+        if job["type"] == "grid":
+            clr, add, cap, commit, what = "GCLR", "GADD", 80, f"GCOMMIT {job['fps']} {1 if job['frame'] else 0}", "grid"
+        else:
+            clr, add, cap, commit, what = "OMCLR", "OMADD", 100, f"OMCOMMIT {job['fps']}", "message"
+        self.send(clr)
+        time.sleep(0.03)
+        for fr in job["frames"][:cap]:
+            self.send(_frame_cmd(add, fr))
+            time.sleep(0.015)
+        self.send(commit)
+        set_state(saved=f"{what}: {len(job['frames'])} frames")
+        self.sent.pop("GAUTO", None)       # a commit turns auto on; re-assert the setting
+        self.sent.pop("OMAUTO", None)
+
+    def audio_levels(self, c):
+        """0..NLEV levels for output/mic (always computed: used by the spectrum and the icon row)."""
+        levels = {}
+        for k, g in (("out", c["gain_out"]), ("mic", c["gain_mic"])):
+            e = energy[k] * g
+            self.peak[k] = max(e, self.peak[k] * 0.995)
+            frac = 0.0 if self.peak[k] < 1e-5 else e / self.peak[k]
+            target = NLEV * max(0.0, (frac - 0.12) / 0.88)
+            d = self.disp[k]
+            self.disp[k] = target if target >= d else max(target, d - 0.8)
+            levels[k] = int(round(min(NLEV, self.disp[k])))
+        set_state(levels=levels)
+        return levels
+
+    def send_bars_weather(self, c):
+        if c["bars"] and time.time() - self.last_bars > 1.0:
+            m = state["metrics"]
+            self.send(f"BARS {m['cpu']} {m['gpu']} {m['ram']}")
+            self.last_bars = time.time()
+        w = state["weather"]
+        if c["weather"] and w["label"] and time.time() - self.last_wx > 60.0:
+            self.send(f"WX {w['code']} {w['temp']} {w['unit']}")   # only once real weather has loaded
+            self.last_wx = time.time()
+
+    def message_source(self, c):
+        """Which source the message line shows now, or None to let the firmware show the temp."""
+        mode = c["message_mode"]
+        if mode in ("window", "text", "date"):
+            return mode
+        if mode != "rotate":
+            return None                    # "weather": firmware draws the temperature itself
+        srcs = [x for x in ("weather", "window", "text", "date") if c.get("rotate_" + x)]
+        if not srcs:
+            return None
+        if time.time() >= self.rot_until:
+            self.rot_idx = (self.rot_idx + 1) % len(srcs)
+            self.rot_until = time.time() + max(2, c["rotate_dwell"])
+            self.cur_src = None
+            self.scroll_pos = 0
+        return srcs[self.rot_idx % len(srcs)]
+
+    def send_message(self, c, now):
+        cur = self.message_source(c)
+        if not cur or time.time() - self.last_scroll <= c["scroll_ms"] / 1000.0:
+            return
+        if cur == "weather":               # rotate's weather slot: temp glyphs from the PC
+            w = state["weather"]
+            txt = f"{w['temp']}{'C' if w['unit'] else 'F'}"
+            frame = font14.render6(txt.rjust(6), 0)
+            set_state(message="temp " + txt)
+        else:
+            fill = {"date": now.strftime("%a %b %d").upper(),
+                    "time": now.strftime("%H:%M"),
+                    "time12": now.strftime("%I:%M").lstrip("0") + now.strftime("%p"),
+                    "day": now.strftime("%A").upper()}
+            if cur == "window":
+                txt = foreground_title()
+            elif cur == "date":
+                txt = fill["date"]
+            else:                          # custom text, with {date}/{time}/{time12}/{day} placeholders
+                txt = c["custom_text"]
+                for k, v in fill.items():
+                    txt = txt.replace("{" + k + "}", v)
+            txt = txt.strip() or " "
+            if txt != self.cur_src:
+                self.cur_src = txt
+                self.scroll_pos = 0
+            frame = scroll_frame(txt, self.scroll_pos)
+            self.scroll_pos += 1
+            set_state(message=txt)
+        self.send(_frame_cmd("MSG", frame))
+        self.last_scroll = time.time()
+
+    def send_grid(self, c):
+        since = time.time() - self.last_grid
+        if time.time() - grid_preview["at"] < 2.0:          # live drawing-tool preview wins
+            if since > 1.0 / 20:
+                self.send(_frame_cmd("GRID", grid_preview["rows"] + [grid_preview["frame"]]))
+                self.last_grid = time.time()
+        elif (c["grid_enable"] or c["grid_frame"]) and since > 1.0 / max(2, c["grid_fps"]):
+            if c["grid_enable"]:
                 m = state["metrics"]
-                s.write(f"BARS {m['cpu']} {m['gpu']} {m['ram']}\n".encode())
-                last_bars = time.time()
-            if c["weather"] and state["weather"]["label"] and time.time() - last_wx > 60.0:
-                w = state["weather"]          # only once real weather has loaded (no stray "0F")
-                s.write(f"WX {w['code']} {w['temp']} {w['unit']}\n".encode())
-                last_wx = time.time()
-            # message line: weather temp / window title / custom text / rotation
-            mode = c["message_mode"]
-            cur = None                      # which source to show right now
-            if mode in ("window", "text", "date"):
-                cur = mode
-            elif mode == "rotate":
-                srcs = [x for x in ("weather", "window", "text", "date") if c.get("rotate_" + x)]
-                if srcs:
-                    if time.time() >= rot_until:
-                        rot_idx = (rot_idx + 1) % len(srcs)
-                        rot_until = time.time() + max(2, c["rotate_dwell"])
-                        cur_src = None
-                        scroll_pos = 0
-                    cur = srcs[rot_idx % len(srcs)]
-            # mode == "weather" (or rotate's weather slot): cur=="weather" means temp glyphs;
-            # single "weather" mode leaves cur None so the firmware shows the temp itself.
-            if cur and time.time() - last_scroll > c["scroll_ms"] / 1000.0:
-                if cur == "weather":
-                    w = state["weather"]
-                    txt = f"{w['temp']}{'C' if w['unit'] else 'F'}"
-                    frame = font14.render6(txt.rjust(6), 0)
-                    state["message"] = "temp " + txt
-                else:
-                    fill = {"date": now.strftime("%a %b %d").upper(),
-                            "time": now.strftime("%H:%M"),
-                            "time12": now.strftime("%I:%M").lstrip("0") + now.strftime("%p"),
-                            "day": now.strftime("%A").upper()}
-                    if cur == "window":
-                        txt = foreground_title()
-                    elif cur == "date":
-                        txt = fill["date"]
-                    else:                       # custom text, with {date}/{time}/{time12}/{day} placeholders
-                        txt = c["custom_text"]
-                        for k, v in fill.items():
-                            txt = txt.replace("{" + k + "}", v)
-                    txt = txt.strip() or " "
-                    if txt != cur_src:
-                        cur_src = txt
-                        scroll_pos = 0
-                    frame = scroll_frame(txt, scroll_pos)
-                    scroll_pos += 1
-                    state["message"] = txt
-                s.write(("MSG " + " ".join(map(str, frame)) + "\n").encode())
-                last_scroll = time.time()
-            # live drawing-tool preview overrides everything on the grid
-            if time.time() - grid_preview["at"] < 2.0:
-                if time.time() - last_grid > 1.0 / 20:
-                    s.write(("GRID " + " ".join(map(str, grid_preview["rows"])) + " "
-                             + str(grid_preview["frame"]) + "\n").encode())
-                    last_grid = time.time()
-            # 7x7 grid motion graphics + frame
-            elif (c["grid_enable"] or c["grid_frame"]) and time.time() - last_grid > 1.0 / max(2, c["grid_fps"]):
-                if c["grid_enable"]:
-                    m = state["metrics"]
-                    extra = {"bands": gbands, "cpu": m["cpu"], "gpu": m["gpu"], "ram": m["ram"],
-                             "custom": c.get("grid_custom") or []}
-                    rows = grid_engine.frame(c["grid_anim"], extra)
-                else:
-                    rows = [0] * 7
-                s.write(("GRID " + " ".join(map(str, rows)) + " " + ("1" if c["grid_frame"] else "0") + "\n").encode())
-                last_grid = time.time()
-        except serial.SerialException:
-            s = None
-            state["connected"] = False
-        except Exception as e:         # never let a transient error kill the worker, but say what it was
-            if repr(e) != last_err:
-                last_err = repr(e)
-                traceback.print_exc()
-        time.sleep(1.0 / 30)
+                extra = {"bands": gbands, "cpu": m["cpu"], "gpu": m["gpu"], "ram": m["ram"],
+                         "custom": c.get("grid_custom") or []}
+                rows = grid_engine.frame(c["grid_anim"], extra)
+            else:
+                rows = [0] * 7
+            self.send(_frame_cmd("GRID", list(rows) + [1 if c["grid_frame"] else 0]))
+            self.last_grid = time.time()
 
 
 # ============================================================ web server
@@ -556,8 +609,9 @@ class H(BaseHTTPRequestHandler):
         if self.path in ("/draw", "/draw.html"):
             return self._send(200, (HERE / "draw.html").read_bytes(), "text/html; charset=utf-8")
         if self.path == "/api/status":
-            with cfg_lock:
-                return self._send(200, {"state": state, "config": cfg})
+            with cfg_lock, state_lock:
+                body = json.dumps({"state": state, "config": cfg}).encode()
+            return self._send(200, body)
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -585,13 +639,12 @@ class H(BaseHTTPRequestHandler):
                 save_config(cfg)
             return self._send(200, {"ok": True})
         if self.path == "/api/sync":
-            worker.sync_now = True
+            sync_now.set()
             return self._send(200, {"ok": True})
         if self.path == "/api/grid_preview":
             rows = (body.get("rows") or [0] * 7)[:7]
-            grid_preview["rows"] = [int(x) & 0x7F for x in (rows + [0] * 7)[:7]]
-            grid_preview["frame"] = 1 if body.get("frame") else 0
-            grid_preview["at"] = time.time()
+            grid_preview.update(rows=[int(x) & 0x7F for x in (rows + [0] * 7)[:7]],
+                                frame=1 if body.get("frame") else 0, at=time.time())
             return self._send(200, {"ok": True})
         if self.path == "/api/grid_save":
             if body.get("frames"):
@@ -625,13 +678,13 @@ def main():
     if not CONFIG.exists():
         save_config(cfg)
     for fn in (lambda: audio_reader("out"), None, lambda: audio_reader("mic"),
-               metrics_reader, weather_reader, worker):
+               metrics_reader, weather_reader, ClockLink().run):
         if fn is None:
             time.sleep(0.5)                       # stagger audio inits
             continue
         threading.Thread(target=fn, daemon=True).start()
-    srv = ThreadingHTTPServer(("127.0.0.1", 8737), H)
-    url = "http://127.0.0.1:8737"
+    srv = ThreadingHTTPServer(HTTP_ADDR, H)
+    url = "http://%s:%d" % HTTP_ADDR
     print("WFD Control at", url)
     if "--no-browser" not in sys.argv:
         threading.Timer(0.6, webbrowser.open, (url,)).start()
