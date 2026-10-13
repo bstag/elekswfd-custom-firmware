@@ -61,12 +61,54 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `GET /wifi`, `POST /save` | WiFi picker: scanned networks by signal, or type a hidden one (captive portal in AP mode) |
 | `GET/POST /update` | OTA firmware upload |
 | `GET /rescan` | Re‑scan WiFi networks |
+| `GET /api/status` | JSON: live state + every setting (see below) |
+| `POST /api/set` | JSON: change settings |
 
 Anyone on your LAN can reach these pages. Set `WEBPASS` over USB to put `/control`,
 `/update` and `/wifi` behind HTTP basic auth. The first-run setup AP is always open.
 
 In AP (setup) mode the clock is `192.168.4.1` and a DNS captive portal redirects to the
 setup page.
+
+## JSON API
+
+Same shape as the PC app's API, so one dashboard can talk to either.
+
+`GET /api/status` returns `{"state": {...}, "config": {...}}`. `state` has `fw`, `uptime_s`,
+`heap_free`, `time`, `ntp`, `wifi {ssid, ip, rssi}`, `weather {fresh, temp, unit, cond}`,
+`app_connected`, `message` (what the message line shows), `stored_frames` and `grid_rows`
+(the current grid frame, 7 row bytes).
+
+`POST /api/set` takes a JSON object of settings. It needs the header `X-WFD: 1`, which stops
+other web pages posting to the clock from your browser, plus the web password if `WEBPASS`
+is set. Every key is checked first; if any is bad nothing changes, and you get a 400 with
+`{"error": {key: reason}}`. Success is `{"ok": true}`, with `"warning"` if a ZIP lookup failed.
+
+| Key | Type | Notes |
+|---|---|---|
+| `brightness` | int 1–16 | |
+| `clock_24h` | bool | |
+| `style` | int 1–5 | spectrum style |
+| `units` | `fahrenheit` / `celsius` | |
+| `tz` | string | POSIX TZ, e.g. `CST6CDT,M3.2.0,M11.1.0` |
+| `location` | 5‑digit US ZIP | looked up on the clock |
+| `offline_text` | string ≤ 96 | message text; placeholders allowed |
+| `msg_standalone` | bool | run the message line when the app is off |
+| `standalone_msg_mode` | `weather` / `text` / `date` / `rotate` | |
+| `standalone_rotate` | list of `weather` `text` `date` | what rotate cycles through |
+| `standalone_dwell` | int 2–600 | seconds per item |
+| `standalone_scroll_ms` | int 50–5000 | ms per scroll step |
+| `grid_standalone` | bool | play a grid animation when the app is off |
+| `standalone_anim` | name | `spin bounce rain wave pulse sparkle scan life heart`, or `custom` (needs drawn frames) |
+| `standalone_fps` | int 1–30 | |
+| `standalone_frame` | bool | light the border |
+
+```bash
+curl http://<clock-ip>/api/status
+curl -X POST -H "X-WFD: 1" -d '{"standalone_anim":"rain","standalone_fps":12}' http://<clock-ip>/api/set
+```
+
+The phone page's form goes through the same checks, so both always agree.
 
 ## Message line (when the app is off)
 

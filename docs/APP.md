@@ -84,6 +84,11 @@ written. The suite covers:
   sends is handled in `main.cpp`, `font14_table.h` matches `font14.py`, and the icon count
   matches `clock_panel.h`.
 
+- **`test_grid_engine.py`** compiles the firmware's `grid_engine.h` on the PC and checks it
+  against `grid_anim.py` (skipped if there's no C++ compiler).
+- **`test_device_api.py`** (opt‑in) tests the clock's JSON API on a real clock and restores
+  everything it changes: `set WFD_CLOCK=<clock ip> && test.bat -m device`.
+
 If you change what the app sends on purpose, the golden test fails with a diff. Regenerate
 the log, then review its diff in git before committing:
 

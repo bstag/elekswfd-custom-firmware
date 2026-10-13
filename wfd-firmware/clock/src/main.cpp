@@ -12,6 +12,7 @@
 #include <WiFiClientSecure.h>
 #include <Update.h>
 #include <time.h>
+#include <ArduinoJson.h>
 #include "clock_panel.h"
 #include "font14_table.h"
 #include "grid_engine.h"
@@ -737,33 +738,232 @@ static String controlPage() {
   s += "<p class=dim><a href=/>Status</a> &middot; <a href=/update>Firmware update</a></p>";
   return page("WFD Control", s);
 }
+// ============================= settings (JSON API + phone form) =============================
+// One table of settings, shared by POST /api/set and the /control form. Names match the PC app
+// where the meaning is the same; clock-only settings for "when the app is off" are standalone_*.
+// applySettings() checks every key first and changes nothing unless all are valid.
+static const char *MSG_MODE_NAMES[] = {"weather", "text", "date", "rotate"};   // index = SRC_* / MODE_ROTATE
+
+static int indexOf(const char *const *names, int n, const char *s) {
+  for (int i = 0; i < n; i++) if (s && strcmp(names[i], s) == 0) return i;
+  return -1;
+}
+
+struct Pending {                       // multi-key settings, committed together after the loop
+  int mode, rot, dwell, scroll; bool msg = false;
+  int anim, fps, flag; bool grid = false;
+  int gauto = -1, omauto = -1;
+};
+
+static bool intIn(JsonVariantConst v, int lo, int hi, int &out, String &err) {
+  if (!v.is<int>() || v.as<int>() < lo || v.as<int>() > hi) { err = "expected an integer " + String(lo) + ".." + String(hi); return false; }
+  out = v.as<int>();
+  return true;
+}
+static bool boolOf(JsonVariantConst v, int &out, String &err) {
+  if (!v.is<bool>()) { err = "expected true/false"; return false; }
+  out = v.as<bool>() ? 1 : 0;
+  return true;
+}
+
+// Validate one key; if `apply`, also make the change (single-key settings) or record it in `pd`.
+static bool setting(const char *k, JsonVariantConst v, bool apply, Pending &pd, String &err, String &warn) {
+  int i;
+  if (!strcmp(k, "brightness")) {
+    if (!intIn(v, 1, 16, i, err)) return false;
+    if (apply && i != brightness) setBrightness(i);
+  } else if (!strcmp(k, "clock_24h")) {
+    if (!boolOf(v, i, err)) return false;
+    if (apply && i != clock24) { clock24 = i; prefs.putInt("clk24", clock24); dirty = true; }
+  } else if (!strcmp(k, "style")) {
+    if (!intIn(v, 1, N_STYLES, i, err)) return false;
+    if (apply) { setStyle(i); dirty = true; }
+  } else if (!strcmp(k, "units")) {
+    const char *u = v.as<const char *>();
+    if (!v.is<const char *>() || (strcmp(u, "fahrenheit") && strcmp(u, "celsius"))) { err = "expected fahrenheit or celsius"; return false; }
+    i = !strcmp(u, "celsius");
+    if (apply && i != g_wunit) { g_wunit = i; prefs.putInt("wunit", g_wunit); lastWxFetch = 0; }   // refetch in new units
+  } else if (!strcmp(k, "tz")) {
+    String tz = v.as<const char *>();
+    if (!v.is<const char *>() || tz.length() < 3 || tz.length() > 64) { err = "expected a POSIX TZ string"; return false; }
+    if (apply && tz != g_tz) { g_tz = tz; prefs.putString("tz", g_tz); configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov"); }
+  } else if (!strcmp(k, "location")) {            // US ZIP, looked up on the clock
+    String zip = v.as<const char *>(); zip.trim();
+    bool ok = v.is<const char *>() && zip.length() == 5;
+    for (char c : zip) ok = ok && isDigit(c);
+    if (!ok) { err = "expected a 5-digit US ZIP"; return false; }
+    if (apply && zip != prefs.getString("zip", "") && !setWeatherZip(zip)) warn = "ZIP lookup failed; location unchanged";
+  } else if (!strcmp(k, "offline_text")) {
+    if (!v.is<const char *>() || strlen(v.as<const char *>()) > MSG_TEXT_MAX) { err = "expected text up to " + String(MSG_TEXT_MAX) + " chars"; return false; }
+    if (apply) setMsgText(v.as<const char *>());
+  } else if (!strcmp(k, "msg_standalone")) {
+    if (!boolOf(v, i, err)) return false;
+    pd.omauto = i;
+  } else if (!strcmp(k, "standalone_msg_mode")) {
+    if ((i = indexOf(MSG_MODE_NAMES, 4, v.as<const char *>())) < 0) { err = "expected weather, text, date or rotate"; return false; }
+    pd.mode = i; pd.msg = true;
+  } else if (!strcmp(k, "standalone_rotate")) {
+    if (!v.is<JsonArrayConst>()) { err = "expected a list of weather/text/date"; return false; }
+    int rot = 0;
+    for (JsonVariantConst s : v.as<JsonArrayConst>()) {
+      if ((i = indexOf(MSG_MODE_NAMES, N_SRC, s.as<const char *>())) < 0) { err = "expected a list of weather/text/date"; return false; }
+      rot |= 1 << i;
+    }
+    pd.rot = rot; pd.msg = true;
+  } else if (!strcmp(k, "standalone_dwell")) {
+    if (!intIn(v, 2, 600, pd.dwell, err)) return false;
+    pd.msg = true;
+  } else if (!strcmp(k, "standalone_scroll_ms")) {
+    if (!intIn(v, 50, 5000, pd.scroll, err)) return false;
+    pd.msg = true;
+  } else if (!strcmp(k, "grid_standalone")) {
+    if (!boolOf(v, i, err)) return false;
+    pd.gauto = i;
+  } else if (!strcmp(k, "standalone_anim")) {
+    if ((i = grid::animFromName(v.as<const char *>() ? v.as<const char *>() : "")) < 0) { err = "unknown animation"; return false; }
+    if (i == grid::CUSTOM && gaN == 0) { err = "no drawn frames stored"; return false; }
+    pd.anim = i; pd.grid = true;
+  } else if (!strcmp(k, "standalone_fps")) {
+    if (!intIn(v, 1, 30, pd.fps, err)) return false;
+    pd.grid = true;
+  } else if (!strcmp(k, "standalone_frame")) {
+    if (!boolOf(v, pd.flag, err)) return false;
+    pd.grid = true;
+  } else {
+    err = "unknown setting";
+    return false;
+  }
+  return true;
+}
+
+// Validate everything in `in`; only if all keys are valid, apply them. Errors/warnings go to `out`.
+static bool applySettings(JsonObjectConst in, JsonDocument &out) {
+  Pending pd;
+  pd.mode = msgMode; pd.rot = msgRot; pd.dwell = msgDwell; pd.scroll = msgScroll;
+  pd.anim = gaAnim; pd.fps = gaFps; pd.flag = gaFlag;
+  bool ok = true;
+  String err, warn;
+  for (JsonPairConst kv : in)
+    if (!setting(kv.key().c_str(), kv.value(), false, pd, err, warn)) { out["error"][kv.key()] = err; ok = false; }
+  if (!ok) return false;
+  for (JsonPairConst kv : in) {
+    warn = "";
+    setting(kv.key().c_str(), kv.value(), true, pd, err, warn);
+    if (warn.length()) out["warning"][kv.key()] = warn;
+  }
+  if (pd.msg) setMsgCfg(pd.mode, pd.rot, pd.dwell, pd.scroll);
+  if (pd.grid && (pd.anim != gaAnim || pd.fps != gaFps || pd.flag != gaFlag)) setGridAnim(pd.anim, pd.fps, pd.flag);
+  if (pd.gauto >= 0 && pd.gauto != gaAuto) { gaAuto = pd.gauto; prefs.putInt("gauto", gaAuto); }
+  if (pd.omauto >= 0 && pd.omauto != omAuto) { omAuto = pd.omauto; prefs.putInt("omauto", omAuto); }
+  out["ok"] = true;
+  return true;
+}
+
+static void configJson(JsonObject c) {
+  c["brightness"] = brightness;
+  c["clock_24h"] = (bool)clock24;
+  c["style"] = specStyle;
+  c["units"] = g_wunit ? "celsius" : "fahrenheit";
+  c["tz"] = g_tz;
+  c["location"] = prefs.getString("zip", "");
+  c["offline_text"] = msgText;
+  c["msg_standalone"] = (bool)omAuto;
+  c["standalone_msg_mode"] = MSG_MODE_NAMES[msgMode];
+  JsonArray rot = c["standalone_rotate"].to<JsonArray>();
+  for (int i = 0; i < N_SRC; i++) if (msgRot & (1 << i)) rot.add(MSG_MODE_NAMES[i]);
+  c["standalone_dwell"] = msgDwell;
+  c["standalone_scroll_ms"] = msgScroll;
+  c["grid_standalone"] = (bool)gaAuto;
+  c["standalone_anim"] = grid::NAMES[gaAnim];
+  c["standalone_fps"] = gaFps;
+  c["standalone_frame"] = (bool)gaFlag;
+}
+
+static void stateJson(JsonObject s) {
+  s["fw"] = "wfd-clock " __DATE__ " " __TIME__;
+  s["uptime_s"] = millis() / 1000;
+  s["heap_free"] = ESP.getFreeHeap();
+  uint8_t t[7];
+  if (rtcRead(t)) {
+    char tm[24];
+    snprintf(tm, sizeof tm, "20%02d-%02d-%02d %02d:%02d:%02d", bcd2dec(t[6]), bcd2dec(t[5] & 0x1F),
+             bcd2dec(t[4]), bcd2dec(t[2] & 0x3F), bcd2dec(t[1]), bcd2dec(t[0] & 0x7F));
+    s["time"] = tm;
+  }
+  s["ntp"] = ntpSynced;
+  JsonObject w = s["wifi"].to<JsonObject>();
+  w["ssid"] = WiFi.SSID();
+  w["ip"] = WiFi.localIP().toString();
+  w["rssi"] = WiFi.RSSI();
+  JsonObject wx = s["weather"].to<JsonObject>();
+  wx["fresh"] = wxFresh();
+  wx["temp"] = wxTemp;
+  wx["unit"] = wxUnit ? "C" : "F";
+  wx["cond"] = wxCode == 1 ? "Sunny" : wxCode == 2 ? "Cloudy" : wxCode == 3 ? "Rain" : "";
+  s["app_connected"] = millis() - appTime < 2000;
+  s["message"] = msgShown;
+  s["stored_frames"] = gaN;
+  JsonArray rows = s["grid_rows"].to<JsonArray>();
+  const uint8_t *r = gaAnim == grid::CUSTOM ? &gaFrames[gaIdx * 7] : gEngRows;
+  for (int k = 0; k < 7; k++) rows.add(r[k]);
+}
+
+static void sendJson(int code, JsonDocument &doc) {
+  String body;
+  serializeJson(doc, body);
+  web.sendHeader("Cache-Control", "no-store");
+  web.send(code, "application/json", body);
+}
+
+static void handleApiStatus() {
+  JsonDocument doc;
+  stateJson(doc["state"].to<JsonObject>());
+  configJson(doc["config"].to<JsonObject>());
+  sendJson(200, doc);
+}
+
+static void handleApiSet() {
+  JsonDocument out;
+  if (web.header("X-WFD") != "1") { out["error"] = "missing X-WFD header"; return sendJson(403, out); }
+  if (!webAuthed()) return;
+  JsonDocument in;
+  if (deserializeJson(in, web.arg("plain")) || !in.is<JsonObject>()) { out["error"] = "expected a JSON object"; return sendJson(400, out); }
+  sendJson(applySettings(in.as<JsonObjectConst>(), out) ? 200 : 400, out);
+}
+
+// The /control form, translated to the same settings as the JSON API.
 static void handleControlPost() {
   if (!webAuthed()) return;
-  if (web.hasArg("bright") && web.arg("bright").toInt() != brightness) setBrightness(web.arg("bright").toInt());
-  if (web.hasArg("clk24")) { clock24 = web.arg("clk24").toInt() ? 1 : 0; prefs.putInt("clk24", clock24); dirty = true; }
-  if (web.hasArg("units")) {
-    int u = web.arg("units") == "c" ? 1 : 0;
-    if (u != g_wunit) { g_wunit = u; prefs.putInt("wunit", g_wunit); lastWxFetch = 0; }   // refetch in new units
-  }
-  if (web.hasArg("tz") && web.arg("tz") != g_tz) {
-    g_tz = web.arg("tz"); prefs.putString("tz", g_tz);
-    configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov");
-  }
+  JsonDocument in, out;
+  if (web.hasArg("bright")) in["brightness"] = web.arg("bright").toInt();
+  if (web.hasArg("clk24")) in["clock_24h"] = web.arg("clk24").toInt() != 0;
+  if (web.hasArg("units")) in["units"] = web.arg("units") == "c" ? "celsius" : "fahrenheit";
+  if (web.hasArg("tz")) in["tz"] = web.arg("tz");
   String zip = web.arg("zip"); zip.trim();
-  if (zip.length() >= 5 && zip != prefs.getString("zip", "")) setWeatherZip(zip);
-  if (web.hasArg("omtext")) setMsgText(web.arg("omtext"));
+  if (zip.length() && zip != prefs.getString("zip", "")) in["location"] = zip;
+  if (web.hasArg("omtext")) in["offline_text"] = web.arg("omtext");
   if (web.hasArg("mmode")) {
-    int rot = 0;
-    for (int i = 0; i < N_SRC; i++) if (web.hasArg("rot" + String(i))) rot |= 1 << i;
-    setMsgCfg(web.arg("mmode").toInt(), rot, web.arg("mdwell").toInt(), web.arg("mscroll").toInt());
+    in["standalone_msg_mode"] = MSG_MODE_NAMES[constrain(web.arg("mmode").toInt(), 0, MODE_ROTATE)];
+    JsonArray rot = in["standalone_rotate"].to<JsonArray>();
+    for (int i = 0; i < N_SRC; i++) if (web.hasArg("rot" + String(i))) rot.add(MSG_MODE_NAMES[i]);
+    in["standalone_dwell"] = web.arg("mdwell").toInt();
+    in["standalone_scroll_ms"] = web.arg("mscroll").toInt();
   }
   if (web.hasArg("ganim")) {
-    int a = web.arg("ganim").toInt(), f = web.arg("gfps").toInt(), fl = web.hasArg("gflag");
-    if (a != gaAnim || f != gaFps || fl != gaFlag) setGridAnim(a, f, fl);
+    in["standalone_anim"] = grid::NAMES[constrain(web.arg("ganim").toInt(), 0, grid::N_ANIM - 1)];
+    in["standalone_fps"] = web.arg("gfps").toInt();
+    in["standalone_frame"] = web.hasArg("gflag");
   }
-  int ga = web.hasArg("gauto") ? 1 : 0;
-  if (ga != gaAuto) { gaAuto = ga; prefs.putInt("gauto", gaAuto); }
-  omAuto = web.hasArg("omauto") ? 1 : 0; prefs.putInt("omauto", omAuto);
+  in["grid_standalone"] = web.hasArg("gauto");
+  in["msg_standalone"] = web.hasArg("omauto");
+  if (!applySettings(in.as<JsonObjectConst>(), out)) {
+    String msg;
+    for (JsonPairConst kv : out["error"].as<JsonObjectConst>())
+      msg += "<li>" + esc(kv.key().c_str()) + ": " + esc(kv.value().as<const char *>()) + "</li>";
+    web.send(400, "text/html", page("WFD Control", "<h2 class=warn>Not saved</h2><ul>" + msg +
+                                    "</ul><p><a href=/control>Back</a></p>"));
+    return;
+  }
   web.sendHeader("Location", "/control");
   web.send(303);
 }
@@ -805,6 +1005,10 @@ static void startWebRoutes() {
   });
   web.on("/control", HTTP_GET, []() { if (webAuthed()) web.send(200, "text/html", controlPage()); });
   web.on("/control", HTTP_POST, handleControlPost);
+  web.on("/api/status", HTTP_GET, handleApiStatus);
+  web.on("/api/set", HTTP_POST, handleApiSet);
+  const char *hdrs[] = {"X-WFD"};
+  web.collectHeaders(hdrs, 1);
   web.on("/update", HTTP_GET, []() { if (webAuthed()) web.send(200, "text/html", page("WFD Update", UPDATE_FORM)); });
   web.on("/update", HTTP_POST, []() {
     if (!webAuthed()) return;
