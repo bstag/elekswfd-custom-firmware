@@ -89,6 +89,7 @@ go to *Firmware update*, and upload a new `wfd-clock-firmware.bin`.
 | `wfd-firmware/flash_usb.py` | One‑command USB flasher |
 | `wfd-firmware/tools/` | Reverse‑engineering + mapping tools (LED mapper, segment mapper, fonts) |
 | `wfd-control/` | The PC companion app (`app.py` + `control.html` + `draw.html`) |
+| `legacy/` | Superseded code kept for reference (stock-protocol web app, old headless daemon) |
 | `docs/` | Detailed documentation (see below) |
 | `PROTOCOL.md` | The clock's serial command protocol |
 | `firmware-backup/` | A full 4 MB backup of the original stock firmware |

@@ -1,2 +1,2 @@
 @echo off
-uv run "%~dp0wfd.py" %*
+uv run "%~dp0app.py" %*

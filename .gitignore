@@ -28,5 +28,7 @@ wfd-firmware/.venv/
 # ---- personal/runtime config & logs ----
 wfd-control/wfd_config.json
 wfd-firmware/wfd_config.json
+legacy/daemon/wfd_config.json
 wfd-firmware/wfd_daemon.log
+legacy/daemon/wfd_daemon.log
 wfd-control/firmware/*.bin

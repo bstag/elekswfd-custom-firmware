@@ -1,4 +1,8 @@
 ' Launch WFD Control hidden at login. Serves the UI at http://127.0.0.1:8737
+' Uses the venv in ..\wfd-firmware\.venv (see docs/APP.md); paths are relative to this file.
+Set fso = CreateObject("Scripting.FileSystemObject")
 Set sh = CreateObject("WScript.Shell")
-sh.CurrentDirectory = "E:\Source\elekstube\EleksWFD_Tools_v3_1_EN_1104\wfd-control"
-sh.Run """E:\Source\elekstube\EleksWFD_Tools_v3_1_EN_1104\wfd-firmware\.venv\Scripts\pythonw.exe"" ""E:\Source\elekstube\EleksWFD_Tools_v3_1_EN_1104\wfd-control\app.py"" --no-browser", 0, False
+here = fso.GetParentFolderName(WScript.ScriptFullName)
+pyw = fso.BuildPath(fso.GetParentFolderName(here), "wfd-firmware\.venv\Scripts\pythonw.exe")
+sh.CurrentDirectory = here
+sh.Run """" & pyw & """ """ & fso.BuildPath(here, "app.py") & """ --no-browser", 0, False

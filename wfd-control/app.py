@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pyserial>=3.5", "numpy>=1.24", "psutil>=5.9", "PyAudioWPatch>=0.2.12"]
+# ///
 """WFD Control - unified app for the custom EleksWFD firmware.
 
 Runs the background services (time sync, audio spectrum, CPU/GPU/RAM bars, weather)
@@ -17,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -43,7 +48,7 @@ DEFAULTS = {
     "bars": True,
     "weather": True, "location": "", "units": "fahrenheit",
     "brightness": 6,
-    "message_mode": "weather",        # weather | window | text | rotate
+    "message_mode": "weather",        # weather | window | text | date | rotate
     "custom_text": "HELLO",
     "scroll_ms": 350,
     "rotate_weather": True, "rotate_window": True, "rotate_text": False, "rotate_date": False,
@@ -56,6 +61,37 @@ DEFAULTS = {
     "icon_mode": "off",                # off | audio | system | all
     "logo": False,                     # ELEKSMAKER logo on/off
 }
+
+_RANGES = {"style": (1, 5), "brightness": (1, 16), "gain_out": (0.0, 10.0), "gain_mic": (0.0, 10.0),
+           "scroll_ms": (50, 5000), "rotate_dwell": (2, 600), "grid_fps": (2, 30)}
+_CHOICES = {"message_mode": {"weather", "window", "text", "date", "rotate"},
+            "icon_mode": {"off", "audio", "system", "all"},
+            "units": {"fahrenheit", "celsius"}}
+
+
+def coerce(key, v):
+    """Check a /api/set value against the type of DEFAULTS[key]; returns it normalized or raises ValueError."""
+    d = DEFAULTS[key]
+    if isinstance(d, bool):
+        if not isinstance(v, bool):
+            raise ValueError("expected true/false")
+    elif isinstance(d, (int, float)):
+        if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+            raise ValueError("expected a number")
+        v = type(d)(float(v))
+        lo, hi = _RANGES.get(key, (v, v))
+        v = min(max(v, lo), hi)
+    elif isinstance(d, str):
+        if not isinstance(v, str):
+            raise ValueError("expected a string")
+        if key in _CHOICES and v not in _CHOICES[key]:
+            raise ValueError(f"expected one of {sorted(_CHOICES[key])}")
+    elif isinstance(d, list):                       # grid_custom: frames of 7 row bytes
+        if not isinstance(v, list) or not all(isinstance(f, list) for f in v):
+            raise ValueError("expected a list of frames")
+        v = [[int(x) & 0x7F for x in (f + [0] * 7)[:7]] for f in v[:80]]
+    return v
+
 
 # icon bit order must match the firmware ICON_* arrays
 ICON = {n: i for i, n in enumerate(
@@ -96,12 +132,22 @@ def render_grid_frames(anim, custom):
     return [eng.frame(anim, {}) for _ in range(n)]
 
 
+def scroll_len(text):
+    """Number of scroll positions for text on the 6-char line (1 = fits, no scroll)."""
+    return 1 if len(text) <= 6 else len(text) + 3
+
+
+def scroll_frame(text, pos):
+    """12 message bytes for text scrolled to pos (wraps with a 3-space gap)."""
+    if len(text) <= 6:
+        return font14.render6(text.ljust(6), 0)
+    padded = text + "   "
+    return font14.render6(padded + padded, pos % len(padded))
+
+
 def render_om_frames(text):
     text = (text or "").strip() or " "
-    if len(text) <= 6:
-        return [font14.render6(text.ljust(6), 0)]
-    padded = text + "   "
-    return [font14.render6(padded + padded, pos) for pos in range(len(padded))]
+    return [scroll_frame(text, pos) for pos in range(scroll_len(text))]
 
 
 def foreground_title():
@@ -331,16 +377,21 @@ def worker():
     disp = {"out": 0.0, "mic": 0.0}
     s = None
     last_sync = last_bars = last_wx = last_scroll = 0.0
-    sent_style = sent_bright = None
+    sent = {}                          # command -> last value sent; cleared on (re)connect
+    last_err = None
     cur_src = None
     scroll_pos = 0
     rot_idx = -1
     rot_until = 0.0
     last_grid = 0.0
-    sent_gauto = sent_omauto = None
-    sent_geo = None
-    sent_clk24 = None
     worker.sync_now = False
+
+    def push(cmd, value):
+        """Send 'CMD value' only when value differs from what the clock last got."""
+        if sent.get(cmd) != value:
+            s.write(f"{cmd} {value}\n".encode())
+            sent[cmd] = value
+
     while not stop.is_set():
         if s is None or not s.is_open:
             s = open_serial()
@@ -353,7 +404,7 @@ def worker():
                 if cfg["time_sync"]:
                     set_time(s)
             last_sync = time.time()
-            sent_style = sent_bright = None
+            sent.clear()                    # a fresh (or power-cycled) clock needs everything again
         with cfg_lock:
             c = dict(cfg)
         try:
@@ -361,25 +412,14 @@ def worker():
                 set_time(s)
                 last_sync = time.time()
                 worker.sync_now = False
-            if sent_style != c["style"]:
-                s.write(f"STYLE {c['style']}\n".encode())
-                sent_style = c["style"]
-            if sent_bright != c["brightness"]:
-                s.write(f"BRIGHT {c['brightness']}\n".encode())
-                sent_bright = c["brightness"]
-            if sent_clk24 != c["clock_24h"]:
-                s.write(f"CLK24 {1 if c['clock_24h'] else 0}\n".encode())
-                sent_clk24 = c["clock_24h"]
-            if sent_gauto != c["grid_standalone"]:
-                s.write(f"GAUTO {1 if c['grid_standalone'] else 0}\n".encode())
-                sent_gauto = c["grid_standalone"]
-            if sent_omauto != c["msg_standalone"]:
-                s.write(f"OMAUTO {1 if c['msg_standalone'] else 0}\n".encode())
-                sent_omauto = c["msg_standalone"]
-            if state["geo"] and sent_geo != state["geo"]:     # push location for on-device weather
+            push("STYLE", c["style"])
+            push("BRIGHT", c["brightness"])
+            push("CLK24", int(c["clock_24h"]))
+            push("GAUTO", int(c["grid_standalone"]))
+            push("OMAUTO", int(c["msg_standalone"]))
+            if state["geo"]:                                 # location for on-device weather
                 g = state["geo"]
-                s.write(f"GEO {g['lat']} {g['lon']} {g['unit']}\n".encode())
-                sent_geo = dict(g)
+                push("GEO", f"{g['lat']} {g['lon']} {g['unit']}")
             # perform any queued flash uploads (grid animation / offline message)
             job = None
             with uploads_lock:
@@ -398,7 +438,8 @@ def worker():
                         s.write(("OMADD " + " ".join(map(str, fr)) + "\n").encode()); time.sleep(0.015)
                     s.write(f"OMCOMMIT {job['fps']}\n".encode())
                     state["saved"] = f"message: {len(job['frames'])} frames"
-                sent_gauto = sent_omauto = None    # re-assert auto flags after a commit
+                sent.pop("GAUTO", None)            # a commit turns auto on; re-assert the setting
+                sent.pop("OMAUTO", None)
             # audio levels (always computed, used by the spectrum and the icon row)
             levels = {"out": 0, "mic": 0}
             for k, g in (("out", c["gain_out"]), ("mic", c["gain_mic"])):
@@ -447,7 +488,6 @@ def worker():
                     frame = font14.render6(txt.rjust(6), 0)
                     state["message"] = "temp " + txt
                 else:
-                    now = datetime.datetime.now()
                     fill = {"date": now.strftime("%a %b %d").upper(),
                             "time": now.strftime("%H:%M"),
                             "time12": now.strftime("%I:%M").lstrip("0") + now.strftime("%p"),
@@ -464,12 +504,8 @@ def worker():
                     if txt != cur_src:
                         cur_src = txt
                         scroll_pos = 0
-                    if len(txt) <= 6:
-                        frame = font14.render6(txt.ljust(6), 0)
-                    else:
-                        padded = txt + "   "
-                        frame = font14.render6(padded + padded, scroll_pos % len(padded))
-                        scroll_pos += 1
+                    frame = scroll_frame(txt, scroll_pos)
+                    scroll_pos += 1
                     state["message"] = txt
                 s.write(("MSG " + " ".join(map(str, frame)) + "\n").encode())
                 last_scroll = time.time()
@@ -493,8 +529,10 @@ def worker():
         except serial.SerialException:
             s = None
             state["connected"] = False
-        except Exception:
-            pass                       # never let a transient error kill the worker
+        except Exception as e:         # never let a transient error kill the worker, but say what it was
+            if repr(e) != last_err:
+                last_err = repr(e)
+                traceback.print_exc()
         time.sleep(1.0 / 30)
 
 
@@ -531,10 +569,19 @@ class H(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._send(400, {"error": "bad json"})
         if self.path == "/api/set":
+            clean, errors = {}, {}
+            for k, v in body.items():
+                if k not in DEFAULTS:
+                    errors[k] = "unknown setting"
+                    continue
+                try:
+                    clean[k] = coerce(k, v)
+                except (TypeError, ValueError) as e:
+                    errors[k] = str(e)
+            if errors:
+                return self._send(400, {"error": errors})
             with cfg_lock:
-                for k, v in body.items():
-                    if k in DEFAULTS:
-                        cfg[k] = v
+                cfg.update(clean)
                 save_config(cfg)
             return self._send(200, {"ok": True})
         if self.path == "/api/sync":
@@ -547,6 +594,11 @@ class H(BaseHTTPRequestHandler):
             grid_preview["at"] = time.time()
             return self._send(200, {"ok": True})
         if self.path == "/api/grid_save":
+            if body.get("frames"):
+                try:
+                    body["frames"] = coerce("grid_custom", body["frames"])
+                except (TypeError, ValueError) as e:
+                    return self._send(400, {"error": f"frames: {e}"})
             with cfg_lock:
                 anim = body.get("anim", cfg["grid_anim"])
                 custom = body.get("frames") or cfg.get("grid_custom")

@@ -61,5 +61,5 @@ PC‑fed features (spectrum, bars, window title, generated animations).
 
 ## Note on the older headless helper
 
-`wfd-firmware/wfd_daemon.py` is a superseded headless version (time + mic spectrum only).
+`legacy/daemon/wfd_daemon.py` is a superseded headless version (time + mic spectrum only).
 `wfd-control/app.py` replaces it with the full UI and feature set.
