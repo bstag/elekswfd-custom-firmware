@@ -9,6 +9,8 @@ uv run app.py              # or double-click run.bat
 uv run app.py --no-browser
 ```
 
+Run the tests with `test.bat` (see [Tests](../docs/APP.md#tests)).
+
 `wfd_control.vbs` starts it hidden at login (put a shortcut to it in `shell:startup`).
 
 Full docs: [../docs/APP.md](../docs/APP.md). The serial commands it speaks are in

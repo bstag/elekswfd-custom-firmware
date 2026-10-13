@@ -18,6 +18,7 @@ firmware-backup/*.bin
 # ---- build artifacts ----
 .pio/
 **/__pycache__/
+.pytest_cache/
 *.pyc
 
 # ---- virtualenvs ----

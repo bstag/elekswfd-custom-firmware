@@ -63,3 +63,28 @@ PC‑fed features (spectrum, bars, window title, generated animations).
 
 `legacy/daemon/wfd_daemon.py` is a superseded headless version (time + mic spectrum only).
 `wfd-control/app.py` replaces it with the full UI and feature set.
+
+## Tests
+
+```bash
+wfd-control/test.bat            # or: cd wfd-control && uv run --with-requirements requirements.txt --with pytest pytest
+```
+
+No clock, network or audio device is needed, and your `wfd_config.json` is never read or
+written. The suite covers:
+
+- **`test_clocklink.py`** runs the serial worker against a fake port on simulated time.
+  It compares every line sent in a busy 45 s scenario to `tests/golden/clocklink.log`, and
+  checks specific behaviour (reconnect re-sends settings, uploads, sync, spectrum off).
+- **`test_api.py`** covers the local HTTP API: header check, validation, status, uploads.
+- **`test_rendering.py`** covers settings validation, message scrolling and icons.
+- **`test_protocol.py`** cross-checks against the firmware source: every command the app
+  sends is handled in `main.cpp`, `font14_table.h` matches `font14.py`, and the icon count
+  matches `clock_panel.h`.
+
+If you change what the app sends on purpose, the golden test fails with a diff. Regenerate
+the log, then review its diff in git before committing:
+
+```bash
+cd wfd-control && WFD_UPDATE_GOLDEN=1 uv run --with-requirements requirements.txt --with pytest pytest tests/test_clocklink.py
+```
