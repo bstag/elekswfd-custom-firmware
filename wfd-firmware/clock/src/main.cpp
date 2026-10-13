@@ -50,13 +50,13 @@ static uint8_t dec2bcd(uint8_t v) { return ((v / 10) << 4) | (v % 10); }
 static bool rtcRead(uint8_t *o) {
   Wire.beginTransmission(RTC); Wire.write(0);
   if (Wire.endTransmission() != 0) return false;
-  if (Wire.requestFrom(RTC, 7) != 7) return false;
+  if (Wire.requestFrom(RTC, (uint8_t)7) != 7) return false;
   for (int i = 0; i < 7; i++) o[i] = Wire.read();
   return true;
 }
 static uint8_t rtcStatus() {
   Wire.beginTransmission(RTC); Wire.write(0x0F); Wire.endTransmission();
-  Wire.requestFrom(RTC, 1); return Wire.read();
+  Wire.requestFrom(RTC, (uint8_t)1); return Wire.read();
 }
 static void rtcSet(int yy, int mo, int dd, int dow, int hh, int mi, int ss) {
   Wire.beginTransmission(RTC); Wire.write(0);
@@ -109,26 +109,14 @@ static int upN = 0;
 static int gaIdx = 0;
 static uint32_t gaStep = 0;
 
-static void drawGrid() {
-  for (int r = 0; r < 7; r++)
-    for (int c = 0; c < 7; c++)
-      if (gridRows[r] & (1 << c)) {
-        int i = r * 7 + c;
-        ram[GRID_BYTE[i]] |= GRID_MASK[i];
-      }
-  if (gridFrame)
-    for (int i = 0; i < GRID_FRAME_N; i++) ram[GRID_FRAME_BYTE[i]] |= GRID_FRAME_MASK[i];
-}
-
-static void drawStored() {               // one frame of the flash-stored animation
-  const uint8_t *rows = &gaFrames[gaIdx * 7];
+static void drawGrid(const uint8_t *rows, bool frame) {   // rows[r] bit c = cell (r,c)
   for (int r = 0; r < 7; r++)
     for (int c = 0; c < 7; c++)
       if (rows[r] & (1 << c)) {
         int i = r * 7 + c;
         ram[GRID_BYTE[i]] |= GRID_MASK[i];
       }
-  if (gaFlag)
+  if (frame)
     for (int i = 0; i < GRID_FRAME_N; i++) ram[GRID_FRAME_BYTE[i]] |= GRID_FRAME_MASK[i];
 }
 
@@ -226,8 +214,9 @@ static void draw() {
   } else if (!appOn && omAuto && omN > 0) {         // app off -> stored offline message
     for (int i = 0; i < 12; i++) ram[i] = omFrames[omIdx * 12 + i];
   }
-  if (millis() - gridTime < 1500) drawGrid();        // live grid from the app
-  else if (!appOn && gaAuto && gaN > 0) drawStored();  // app off -> stored grid animation
+  if (millis() - gridTime < 1500) drawGrid(gridRows, gridFrame);    // live grid from the app
+  else if (!appOn && gaAuto && gaN > 0)                             // app off -> stored animation
+    drawGrid(&gaFrames[gaIdx * 7], gaFlag);
   if (millis() - iconTime < 1500)                    // top-row status icons
     for (int i = 0; i < N_ICONS; i++)
       if (iconMask & (1UL << i)) {
@@ -240,126 +229,104 @@ static void draw() {
 }
 
 static String line;
+static bool dirty = false;            // a command changed the display; loop() redraws once
+
+// Parse up to n space-separated ints from s into out (unparsed slots keep their value).
+static int parseInts(const String &s, int *out, int n) {
+  int f = 0, i = 0, len = s.length();
+  while (f < n && i < len) {
+    while (i < len && s[i] == ' ') i++;
+    int j = i; while (j < len && s[j] != ' ') j++;
+    if (j > i) out[f++] = s.substring(i, j).toInt();
+    i = j;
+  }
+  return f;
+}
+
 static void handle(const String &s) {
   appTime = millis();                 // any command means the app is alive
-  if (s.startsWith("SET")) {
-    int v[7], n = 0; int i = 3;
-    while (n < 7 && i < (int)s.length()) {
-      while (i < (int)s.length() && s[i] == ' ') i++;
-      int j = i; while (j < (int)s.length() && s[j] != ' ') j++;
-      if (j > i) v[n++] = s.substring(i, j).toInt();
-      i = j;
-    }
-    if (n == 7) { rtcSet(v[0], v[1], v[2], v[3], v[4], v[5], v[6]); Serial.println("OK"); }
+  int sp = s.indexOf(' ');
+  String cmd = sp < 0 ? s : s.substring(0, sp);
+  String arg = sp < 0 ? String() : s.substring(sp + 1);
+  if (cmd == "SET") {
+    int v[7];
+    if (parseInts(arg, v, 7) == 7) { rtcSet(v[0], v[1], v[2], v[3], v[4], v[5], v[6]); Serial.println("OK"); }
     else Serial.println("ERR need 7 fields: yy mo dd dow hh mi ss");
-  } else if (s.startsWith("SPEC")) {
-    int a = 0, b = 0, i = 4, f = 0, val[2] = {0, 0};
-    while (f < 2 && i < (int)s.length()) {
-      while (i < (int)s.length() && s[i] == ' ') i++;
-      int j = i; while (j < (int)s.length() && s[j] != ' ') j++;
-      if (j > i) val[f++] = s.substring(i, j).toInt();
-      i = j;
-    }
-    specA = constrain(val[0], 0, 12);
-    specB = constrain(val[1], 0, 12);
+  } else if (cmd == "SPEC") {
+    int v[2] = {0, 0};
+    parseInts(arg, v, 2);
+    specA = constrain(v[0], 0, 12);
+    specB = constrain(v[1], 0, 12);
     specTime = millis();
-    draw();                                           // redraw immediately for smooth motion
-  } else if (s.startsWith("BARS")) {
-    int val[3] = {0, 0, 0}, f = 0, i = 4;
-    while (f < 3 && i < (int)s.length()) {
-      while (i < (int)s.length() && s[i] == ' ') i++;
-      int j = i; while (j < (int)s.length() && s[j] != ' ') j++;
-      if (j > i) val[f++] = s.substring(i, j).toInt();
-      i = j;
-    }
-    barCpu = constrain(val[0], 0, 100);
-    barGpu = constrain(val[1], 0, 100);
-    barRam = constrain(val[2], 0, 100);
+    dirty = true;
+  } else if (cmd == "BARS") {
+    int v[3] = {0, 0, 0};
+    parseInts(arg, v, 3);
+    barCpu = constrain(v[0], 0, 100);
+    barGpu = constrain(v[1], 0, 100);
+    barRam = constrain(v[2], 0, 100);
     barsTime = millis();
-    draw();
-  } else if (s.startsWith("MSG")) {
-    int v[12] = {0}, f = 0, i = 3;
-    while (f < 12 && i < (int)s.length()) {
-      while (i < (int)s.length() && s[i] == ' ') i++;
-      int j = i; while (j < (int)s.length() && s[j] != ' ') j++;
-      if (j > i) v[f++] = s.substring(i, j).toInt();
-      i = j;
-    }
+    dirty = true;
+  } else if (cmd == "MSG") {
+    int v[12] = {0};
+    parseInts(arg, v, 12);
     for (int k = 0; k < 12; k++) msgRam[k] = (uint8_t)v[k];
     msgTime = millis();
-    draw();
-  } else if (s.startsWith("GRID")) {
-    int v[8] = {0, 0, 0, 0, 0, 0, 0, 0}, f = 0, i = 4;
-    while (f < 8 && i < (int)s.length()) {
-      while (i < (int)s.length() && s[i] == ' ') i++;
-      int j = i; while (j < (int)s.length() && s[j] != ' ') j++;
-      if (j > i) v[f++] = s.substring(i, j).toInt();
-      i = j;
-    }
+    dirty = true;
+  } else if (cmd == "GRID") {
+    int v[8] = {0};
+    parseInts(arg, v, 8);
     for (int k = 0; k < 7; k++) gridRows[k] = (uint8_t)(v[k] & 0x7F);
     gridFrame = v[7] ? 1 : 0;
     gridTime = millis();
-    draw();
-  } else if (s.startsWith("GCLR")) {
+    dirty = true;
+  } else if (cmd == "GCLR") {
     upN = 0;
     Serial.println("OK");
-  } else if (s.startsWith("GADD")) {
-    int v[7] = {0, 0, 0, 0, 0, 0, 0}, f = 0, i = 4;
-    while (f < 7 && i < (int)s.length()) {
-      while (i < (int)s.length() && s[i] == ' ') i++;
-      int j = i; while (j < (int)s.length() && s[j] != ' ') j++;
-      if (j > i) v[f++] = s.substring(i, j).toInt();
-      i = j;
-    }
+  } else if (cmd == "GADD") {
+    int v[7] = {0};
+    parseInts(arg, v, 7);
     if (upN < GA_MAX) {
       for (int k = 0; k < 7; k++) upBuf[upN * 7 + k] = (uint8_t)(v[k] & 0x7F);
       upN++;
     }
-  } else if (s.startsWith("GCOMMIT")) {
-    int v[2] = {8, 0}, f = 0, i = 7;
-    while (f < 2 && i < (int)s.length()) {
-      while (i < (int)s.length() && s[i] == ' ') i++;
-      int j = i; while (j < (int)s.length() && s[j] != ' ') j++;
-      if (j > i) v[f++] = s.substring(i, j).toInt();
-      i = j;
-    }
+  } else if (cmd == "GCOMMIT") {
+    int v[2] = {8, 0};
+    parseInts(arg, v, 2);
     gaN = upN; gaFps = v[0] < 1 ? 1 : v[0]; gaFlag = v[1] ? 1 : 0; gaAuto = 1; gaIdx = 0;
     memcpy(gaFrames, upBuf, gaN * 7);
     prefs.putBytes("ganim", gaFrames, gaN * 7);
     prefs.putInt("gn", gaN); prefs.putInt("gfps", gaFps);
     prefs.putInt("gflag", gaFlag); prefs.putInt("gauto", gaAuto);
     Serial.printf("OK stored %d frames\n", gaN);
-  } else if (s.startsWith("GAUTO")) {
-    gaAuto = s.substring(5).toInt() ? 1 : 0;
+  } else if (cmd == "GAUTO") {
+    gaAuto = arg.toInt() ? 1 : 0;
     prefs.putInt("gauto", gaAuto);
     Serial.printf("OK auto %d\n", gaAuto);
-  } else if (s.startsWith("OMCLR")) {
+  } else if (cmd == "OMCLR") {
     omUpN = 0;
     Serial.println("OK");
-  } else if (s.startsWith("OMADD")) {
-    int v[12] = {0}, f = 0, i = 5;
-    while (f < 12 && i < (int)s.length()) {
-      while (i < (int)s.length() && s[i] == ' ') i++;
-      int j = i; while (j < (int)s.length() && s[j] != ' ') j++;
-      if (j > i) v[f++] = s.substring(i, j).toInt();
-      i = j;
-    }
+  } else if (cmd == "OMADD") {
+    int v[12] = {0};
+    parseInts(arg, v, 12);
     if (omUpN < OM_MAX) {
       for (int k = 0; k < 12; k++) omUp[omUpN * 12 + k] = (uint8_t)v[k];
       omUpN++;
     }
-  } else if (s.startsWith("OMCOMMIT")) {
-    omN = omUpN; omFps = s.substring(8).toInt(); if (omFps < 1) omFps = 1;
+  } else if (cmd == "OMCOMMIT") {
+    int v[1] = {5};
+    parseInts(arg, v, 1);
+    omN = omUpN; omFps = v[0] < 1 ? 1 : v[0];
     omAuto = 1; omIdx = 0;
     memcpy(omFrames, omUp, omN * 12);
     prefs.putBytes("om", omFrames, omN * 12);
     prefs.putInt("omn", omN); prefs.putInt("omfps", omFps); prefs.putInt("omauto", omAuto);
     Serial.printf("OK stored %d msg frames\n", omN);
-  } else if (s.startsWith("OMAUTO")) {
-    omAuto = s.substring(6).toInt() ? 1 : 0;
+  } else if (cmd == "OMAUTO") {
+    omAuto = arg.toInt() ? 1 : 0;
     prefs.putInt("omauto", omAuto);
     Serial.printf("OK ommsg auto %d\n", omAuto);
-  } else if (s.startsWith("WIFISCAN")) {
+  } else if (cmd == "WIFISCAN") {
     WiFi.disconnect();
     delay(200);
     int n = WiFi.scanNetworks();
@@ -368,89 +335,115 @@ static void handle(const String &s) {
       Serial.printf("  '%s'  %d dBm %s\n", WiFi.SSID(i).c_str(), WiFi.RSSI(i),
                     WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "open" : "");
     WiFi.scanDelete();
-  } else if (s.startsWith("WIFIINFO")) {
+  } else if (cmd == "WIFIINFO") {
     Serial.printf("wifi %s status=%d trying-ssid='%s' ip=%s rssi=%d ntp=%d\n",
                   apMode ? "AP" : (WiFi.status() == WL_CONNECTED ? "connected" : "connecting"),
                   (int)WiFi.status(), prefs.getString("ssid", "").c_str(),
                   WiFi.localIP().toString().c_str(), WiFi.RSSI(), ntpSynced);
-  } else if (s.startsWith("WIFISET ")) {          // "WIFISET <ssid>\t<pass>" (tab-separated)
-    int tab = s.indexOf('\t');
-    if (tab > 8) {
-      prefs.putString("ssid", s.substring(8, tab));
-      prefs.putString("pass", s.substring(tab + 1));
+  } else if (cmd == "WIFISET") {                // "WIFISET <ssid>\t<pass>" (tab-separated)
+    int tab = arg.indexOf('\t');
+    if (tab > 0) {
+      prefs.putString("ssid", arg.substring(0, tab));
+      prefs.putString("pass", arg.substring(tab + 1));
       Serial.println("OK wifi saved, restarting");
       delay(300); ESP.restart();
     } else Serial.println("ERR need ssid<TAB>pass");
-  } else if (s.startsWith("GEO ")) {           // "GEO <lat> <lon> <unit>"  set weather location
-    int a = s.indexOf(' ', 4), b = s.indexOf(' ', a + 1);
+  } else if (cmd == "GEO") {                    // "GEO <lat> <lon> <unit>"  set weather location
+    int a = arg.indexOf(' '), b = arg.indexOf(' ', a + 1);
     if (a > 0 && b > 0) {
-      g_lat = s.substring(4, a);
-      g_lon = s.substring(a + 1, b);
-      g_wunit = s.substring(b + 1).toInt() ? 1 : 0;
+      g_lat = arg.substring(0, a);
+      g_lon = arg.substring(a + 1, b);
+      g_wunit = arg.substring(b + 1).toInt() ? 1 : 0;
       prefs.putString("lat", g_lat); prefs.putString("lon", g_lon); prefs.putInt("wunit", g_wunit);
       lastWxFetch = 0;                          // fetch now
       Serial.println("OK geo");
     } else Serial.println("ERR geo");
-  } else if (s.startsWith("TZ ")) {
-    prefs.putString("tz", s.substring(3));
-    g_tz = s.substring(3);
+  } else if (cmd == "TZ") {
+    g_tz = arg;
+    prefs.putString("tz", g_tz);
     configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov");
     Serial.println("OK tz");
-  } else if (s.startsWith("WIFISSID ")) {        // fix just the network name, keep the password
-    prefs.putString("ssid", s.substring(9));
+  } else if (cmd == "WIFISSID") {               // fix just the network name, keep the password
+    prefs.putString("ssid", arg);
     Serial.println("OK ssid updated, restarting");
     delay(300); ESP.restart();
-  } else if (s.startsWith("WIFIRESET")) {
+  } else if (cmd == "WEBPASS") {                // web password for /control /update /wifi ("" = open)
+    prefs.putString("webpass", arg);
+    Serial.println(arg.length() ? "OK webpass set (user: admin)" : "OK webpass cleared");
+  } else if (cmd == "WIFIRESET") {
     prefs.remove("ssid"); prefs.remove("pass");
     Serial.println("OK cleared, restarting");
     delay(300); ESP.restart();
-  } else if (s.startsWith("ICON")) {
-    iconMask = (uint32_t)s.substring(4).toInt();
+  } else if (cmd == "ICON") {
+    iconMask = (uint32_t)arg.toInt();
     iconTime = millis();
-    draw();
-  } else if (s.startsWith("LOGO")) {
-    logoOn = s.substring(4).toInt() ? 1 : 0;
+    dirty = true;
+  } else if (cmd == "LOGO") {
+    logoOn = arg.toInt() ? 1 : 0;
     logoTime = millis();
-    draw();
-  } else if (s.startsWith("CLK24")) {
-    clock24 = s.substring(5).toInt() ? 1 : 0;
+    dirty = true;
+  } else if (cmd == "CLK24") {
+    clock24 = arg.toInt() ? 1 : 0;
     prefs.putInt("clk24", clock24);
-    draw();
-  } else if (s.startsWith("BRIGHT")) {
-    setBrightness(s.substring(6).toInt());
+    dirty = true;
+  } else if (cmd == "BRIGHT") {
+    setBrightness(arg.toInt());
     Serial.printf("OK bright %d\n", brightness);
-  } else if (s.startsWith("WX")) {
-    int val[3] = {0, 0, 0}, f = 0, i = 2;
-    while (f < 3 && i < (int)s.length()) {
-      while (i < (int)s.length() && s[i] == ' ') i++;
-      int j = i; while (j < (int)s.length() && (s[j] != ' ')) j++;
-      if (j > i) val[f++] = s.substring(i, j).toInt();
-      i = j;
-    }
-    wxCode = constrain(val[0], 0, 3);
-    wxTemp = constrain(val[1], -99, 199);
-    wxUnit = val[2] ? 1 : 0;
+  } else if (cmd == "WX") {
+    int v[3] = {0, 0, 0};
+    parseInts(arg, v, 3);
+    wxCode = constrain(v[0], 0, 3);
+    wxTemp = constrain(v[1], -99, 199);
+    wxUnit = v[2] ? 1 : 0;
     wxTime = millis();
-    draw();
-  } else if (s.startsWith("STYLE")) {
-    int v = s.substring(5).toInt();
-    if (v >= 1 && v <= N_STYLES) { setStyle(v); draw(); Serial.printf("OK style %d\n", specStyle); }
+    dirty = true;
+  } else if (cmd == "STYLE") {
+    int v = arg.toInt();
+    if (v >= 1 && v <= N_STYLES) { setStyle(v); dirty = true; Serial.printf("OK style %d\n", specStyle); }
     else Serial.printf("ERR style 1..%d\n", N_STYLES);
-  } else if (s.startsWith("GET")) {
+  } else if (cmd == "GET") {
     uint8_t t[7];
     if (rtcRead(t))
       Serial.printf("%02d %02d %02d %d %02d %02d %02d osf=%d\n",
                     bcd2dec(t[6]), bcd2dec(t[5] & 0x1F), bcd2dec(t[4]), t[3] & 7,
                     bcd2dec(t[2] & 0x3F), bcd2dec(t[1]), bcd2dec(t[0] & 0x7F), rtcStatus() >> 7);
     else Serial.println("ERR rtc");
+  } else {
+    Serial.printf("ERR unknown command '%s'\n", cmd.c_str());
   }
 }
 
 // ============================= WiFi / NTP =============================
+static String esc(const String &s) {   // HTML-escape text going into a page or attribute
+  String o;
+  o.reserve(s.length() + 8);
+  for (char c : s) {
+    switch (c) {
+      case '&': o += "&amp;"; break;
+      case '<': o += "&lt;"; break;
+      case '>': o += "&gt;"; break;
+      case '"': o += "&quot;"; break;
+      case '\'': o += "&#39;"; break;
+      default: o += c;
+    }
+  }
+  return o;
+}
+
+// Optional web password (serial: WEBPASS <pass>, empty = open). Guards the pages that change
+// settings or flash firmware once the clock is on your LAN; the first-run setup AP stays open.
+static bool webAuthed() {
+  if (apMode) return true;
+  String pw = prefs.getString("webpass", "");
+  if (pw.length() == 0 || web.authenticate("admin", pw.c_str())) return true;
+  web.requestAuthentication();
+  return false;
+}
+
 static String setupPage() {
   int n = WiFi.scanComplete();
   String opts;
-  for (int i = 0; i < n; i++) opts += "<option>" + WiFi.SSID(i) + "</option>";
+  for (int i = 0; i < n; i++) opts += "<option>" + esc(WiFi.SSID(i)) + "</option>";
   return "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
          "<title>WFD WiFi Setup</title><style>body{font-family:sans-serif;background:#111;color:#eee;padding:22px}"
          "input,button{font-size:16px;padding:9px;width:100%;margin:6px 0;box-sizing:border-box;border-radius:6px;border:1px solid #444;background:#1d2228;color:#eee}"
@@ -460,10 +453,13 @@ static String setupPage() {
          "<datalist id=nets>" + opts + "</datalist>"
          "<label>Password</label><input name=pass type=password placeholder='WiFi password'>"
          "<button type=submit>Save &amp; Connect</button></form>"
-         "<p style=color:#8b95a3>The clock restarts and joins your network. Re-scan to refresh the list.</p>";
+         "<p style=color:#8b95a3>The clock restarts and joins your network. "
+         "<a href=/rescan style=color:#72d3ff>Re-scan</a> to refresh the list.</p>";
 }
 
 static void handleSave() {
+  if (!webAuthed()) return;
+  if (web.arg("ssid").length() == 0) { web.sendHeader("Location", "/wifi"); web.send(303); return; }
   prefs.putString("ssid", web.arg("ssid"));
   prefs.putString("pass", web.arg("pass"));
   web.send(200, "text/html", "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -491,6 +487,7 @@ static void render6(const String &s, int start, uint8_t *out) {   // out[12]
 static void setOfflineText(String t) {
   t.trim();
   if (t.length() == 0) t = " ";
+  if (t.length() > OM_MAX - 3) t = t.substring(0, OM_MAX - 3);   // +3 gap = one frame per position
   int n;
   if (t.length() <= 6) {
     n = 1;
@@ -498,7 +495,6 @@ static void setOfflineText(String t) {
   } else {
     String d = t + "   ";
     n = d.length();
-    if (n > OM_MAX) n = OM_MAX;
     String dd = d + d;
     for (int p = 0; p < n; p++) render6(dd, p, &omFrames[p * 12]);
   }
@@ -543,7 +539,7 @@ static String controlPage() {
   s += "<label>Brightness</label><input type=range name=bright min=1 max=16 value=" + String(brightness) + ">";
   s += "<label>Clock format</label><select name=clk24><option value=1" + String(clock24 ? " selected" : "") +
        ">24-hour</option><option value=0" + String(clock24 ? "" : " selected") + ">12-hour</option></select>";
-  s += "<label>Weather ZIP</label><input name=zip value='" + zip + "' placeholder='e.g. 76708'>";
+  s += "<label>Weather ZIP</label><input name=zip value='" + esc(zip) + "' placeholder='e.g. 76708'>";
   s += "<label>Units</label><select name=units><option value=f" + String(g_wunit ? "" : " selected") +
        ">Fahrenheit</option><option value=c" + String(g_wunit ? " selected" : "") + ">Celsius</option></select>";
   s += "<label>Time zone</label><select name=tz>";
@@ -552,7 +548,7 @@ static String controlPage() {
                          {"Pacific", "PST8PDT,M3.2.0,M11.1.0"}, {"UTC", "UTC0"}};
   for (auto &z : zn) s += "<option value='" + String(z[1]) + "'" + (g_tz == z[1] ? " selected" : "") + ">" + z[0] + "</option>";
   s += "</select>";
-  s += "<label>Offline message (when the app is off)</label><input name=omtext value='" + omt + "'>";
+  s += "<label>Offline message (when the app is off)</label><input name=omtext maxlength=" + String(OM_MAX - 3) + " value='" + esc(omt) + "'>";
   s += "<div class=row><input type=checkbox name=gauto " + String(gaAuto ? "checked" : "") +
        "><label>Play stored grid animation when app is off</label></div>";
   s += "<div class=row><input type=checkbox name=omauto " + String(omAuto ? "checked" : "") +
@@ -563,29 +559,46 @@ static String controlPage() {
   return s;
 }
 static void handleControlPost() {
-  if (web.hasArg("bright")) setBrightness(web.arg("bright").toInt());
-  if (web.hasArg("clk24")) { clock24 = web.arg("clk24").toInt() ? 1 : 0; prefs.putInt("clk24", clock24); }
-  if (web.hasArg("units")) { g_wunit = web.arg("units") == "c" ? 1 : 0; prefs.putInt("wunit", g_wunit); }
-  if (web.hasArg("tz")) { g_tz = web.arg("tz"); prefs.putString("tz", g_tz);
-                          configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov"); }
-  if (web.hasArg("zip") && web.arg("zip").length() >= 5) setWeatherZip(web.arg("zip"));
-  else lastWxFetch = 0;
-  if (web.hasArg("omtext")) setOfflineText(web.arg("omtext"));
+  if (!webAuthed()) return;
+  if (web.hasArg("bright") && web.arg("bright").toInt() != brightness) setBrightness(web.arg("bright").toInt());
+  if (web.hasArg("clk24")) { clock24 = web.arg("clk24").toInt() ? 1 : 0; prefs.putInt("clk24", clock24); dirty = true; }
+  if (web.hasArg("units")) {
+    int u = web.arg("units") == "c" ? 1 : 0;
+    if (u != g_wunit) { g_wunit = u; prefs.putInt("wunit", g_wunit); lastWxFetch = 0; }   // refetch in new units
+  }
+  if (web.hasArg("tz") && web.arg("tz") != g_tz) {
+    g_tz = web.arg("tz"); prefs.putString("tz", g_tz);
+    configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov");
+  }
+  String zip = web.arg("zip"); zip.trim();
+  if (zip.length() >= 5 && zip != prefs.getString("zip", "")) setWeatherZip(zip);
+  if (web.hasArg("omtext")) {
+    String t = web.arg("omtext"); t.trim();
+    if (t != prefs.getString("omtext", "")) setOfflineText(t);
+  }
   gaAuto = web.hasArg("gauto") ? 1 : 0; prefs.putInt("gauto", gaAuto);
   omAuto = web.hasArg("omauto") ? 1 : 0; prefs.putInt("omauto", omAuto);
   web.sendHeader("Location", "/control");
   web.send(303);
 }
 
+static bool otaOk = false;             // set by the upload handler, read by the final POST handler
 static void handleUpdateUpload() {
   HTTPUpload &up = web.upload();
   if (up.status == UPLOAD_FILE_START) {
-    Update.begin(UPDATE_SIZE_UNKNOWN);
+    otaOk = false;
+    String pw = prefs.getString("webpass", "");
+    if (pw.length() && !web.authenticate("admin", pw.c_str())) return;   // POST handler sends the 401
+    otaOk = Update.begin(UPDATE_SIZE_UNKNOWN);
   } else if (up.status == UPLOAD_FILE_WRITE) {
-    Update.write(up.buf, up.currentSize);
+    if (otaOk && Update.write(up.buf, up.currentSize) != up.currentSize) otaOk = false;
   } else if (up.status == UPLOAD_FILE_END) {
-    Update.end(true);
+    if (otaOk) otaOk = Update.end(true);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (otaOk) Update.abort();
+    otaOk = false;
   }
+  if (!otaOk && up.status != UPLOAD_FILE_START && Update.isRunning()) Update.abort();
 }
 
 static const char *UPDATE_FORM =
@@ -599,15 +612,26 @@ static const char *UPDATE_FORM =
 static void startWebRoutes() {
   web.on("/", []() { web.send(200, "text/html", apMode ? setupPage() : statusPage()); });
   web.on("/save", HTTP_POST, handleSave);
-  web.on("/rescan", []() { WiFi.scanNetworks(true); web.sendHeader("Location", "/"); web.send(303); });
-  web.on("/control", HTTP_GET, []() { web.send(200, "text/html", controlPage()); });
+  web.on("/wifi", HTTP_GET, []() {                // change networks (also reachable in AP mode)
+    if (!webAuthed()) return;
+    if (WiFi.scanComplete() == WIFI_SCAN_FAILED) WiFi.scanNetworks(true);
+    web.send(200, "text/html", setupPage());
+  });
+  web.on("/rescan", []() {
+    WiFi.scanDelete(); WiFi.scanNetworks(true);
+    web.sendHeader("Location", "/wifi"); web.send(303);
+  });
+  web.on("/control", HTTP_GET, []() { if (webAuthed()) web.send(200, "text/html", controlPage()); });
   web.on("/control", HTTP_POST, handleControlPost);
-  web.on("/update", HTTP_GET, []() { web.send(200, "text/html", UPDATE_FORM); });
+  web.on("/update", HTTP_GET, []() { if (webAuthed()) web.send(200, "text/html", UPDATE_FORM); });
   web.on("/update", HTTP_POST, []() {
-    bool ok = !Update.hasError();
-    web.send(200, "text/html", ok
+    if (!webAuthed()) return;
+    bool ok = otaOk && !Update.hasError();
+    if (!ok) Update.printError(Serial);
+    web.send(ok ? 200 : 500, "text/html", ok
       ? "<!doctype html><meta http-equiv=refresh content='6;url=/'><body style='font-family:sans-serif;background:#0e1013;color:#e6e9ee;padding:22px'><h2>Update OK — rebooting…</h2>"
       : "<body style='font-family:sans-serif;background:#0e1013;color:#ff5d5d;padding:22px'><h2>Update FAILED</h2>");
+    if (!ok) return;                    // keep running the current firmware
     delay(700);
     ESP.restart();
   }, handleUpdateUpload);
@@ -715,7 +739,7 @@ static String statusPage() {
              "<title>WFD Clock</title><style>body{font-family:sans-serif;background:#0e1013;color:#e6e9ee;padding:22px}"
              "b{color:#72d3ff}</style><h2>WFD Clock <small style=color:#8b95a3>fw: OTA-OK</small></h2>";
   s += "<p>Time: <b>" + String(tm) + "</b></p>";
-  s += "<p>NTP: <b>" + String(ntpSynced ? "synced" : "waiting…") + "</b> &nbsp; WiFi: <b>" + WiFi.SSID() +
+  s += "<p>NTP: <b>" + String(ntpSynced ? "synced" : "waiting…") + "</b> &nbsp; WiFi: <b>" + esc(WiFi.SSID()) +
        "</b> (" + WiFi.localIP().toString() + ", " + String(WiFi.RSSI()) + " dBm)</p>";
   const char *cond = wxCode == 1 ? "Sunny" : wxCode == 2 ? "Cloudy" : wxCode == 3 ? "Rain" : "—";
   bool wxfresh = millis() - wxTime < 1200000;
@@ -723,7 +747,7 @@ static String statusPage() {
        "</b> &nbsp; loc " + (g_lat.length() ? g_lat + "," + g_lon : String("unset")) + "</p>";
   s += "<p><a href=/control style='color:#72d3ff;font-weight:600'>⚙ Control panel</a></p>";
   s += "<p><a href=/update style='color:#72d3ff'>Firmware update</a> &nbsp; "
-       "<a href=/save style='color:#ff5d5d'>Change WiFi</a></p>";
+       "<a href=/wifi style='color:#ff5d5d'>Change WiFi</a></p>";
   return s;
 }
 
@@ -740,15 +764,15 @@ void setup() {
   brightness = prefs.getInt("bright", 6);
   clock24 = prefs.getInt("clk24", 1);
   tmCmd(0xB0 | ((brightness - 1) & 0x0F));
-  gaN = prefs.getInt("gn", 0);            // restore stored standalone animation
+  gaN = constrain(prefs.getInt("gn", 0), 0, GA_MAX);   // restore stored standalone animation
   gaFps = prefs.getInt("gfps", 8);
   gaFlag = prefs.getInt("gflag", 0);
   gaAuto = prefs.getInt("gauto", 0);
-  if (gaN > 0 && gaN <= GA_MAX) prefs.getBytes("ganim", gaFrames, gaN * 7);
-  omN = prefs.getInt("omn", 0);          // restore stored offline message
+  if (gaN > 0 && prefs.getBytes("ganim", gaFrames, gaN * 7) != (size_t)gaN * 7) gaN = 0;
+  omN = constrain(prefs.getInt("omn", 0), 0, OM_MAX);  // restore stored offline message
   omFps = prefs.getInt("omfps", 5);
   omAuto = prefs.getInt("omauto", 0);
-  if (omN > 0 && omN <= OM_MAX) prefs.getBytes("om", omFrames, omN * 12);
+  if (omN > 0 && prefs.getBytes("om", omFrames, omN * 12) != (size_t)omN * 12) omN = 0;
   wifiBegin();
   Serial.printf("wfd-clock ready, style %d, bright %d, grid %d auto %d, ommsg %d auto %d, wifi %s\n",
                 specStyle, brightness, gaN, gaAuto, omN, omAuto, apMode ? "setup-AP" : "connecting");
@@ -795,12 +819,12 @@ void loop() {
     omIdx = (omIdx + 1) % omN;
     redraw = true;
   }
-  if (redraw) {
-    rtcRead(curT);
-    draw();
-  }
   if (millis() - last >= 250) {
     last = millis();
-    if (rtcRead(curT)) draw();
+    if (rtcRead(curT)) redraw = true;
+  }
+  if (redraw || dirty) {               // one I2C flush per pass, however many commands arrived
+    dirty = false;
+    draw();
   }
 }

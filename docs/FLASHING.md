@@ -77,6 +77,8 @@ fallbacks (see [FIRMWARE.md](FIRMWARE.md)): `WIFISCAN`, `WIFIINFO`, `WIFIRESET`.
 Command line:
 ```bash
 curl -F "fw=@wfd-firmware/releases/wfd-clock-firmware.bin" http://<clock-ip>/update
+# with a WEBPASS set:
+curl -u admin:<pass> -F "fw=@wfd-firmware/releases/wfd-clock-firmware.bin" http://<clock-ip>/update
 ```
 
 OTA requires the **dual‑OTA partition table** (already set in

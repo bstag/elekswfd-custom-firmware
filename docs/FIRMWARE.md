@@ -46,6 +46,7 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `WIFISET ssid⇥pass` | Save WiFi creds (tab‑separated) and reboot |
 | `WIFISSID name` | Change just the network name, keep the password |
 | `WIFISCAN` / `WIFIINFO` / `WIFIRESET` | Scan 2.4 GHz nets / status / clear creds |
+| `WEBPASS <pass>` | Password for `/control`, `/update`, `/wifi` (user `admin`); `WEBPASS` alone clears it |
 
 ## Web endpoints (port 80)
 
@@ -53,9 +54,12 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 |---|---|
 | `GET /` | Status page (time, NTP, WiFi, weather) |
 | `GET/POST /control` | Phone control panel (brightness, weather ZIP/units, timezone, offline message, standalone toggles) |
-| `GET/POST /save` | WiFi setup (captive portal in AP mode) |
+| `GET /wifi`, `POST /save` | Change WiFi network (captive portal in AP mode) |
 | `GET/POST /update` | OTA firmware upload |
 | `GET /rescan` | Re‑scan WiFi networks |
+
+Anyone on your LAN can reach these pages. Set `WEBPASS` over USB to put `/control`,
+`/update` and `/wifi` behind HTTP basic auth. The first-run setup AP is always open.
 
 In AP (setup) mode the clock is `192.168.4.1` and a DNS captive portal redirects to the
 setup page.
