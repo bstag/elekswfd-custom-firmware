@@ -63,6 +63,9 @@
   .grid7 i.edge { border-radius:2px; }
   .grid7 i.edge.on { background:var(--accent-dim); box-shadow:none; }
   .grid7 i.blank { visibility:hidden; }
+  .cols { display:flex; gap:5px; height:84px; align-items:flex-end; }
+  .cols div { width:10px; height:100%; background:#1b2026; border-radius:3px; display:flex; align-items:flex-end; }
+  .cols i { display:block; width:100%; height:0; background:var(--accent); border-radius:3px; transition:height .08s; }
   .facts { color:var(--muted); font-size:13px; display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; }
   .facts b { color:var(--text); font-weight:600; }
   .banner { background:var(--accent-dim); color:var(--text); border-radius:7px; padding:8px 10px; font-size:13px; margin-top:10px; }
@@ -89,6 +92,7 @@
       <div class="time" id="time">--:--:--</div>
       <div class="msg" id="msg">      </div>
       <div class="grid7" id="grid" aria-label="7 by 7 grid"></div>
+      <div class="cols" id="cols" title="Spectrum columns"><div><i></i></div><div><i></i></div></div>
     </div>
     <div class="facts">
       <span>Weather <b id="wx">—</b></span>
@@ -109,7 +113,10 @@
       <div class="seg" id="style">
         <button data-v="1">Bars</button><button data-v="2">Top-down</button><button data-v="3">Center</button>
         <button data-v="4">Peak dot</button><button data-v="5">Bars+peak</button></div></div>
-    <p class="hint">The spectrum shows PC audio while the app runs.</p>
+    <div class="row"><label for="mic_standalone">Mic spectrum</label>
+      <label class="switch"><input type="checkbox" id="mic_standalone"><span class="slider"></span></label>
+      <span class="off-note">when the app is off: bass left, treble right</span></div>
+    <p class="hint">While the app runs, the spectrum shows PC audio.</p>
   </section>
 
   <section>
@@ -175,7 +182,7 @@
 
 <script>
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
-const ANIMS = ['spin','bounce','rain','wave','pulse','sparkle','scan','life','heart'];
+const ANIMS = ['spin','bounce','rain','wave','pulse','sparkle','scan','life','heart','audio','mouth'];
 let cfg = {}, editing = null;
 
 // ---- talking to the clock ----
@@ -227,6 +234,9 @@ function show(s) {
   $('#wx').textContent = s.weather.fresh ? `${s.weather.temp}°${s.weather.unit} ${s.weather.cond}` : 'not loaded';
   $('#wifi').textContent = `${s.wifi.ssid} · ${s.wifi.rssi} dBm`;
   $('#ntp').textContent = s.ntp ? 'synced' : 'waiting';
+  const m = s.mic || {}, cols = $$('#cols i');
+  cols[0].style.height = (m.active ? m.bass : 0) / 12 * 100 + '%';
+  cols[1].style.height = (m.active ? m.treble : 0) / 12 * 100 + '%';
   $('#appBanner').hidden = !s.app_connected;
   $('#fw').textContent = s.fw;
   const custom = $('#anim [data-v=custom]');
@@ -244,6 +254,7 @@ function render() {
   val('#offline_text', cfg.offline_text); val('#dwell', cfg.standalone_dwell);
   $$('[data-r]').forEach(b => b.checked = (cfg.standalone_rotate || []).includes(b.dataset.r));
   val('#scroll', cfg.standalone_scroll_ms); $('#scrollVal').textContent = cfg.standalone_scroll_ms + ' ms';
+  $('#mic_standalone').checked = cfg.mic_standalone;
   $('#grid_standalone').checked = cfg.grid_standalone; $('#gridBody').hidden = !cfg.grid_standalone;
   sel('#anim', cfg.standalone_anim); val('#fps', cfg.standalone_fps); $('#fpsVal').textContent = cfg.standalone_fps + '/s';
   $('#frame').checked = cfg.standalone_frame;
@@ -268,6 +279,7 @@ $('#dwell').onchange = e => set({ standalone_dwell: Math.round(+e.target.value) 
 $('#frame').onchange = e => set({ standalone_frame: e.target.checked });
 $('#msg_standalone').onchange = e => set({ msg_standalone: e.target.checked });
 $('#grid_standalone').onchange = e => set({ grid_standalone: e.target.checked });
+$('#mic_standalone').onchange = e => set({ mic_standalone: e.target.checked });
 $$('[data-r]').forEach(b => b.onchange = () => set({ standalone_rotate: $$('[data-r]').filter(x => x.checked).map(x => x.dataset.r) }));
 $('#units').onchange = e => set({ units: e.target.value });
 $('#tz').onchange = e => set({ tz: e.target.value });
@@ -287,7 +299,7 @@ for (const id of ['#offline_text', '#zip', '#dwell']) {   // don't overwrite wha
   $(id).onfocus = e => editing = e.target; $(id).onblur = () => editing = null;
 }
 
-poll(); setInterval(poll, 1000);
+poll(); setInterval(poll, 500);
 </script>
 </body>
 </html>

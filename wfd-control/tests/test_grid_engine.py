@@ -2,65 +2,40 @@
 
 Needs a C++ compiler: MSVC (found with vswhere) or g++/clang++ on PATH. Skipped if there is none.
 """
-import os
+import math
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 import grid_anim
+from host import hostbuild
 
-ROOT = Path(__file__).resolve().parents[2]
-FW_SRC = ROOT / "wfd-firmware" / "clock" / "src"
+FW_SRC = hostbuild.FW_SRC
 DRIVER = Path(__file__).parent / "host" / "grid_dump.cpp"
 
-DETERMINISTIC = ["spin", "bounce", "wave", "pulse", "scan", "heart"]
+DETERMINISTIC = ["spin", "bounce", "wave", "pulse", "scan", "heart", "audio", "mouth"]
 RANDOM = ["rain", "sparkle", "life"]
 FRAMES = 400
 
 
-def _msvc_vcvars():
-    vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-                   "Microsoft Visual Studio", "Installer", "vswhere.exe")
-    if not vswhere.exists():
-        return None
-    out = subprocess.run([str(vswhere), "-latest", "-products", "*", "-requires",
-                          "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"],
-                         capture_output=True, text=True).stdout.strip()
-    bat = Path(out, "VC", "Auxiliary", "Build", "vcvars64.bat") if out else None
-    return bat if bat and bat.exists() else None
+def synthetic_bands(i):
+    """Same input grid_dump.cpp feeds the C++ engine: moving waves, with silent gaps."""
+    return [(math.sin(i * 0.31 + c * 0.9) + 1) / 2 * (0.0 if i % 23 < 4 else (i % 23) / 22.0) for c in range(7)]
 
 
 @pytest.fixture(scope="module")
 def grid_dump(tmp_path_factory):
-    """Path to a host-compiled grid_dump executable."""
-    out = tmp_path_factory.mktemp("host") / "grid_dump.exe"
-    gxx = shutil.which("g++") or shutil.which("clang++")
-    if gxx:
-        cmd = [gxx, "-std=c++17", "-O1", "-I", str(FW_SRC), str(DRIVER), "-o", str(out)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-    else:
-        vcvars = _msvc_vcvars()
-        if not vcvars:
-            pytest.skip("no C++ compiler (MSVC, g++ or clang++)")
-        cl = f'call "{vcvars}" >nul && cl /nologo /std:c++17 /EHsc /O1 /I "{FW_SRC}" "{DRIVER}" /Fe:"{out}"'
-        # one raw string: cmd needs these quotes verbatim (a list would get them \"-escaped)
-        r = subprocess.run(f'cmd /d /s /c "{cl}"', capture_output=True, text=True, cwd=out.parent)
-    if r.returncode != 0:
-        pytest.fail("host build of grid_engine.h failed:\n" + r.stdout + r.stderr)
-    return out
+    return hostbuild.build(DRIVER, tmp_path_factory.mktemp("host"))
 
 
 def cpp_frames(exe, name, n=FRAMES):
-    out = subprocess.run([str(exe), name, str(n)], capture_output=True, text=True, check=True).stdout
-    return [list(map(int, line.split())) for line in out.splitlines()]
+    return hostbuild.run(exe, name, n)
 
 
 def py_frames(name, n=FRAMES):
     eng = grid_anim.GridEngine()
-    return [eng.frame(name, {}) for _ in range(n)]
+    return [eng.frame(name, {"bands": synthetic_bands(i)}) for i in range(n)]
 
 
 @pytest.mark.parametrize("name", DETERMINISTIC)
@@ -69,6 +44,13 @@ def test_matches_python_frame_for_frame(grid_dump, name):
     assert len(cpp) == len(py) == FRAMES
     for i, (a, b) in enumerate(zip(cpp, py)):
         assert a == b, f"{name}: frame {i} differs (C++ {a} vs Python {b})"
+
+
+@pytest.mark.parametrize("name, shapes", [("audio", 10), ("mouth", 4)])
+def test_audio_animations_react(grid_dump, name, shapes):
+    """audio: many bar patterns; mouth: closed + 3 openings, all of them used."""
+    frames = cpp_frames(grid_dump, name)
+    assert len({tuple(f) for f in frames}) >= shapes, f"{name} should follow the bands"
 
 
 @pytest.mark.parametrize("name", RANDOM)

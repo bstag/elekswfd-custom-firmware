@@ -20,7 +20,7 @@ pytestmark = [pytest.mark.device,
 EXPECTED_CONFIG = {
     "brightness", "clock_24h", "style", "units", "tz", "location", "offline_text", "msg_standalone",
     "standalone_msg_mode", "standalone_rotate", "standalone_dwell", "standalone_scroll_ms",
-    "grid_standalone", "standalone_anim", "standalone_fps", "standalone_frame",
+    "mic_standalone", "grid_standalone", "standalone_anim", "standalone_fps", "standalone_frame",
 }
 
 

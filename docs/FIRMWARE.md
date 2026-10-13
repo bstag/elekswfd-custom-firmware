@@ -42,6 +42,9 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `OMTEXT <text>` | Message text for the on-device message line (≤ 96 chars, placeholders allowed) |
 | `MSGCFG mode rot dwell scroll` | Message line: mode `0`=temp `1`=text `2`=date `3`=rotate; `rot` bitmask (1 temp, 2 text, 4 date); seconds per item; ms per scroll step |
 | `MSGINFO` | Print the message line's settings and what it's showing now |
+| `MIC [0-3]` | Mic diagnostics: one 2048‑sample capture at 10 kHz with stats (optional ADC attenuation 0/2.5/6/11 dB for this capture) |
+| `MICLOG <s>` | Mic level bar every 100 ms |
+| `MICTRACE <s>` | Per processed frame: `T ms rms low high level% bass treble` (for tuning; see below) |
 | `OMAUTO 0/1` | Run the message line when the app is off (`0` = temperature only) |
 | `ICON mask` | Top‑row icons (13‑bit bitmask) |
 | `LOGO 0/1` | ELEKSMAKER logo |
@@ -77,8 +80,8 @@ Same shape as the PC app's API, so one dashboard can talk to either.
 
 `GET /api/status` returns `{"state": {...}, "config": {...}}`. `state` has `fw`, `uptime_s`,
 `heap_free`, `time`, `ntp`, `wifi {ssid, ip, rssi}`, `weather {fresh, temp, unit, cond}`,
-`app_connected`, `message` (what the message line shows), `stored_frames` and `grid_rows`
-(the current grid frame, 7 row bytes).
+`app_connected`, `message` (what the message line shows), `stored_frames`, `grid_rows`
+(the current grid frame, 7 row bytes) and `mic {active, level, bass, treble}`.
 
 `POST /api/set` takes a JSON object of settings. It needs the header `X-WFD: 1`, which stops
 other web pages posting to the clock from your browser, plus the web password if `WEBPASS`
@@ -99,8 +102,9 @@ is set. Every key is checked first; if any is bad nothing changes, and you get a
 | `standalone_rotate` | list of `weather` `text` `date` | what rotate cycles through |
 | `standalone_dwell` | int 2–600 | seconds per item |
 | `standalone_scroll_ms` | int 50–5000 | ms per scroll step |
+| `mic_standalone` | bool | spectrum columns from the clock's mic when the app is off |
 | `grid_standalone` | bool | play a grid animation when the app is off |
-| `standalone_anim` | name | `spin bounce rain wave pulse sparkle scan life heart`, or `custom` (needs drawn frames) |
+| `standalone_anim` | name | `spin bounce rain wave pulse sparkle scan life heart audio mouth`, or `custom` (needs drawn frames) |
 | `standalone_fps` | int 1–30 | |
 | `standalone_frame` | bool | light the border |
 
@@ -148,9 +152,35 @@ clang++) and checks the deterministic ones frame by frame against the Python eng
 one on the phone page or with `GANIM`; the app's *Save to clock* sends `GANIM` for these, and
 uploads frames only for drawings (`custom`). Audio, CPU and mouth need the PC and stay app‑only.
 
+## Microphone (when the app is off)
+
+The clock has its own mic (GPIO32 / ADC1_CH4, behind an op‑amp). A task on core 0 samples it
+at 8 kHz in 32 ms frames while the app is off and something uses it, and `mic_dsp.h` turns each
+frame into:
+
+- **loudness**, in dB above an adaptive noise floor. The floor settles near the room's quiet
+  level (it rises 0.3 dB/s and falls 1.5 dB/s). Nothing shows until a sound is 12 dB above it,
+  and 28 dB more fills the column. The rise is instant and the fall smooth, like the PC app.
+- **7 bands** from an FFT (60 Hz – 4 kHz), as a shape relative to the strongest band.
+
+The left spectrum column shows the bass share (bands 0–2) and the right one the treble share.
+The grid's `audio` (7 bars) and `mouth` animations use the bands.
+
+Measured on the hardware: the op‑amp output rests near 0 V and swings upward with sound. At
+0 dB attenuation loud sounds saturate the ADC; at 11 dB (used) its ~0.1 V dead zone hides much
+of the background hum. A real room spans ~40 dB, from RMS ~15 quiet to 1000+ for music and
+claps, so a linear meter scaled to recent peaks either lights up in silence or goes dark after
+one loud sound. Hence the dB scale.
+
+The thresholds were tuned on a recording from the clock (`MICTRACE`), saved as
+`wfd-control/tests/host/mictrace_room.txt`. The tests replay it through the C++ code (quiet must
+stay dark, music and claps must fill the column) and feed it simulated tones (a low tone lights
+the bass column and band 1, a high tone the treble column and band 5). To retune for another
+room, record a new trace and adjust `Loudness` in `mic_dsp.h` until the tests pass.
+
 ## Persistent storage (NVS namespace `wfd`)
 
-`style`, `bright`, `clk24`, `webpass`; grid `gaid/gfps/gflag/gauto` + drawn frames `gn` + `ganim` (blob); message line
+`style`, `bright`, `clk24`, `webpass`, `micauto`; grid `gaid/gfps/gflag/gauto` + drawn frames `gn` + `ganim` (blob); message line
 `omauto/mmode/mrot/mdwell/mscroll` + `omtext`; WiFi/location `ssid/pass/tz/lat/lon/wunit/zip`.
 Settings survive OTA and USB flashes (the `nvs` partition offset is unchanged).
 

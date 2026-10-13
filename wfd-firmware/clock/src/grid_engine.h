@@ -1,5 +1,5 @@
-// 7x7 grid animations: a C++ port of wfd-control/grid_anim.py (the animations that need no
-// live PC data). Plain C++ with no Arduino dependencies, so wfd-control/tests can compile it on
+// 7x7 grid animations: a C++ port of wfd-control/grid_anim.py (all but "cpu", which needs the
+// PC; "audio" and "mouth" take their 7 bands from the clock's own mic). Plain C++ with no Arduino dependencies, so wfd-control/tests can compile it on
 // the PC and check it frame-for-frame against the Python engine.
 //
 // Rows are bytes: bit c of rows[r] = cell (r, c). Rounding uses rint() (round half to even),
@@ -11,10 +11,12 @@
 
 namespace grid {
 
-enum Anim : uint8_t { CUSTOM = 0, SPIN, BOUNCE, RAIN, WAVE, PULSE, SPARKLE, SCAN, LIFE, HEART, N_ANIM };
+// Ids are stored in NVS ("gaid"): only ever append.
+enum Anim : uint8_t { CUSTOM = 0, SPIN, BOUNCE, RAIN, WAVE, PULSE, SPARKLE, SCAN, LIFE, HEART, AUDIO, MOUTH, N_ANIM };
 // Names match grid_anim.py; CUSTOM = frames uploaded to flash (drawn in the app).
-static const char *const NAMES[N_ANIM] = {"custom", "spin", "bounce", "rain", "wave",
-                                          "pulse", "sparkle", "scan", "life", "heart"};
+static const char *const NAMES[N_ANIM] = {"custom", "spin", "bounce", "rain", "wave", "pulse",
+                                          "sparkle", "scan", "life", "heart", "audio", "mouth"};
+inline bool usesMic(int a) { return a == AUDIO || a == MOUTH; }
 
 inline int animFromName(const char *s) {
   for (int i = 0; i < N_ANIM; i++)
@@ -38,6 +40,7 @@ struct Engine {
   uint8_t drops[7];                           // rain: bit r of drops[c] = drop at (r, c)
   float spark[7][7];
   uint8_t life[7];                            // bit c of life[r]
+  const double *bands = nullptr;              // audio/mouth input: 7 values 0..1 (null = silence)
 
   explicit Engine(RandFn r) : rnd(r) { reset(); }
 
@@ -74,6 +77,8 @@ struct Engine {
       case SCAN: for (int r = 0; r < 7; r++) rows[r] = 1 << (t % 7); break;
       case LIFE: lifeStep(rows); break;
       case HEART: { int ph = t % 16; memcpy(rows, (ph < 4 || (ph >= 6 && ph < 9)) ? HEART_BIG : HEART_SMALL, 7); break; }
+      case AUDIO: audio(rows); break;
+      case MOUTH: mouth(rows); break;
       default: spin(rows); break;                // SPIN, and the fallback like the Python engine
     }
   }
@@ -125,6 +130,29 @@ struct Engine {
     for (int r = 0; r < 7; r++)
       for (int c = 0; c < 7; c++)
         if (spark[r][c] > 0.3f) g[r] |= 1 << c;
+  }
+
+  double band(int c) const { return bands ? bands[c] : 0.0; }
+
+  void audio(uint8_t *g) {                    // 7 bars, bottom-up
+    for (int c = 0; c < 7; c++) {
+      int h = (int)rint(band(c) * 7);
+      for (int r = 0; r < 7; r++)
+        if (6 - r < h) g[r] |= 1 << c;
+    }
+  }
+
+  void mouth(uint8_t *g) {                    // opens with the loudest band
+    double m = 0;
+    for (int c = 0; c < 7; c++) if (band(c) > m) m = band(c);
+    int op = (int)rint((m < 1 ? m : 1) * 3);
+    for (int c = 0; c < 7; c++) {
+      if (op == 0) { g[3] |= 1 << c; continue; }
+      int edge = (c == 0 || c == 6) ? 1 : 0;
+      int top = 3 - op + edge, bot = 3 + op - edge;
+      g[top < 0 ? 0 : top] |= 1 << c;
+      g[bot > 6 ? 6 : bot] |= 1 << c;
+    }
   }
 
   void lifeStep(uint8_t *g) {

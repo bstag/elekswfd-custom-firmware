@@ -122,9 +122,9 @@ def compute_icons(mode, levels, metrics, online, battery):
         if battery is not None and battery < 30: on.add("battery")
     return sum(1 << ICON[n] for n in on)
 
-# Animations the clock runs itself (firmware grid_engine.h); "custom" = frames drawn in /draw.
-# The rest (audio, cpu, mouth) need live PC data and can't play standalone.
-BUILTIN_GRID = ["spin", "bounce", "rain", "wave", "pulse", "sparkle", "scan", "life", "heart"]
+# Animations the clock runs itself (firmware grid_engine.h; audio/mouth from its own mic);
+# "custom" = frames drawn in /draw. Only "cpu" needs live PC data and can't play standalone.
+BUILTIN_GRID = ["spin", "bounce", "rain", "wave", "pulse", "sparkle", "scan", "life", "heart", "audio", "mouth"]
 REPEATABLE = BUILTIN_GRID + ["custom"]
 
 

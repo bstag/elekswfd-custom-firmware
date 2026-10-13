@@ -264,7 +264,7 @@ function applyConfig(c) {
   $('#grid_standalone').checked = !!c.grid_standalone;
   $('#msg_standalone').checked = !!c.msg_standalone;
   if ($('#offline_text') !== document.activeElement) $('#offline_text').value = c.offline_text;
-  const repeatable = ['spin','bounce','rain','wave','pulse','sparkle','scan','life','heart','custom'].includes(c.grid_anim);
+  const repeatable = c.grid_anim !== 'cpu';   // the clock runs all others itself (audio/mouth from its mic)
   $('#gridSave').disabled = !repeatable;
   $('#gridSaveHint').textContent = repeatable ? '' : `“${c.grid_anim}” needs the PC (live data) — it can't play standalone.`;
   [...$('#iconMode').children].forEach(b => b.classList.toggle('sel', b.dataset.i === c.icon_mode));

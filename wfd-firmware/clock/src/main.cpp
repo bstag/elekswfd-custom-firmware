@@ -16,6 +16,7 @@
 #include "clock_panel.h"
 #include "font14_table.h"
 #include "grid_engine.h"
+#include "mic_dsp.h"
 #include "web_dashboard.h"
 
 static Preferences prefs;
@@ -120,9 +121,19 @@ static int gaIdx = 0;
 static uint32_t gaStep = 0;
 static int gaAnim = grid::SPIN;       // what plays when the app is off: grid::CUSTOM = gaFrames
 static grid::Engine gEng(esp_random);
-static uint8_t gEngRows[7] = {0};     // current built-in animation frame
+static uint8_t gEngRows[7] = {0};     // current built-in animation frame (audio/mouth read micBands)
 static bool gridReady() { return gaAnim != grid::CUSTOM || gaN > 0; }
 static void setGridAnim(int anim, int fps, int flag);
+static const int MIC_PIN = 32;        // microphone: GPIO32 / ADC1_CH4, behind an op-amp
+static int micAuto = 1;               // spectrum columns from the mic when the app is off
+static mic::Dsp micDsp;               // runs in micTask on core 0
+static volatile int micBass = 0, micTreble = 0, micLevel = 0;   // latest results
+static double micBands[mic::NBANDS] = {0};                      // grid audio/mouth input
+static volatile uint32_t micFrameAt = 0;                        // millis of the last frame
+static volatile bool micPause = false;                          // MIC/MICLOG use the ADC
+static volatile uint32_t micTraceUntil = 0;                     // MICTRACE: print every frame
+static void micCapture(int n, int rate);
+static void micLog(int secs);
 
 static void drawGrid(const uint8_t *rows, bool frame) {   // rows[r] bit c = cell (r,c)
   for (int r = 0; r < 7; r++)
@@ -211,9 +222,10 @@ static void draw() {
   for (int i = 0; i < 2; i++) ram[COLON_BYTE[i]] |= COLON_MASK[i];
   int dow = t[3] & 0x07;
   if (dow >= 1 && dow <= 7) ram[DAYS[dow - 1].byte] |= DAYS[dow - 1].mask;
-  bool live = (millis() - specTime) < 600;          // clear columns if PC went quiet
-  drawCol(SPEC_C1_BYTE, SPEC_C1_MASK, live ? specA : 0, 0);
-  drawCol(SPEC_C2_BYTE, SPEC_C2_MASK, live ? specB : 0, 1);
+  bool live = (millis() - specTime) < 600;          // PC audio (clears if the PC went quiet)
+  bool micLive = !live && micAuto && millis() - appTime > 2000 && millis() - micFrameAt < 500;
+  drawCol(SPEC_C1_BYTE, SPEC_C1_MASK, live ? specA : micLive ? micBass : 0, 0);      // mic: bass
+  drawCol(SPEC_C2_BYTE, SPEC_C2_MASK, live ? specB : micLive ? micTreble : 0, 1);    // mic: treble
   if (millis() - barsTime < 3000) {                 // bars when the PC is sending them
     drawBar(BAR_CPU_BYTE, BAR_CPU_MASK, barCpu, LBL_CPU_BYTE, LBL_CPU_MASK, PCT_CPU_BYTE, PCT_CPU_MASK);
     drawBar(BAR_GPU_BYTE, BAR_GPU_MASK, barGpu, LBL_GPU_BYTE, LBL_GPU_MASK, PCT_GPU_BYTE, PCT_GPU_MASK);
@@ -341,6 +353,22 @@ static void handle(const String &s) {
   } else if (cmd == "MSGINFO") {                // what the engine is showing right now (for testing)
     Serial.printf("msg auto=%d mode=%d rot=%d dwell=%d scroll=%d src=%s text='%s'\n", omAuto, msgMode,
                   msgRot, msgDwell, msgScroll, engTemp ? "temp" : "glyphs", msgShown.c_str());
+  } else if (cmd == "MIC") {                    // mic diagnostics: one fast capture + stats
+    micPause = true; delay(40);                 // let micTask finish its frame
+    if (arg.length()) {                         // "MIC <0..3>": ADC attenuation 0/2.5/6/11 dB
+      const adc_attenuation_t at[] = {ADC_0db, ADC_2_5db, ADC_6db, ADC_11db};
+      analogSetPinAttenuation(MIC_PIN, at[constrain(arg.toInt(), 0, 3)]);
+    }
+    micCapture(2048, 10000);
+    analogSetPinAttenuation(MIC_PIN, ADC_11db);
+    micPause = false;
+  } else if (cmd == "MICTRACE") {               // "MICTRACE <s>": per frame "T ms rms low high level% bass treble"
+    micTraceUntil = millis() + 1000UL * constrain(arg.toInt(), 1, 120);
+    appTime = millis() - 3000;                  // this command shouldn't count as the app being on
+  } else if (cmd == "MICLOG") {                 // "MICLOG <s>": level bar every 100 ms
+    micPause = true; delay(40);
+    micLog(constrain(arg.toInt(), 1, 60));
+    micPause = false;
   } else if (cmd == "OMAUTO") {
     omAuto = arg.toInt() ? 1 : 0;
     prefs.putInt("omauto", omAuto);
@@ -565,6 +593,94 @@ static void render6(const String &s, int start, uint8_t *out) {   // out[12]
     glyph14(c, &out[i * 2], &out[i * 2 + 1]);
   }
 }
+// ---- microphone: sampled on core 0 while the app is off and something uses it ----
+static void micTask(void *) {
+  static uint16_t buf[mic::N];
+  const uint32_t period = 1000000UL / mic::RATE;
+  for (;;) {
+    bool want = millis() - appTime > 2000 && (micAuto || (gaAuto && grid::usesMic(gaAnim)));
+    if (!want || micPause) {
+      micBass = micTreble = micLevel = 0;
+      for (int b = 0; b < mic::NBANDS; b++) micBands[b] = 0;
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
+    }
+    uint32_t next = micros();
+    for (int i = 0; i < mic::N; i++) {          // 256 samples at 8 kHz = 32 ms
+      while ((int32_t)(micros() - next) < 0) {}
+      buf[i] = analogRead(MIC_PIN);
+      next += period;
+    }
+    micDsp.process(buf);
+    micBass = micDsp.colBass;
+    micTreble = micDsp.colTreble;
+    micLevel = (int)(micDsp.level * 100);
+    for (int b = 0; b < mic::NBANDS; b++) micBands[b] = micDsp.bands[b];
+    micFrameAt = millis();
+    if ((int32_t)(micTraceUntil - micFrameAt) > 0)
+      Serial.printf("T %lu %d %d %d %d %d %d\n", (unsigned long)micFrameAt, (int)micDsp.rms, (int)micDsp.lowAmp,
+                    (int)micDsp.highAmp, micLevel, micBass, micTreble);
+    vTaskDelay(1);                              // let core 0's idle task run
+  }
+}
+
+// ---- microphone diagnostics ----
+// Capture n samples at ~rate Hz with analogRead and print what the signal looks like.
+static void micCapture(int n, int rate) {
+  static uint16_t buf[2048];
+  n = constrain(n, 16, 2048);
+  uint32_t period = 1000000UL / rate, t0 = micros(), next = t0;
+  for (int i = 0; i < n; i++) {
+    while ((int32_t)(micros() - next) < 0) {}
+    buf[i] = analogRead(MIC_PIN);
+    next += period;
+  }
+  uint32_t us = micros() - t0;
+  double mean = 0;
+  int lo = 4095, hi = 0;
+  for (int i = 0; i < n; i++) { mean += buf[i]; lo = min(lo, (int)buf[i]); hi = max(hi, (int)buf[i]); }
+  mean /= n;
+  double ac = 0;
+  int zc = 0;
+  for (int i = 0; i < n; i++) {
+    double d = buf[i] - mean;
+    ac += d * d;
+    if (i && ((buf[i] >= mean) != (buf[i - 1] >= mean))) zc++;
+  }
+  int hist[9] = {0};          // 0, 1-3, 4-15, 16-63, 64-255, 256-1023, 1k-2k, 2k-3k, 3k+
+  for (int i = 0; i < n; i++) {
+    int v = buf[i];
+    hist[v == 0 ? 0 : v < 4 ? 1 : v < 16 ? 2 : v < 64 ? 3 : v < 256 ? 4 : v < 1024 ? 5 : v < 2048 ? 6 : v < 3072 ? 7 : 8]++;
+  }
+  Serial.printf("mic n=%d rate=%dHz min=%d max=%d mean=%d acrms=%d zero-cross/s=%d\n", n,
+                (int)(n * 1e6 / us), lo, hi, (int)mean, (int)sqrt(ac / n), (int)(zc * 1e6 / us));
+  Serial.printf("  hist 0:%d 1-3:%d 4-15:%d 16-63:%d 64-255:%d 256-1023:%d 1k-2k:%d 2k-3k:%d 3k+:%d\n",
+                hist[0], hist[1], hist[2], hist[3], hist[4], hist[5], hist[6], hist[7], hist[8]);
+  Serial.print("  first 64:");
+  for (int i = 0; i < 64; i++) Serial.printf(" %d", buf[i]);
+  Serial.println();
+}
+
+// Every 100 ms: 400 samples (~10 kHz for 40 ms) -> min/max/mean and a peak-to-peak bar.
+static void micLog(int secs) {
+  for (int n = 0; n < secs * 10; n++) {
+    uint32_t t0 = millis();
+    int lo = 4095, hi = 0;
+    long sum = 0;
+    for (int i = 0; i < 400; i++) {
+      int v = analogRead(MIC_PIN);
+      lo = min(lo, v); hi = max(hi, v); sum += v;
+      delayMicroseconds(80);
+    }
+    int pp = hi - lo, w = constrain(pp / 25, 0, 40);
+    char bar[41];
+    for (int i = 0; i < 40; i++) bar[i] = i < w ? '#' : '.';
+    bar[40] = 0;
+    Serial.printf("%3d.%ds min %4d max %4d mean %4ld pp %4d %s\n", n / 10, n % 10, lo, hi, sum / 400, pp, bar);
+    while (millis() - t0 < 100) delay(1);
+  }
+}
+
 // Choose what the grid plays when the app is off (turns that on), and persist it.
 static void setGridAnim(int anim, int fps, int flag) {
   gaAnim = constrain(anim, 0, grid::N_ANIM - 1);
@@ -699,6 +815,8 @@ static String controlPage() {
                          {"Pacific", "PST8PDT,M3.2.0,M11.1.0"}, {"UTC", "UTC0"}};
   for (auto &z : zn) s += "<option value='" + String(z[1]) + "'" + (g_tz == z[1] ? " selected" : "") + ">" + z[0] + "</option>";
   s += "</select>";
+  s += "<div class=row><input type=checkbox name=micauto id=micauto " + String(micAuto ? "checked" : "") +
+       "><label for=micauto>Spectrum from the clock's mic when the app is off</label></div>";
   s += "<h3>Grid <small class=dim>when the app is off</small></h3>";
   s += "<div class=row><input type=checkbox name=gauto id=gauto " + String(gaAuto ? "checked" : "") +
        "><label for=gauto>Play an animation</label></div>";
@@ -817,6 +935,9 @@ static bool setting(const char *k, JsonVariantConst v, bool apply, Pending &pd, 
   } else if (!strcmp(k, "standalone_scroll_ms")) {
     if (!intIn(v, 50, 5000, pd.scroll, err)) return false;
     pd.msg = true;
+  } else if (!strcmp(k, "mic_standalone")) {
+    if (!boolOf(v, i, err)) return false;
+    if (apply && i != micAuto) { micAuto = i; prefs.putInt("micauto", micAuto); }
   } else if (!strcmp(k, "grid_standalone")) {
     if (!boolOf(v, i, err)) return false;
     pd.gauto = i;
@@ -874,6 +995,7 @@ static void configJson(JsonObject c) {
   for (int i = 0; i < N_SRC; i++) if (msgRot & (1 << i)) rot.add(MSG_MODE_NAMES[i]);
   c["standalone_dwell"] = msgDwell;
   c["standalone_scroll_ms"] = msgScroll;
+  c["mic_standalone"] = (bool)micAuto;
   c["grid_standalone"] = (bool)gaAuto;
   c["standalone_anim"] = grid::NAMES[gaAnim];
   c["standalone_fps"] = gaFps;
@@ -904,6 +1026,11 @@ static void stateJson(JsonObject s) {
   s["app_connected"] = millis() - appTime < 2000;
   s["message"] = msgShown;
   s["stored_frames"] = gaN;
+  JsonObject m = s["mic"].to<JsonObject>();
+  m["active"] = millis() - micFrameAt < 500;
+  m["level"] = micLevel;
+  m["bass"] = micBass;
+  m["treble"] = micTreble;
   JsonArray rows = s["grid_rows"].to<JsonArray>();
   const uint8_t *r = gaAnim == grid::CUSTOM ? &gaFrames[gaIdx * 7] : gEngRows;
   for (int k = 0; k < 7; k++) rows.add(r[k]);
@@ -959,6 +1086,7 @@ static void handleControlPost() {
     in["standalone_frame"] = web.hasArg("gflag");
   }
   in["grid_standalone"] = web.hasArg("gauto");
+  in["mic_standalone"] = web.hasArg("micauto");
   in["msg_standalone"] = web.hasArg("omauto");
   if (!applySettings(in.as<JsonObjectConst>(), out)) {
     String msg;
@@ -1028,6 +1156,8 @@ static void startWebRoutes() {
       ? page("WFD Update", "<h2>Update OK — rebooting…</h2>", "<meta http-equiv=refresh content='6;url=/'>")
       : page("WFD Update", "<h2 class=warn>Update FAILED</h2><p><a href=/update>Try again</a></p>"));
     if (!ok) return;                    // keep running the current firmware
+    web.client().flush();               // finish the reply and close cleanly, so the uploader
+    web.client().stop();                //   doesn't see "connection reset" from the reboot
     delay(700);
     ESP.restart();
   }, handleUpdateUpload);
@@ -1167,6 +1297,10 @@ void setup() {
   if (gaN > 0 && prefs.getBytes("ganim", gaFrames, gaN * 7) != (size_t)gaN * 7) gaN = 0;
   // stored frames keep playing after the upgrade; otherwise default to a built-in animation
   gaAnim = constrain(prefs.getInt("gaid", gaN > 0 ? grid::CUSTOM : grid::SPIN), 0, grid::N_ANIM - 1);
+  micAuto = prefs.getInt("micauto", 1);
+  analogSetPinAttenuation(MIC_PIN, ADC_11db);   // dead zone hides the room's hum (see mic_dsp.h)
+  gEng.bands = micBands;
+  xTaskCreatePinnedToCore(micTask, "mic", 4096, nullptr, 1, nullptr, 0);
   omAuto = prefs.getInt("omauto", 0);    // restore the message-line engine
   msgMode = constrain(prefs.getInt("mmode", SRC_TEXT), 0, MODE_ROTATE);
   msgRot = prefs.getInt("mrot", 0b111);

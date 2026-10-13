@@ -61,7 +61,7 @@ def test_grid_save_custom_needs_frames(app, api):
 
 
 def test_grid_save_refuses_live_only_animation(app, api):
-    status, body = api("/api/grid_save", {"anim": "audio"})
+    status, body = api("/api/grid_save", {"anim": "cpu"})
     assert status == 400 and "live data" in body["error"]
 
 

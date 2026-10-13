@@ -8,7 +8,7 @@
 | **TM1680** (Titan Micro) | LED matrix driver, I²C, on the display board — drives the whole panel |
 | **DS3231SN** | Battery‑backed real‑time clock (I²C), with a CR1220 coin cell |
 | **CH340C** | USB‑to‑serial bridge (VID `1A86`, PID `7523`) |
-| XINLUDA XL358‑type | Dual op‑amp — microphone amplifier |
+| XINLUDA XL358‑type | Dual op‑amp — microphone amplifier (output rests near 0 V, swings up with sound; see [FIRMWARE.md](FIRMWARE.md#microphone-when-the-app-is-off)) |
 | 2× SS14 | Schottky diodes (power) |
 
 The display is an **LED panel** (not VFD).

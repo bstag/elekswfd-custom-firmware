@@ -25,7 +25,7 @@ drawing tool and fonts use `font14.py` / `grid_anim.py` (in the same folder).
 - **Weather** — resolves a ZIP or "Town, State" and pushes it; shows condition + temp
 - **Message line** — weather temp / window title / custom text / **date** / rotation; custom text supports `{date} {time} {time12} {day} {temp}` placeholders
 - **Grid** — 13 animations incl. audio/CPU‑reactive; **Save to clock** makes the clock play the
-  nine built‑ins itself (or stores your drawing); the **grid animator** (`/draw`) is a 7×7 frame editor with live preview
+  built‑ins itself, audio and mouth from its own mic (or stores your drawing); the **grid animator** (`/draw`) is a 7×7 frame editor with live preview
 - **Top row** — icon modes (audio meter / system status) and the logo toggle
 - **Offline message** + standalone toggles — what the clock shows when the app is off. *Save to clock*
   sends the text (placeholders and all); the clock's phone page picks the mode, rotation and speed
@@ -86,6 +86,8 @@ written. The suite covers:
 
 - **`test_grid_engine.py`** compiles the firmware's `grid_engine.h` on the PC and checks it
   against `grid_anim.py` (skipped if there's no C++ compiler).
+- **`test_mic_dsp.py`** compiles the firmware's `mic_dsp.h` and checks it on simulated tones and
+  on a real recording from the clock (`tests/host/mictrace_room.txt`).
 - **`test_device_api.py`** (opt‑in) tests the clock's JSON API on a real clock and restores
   everything it changes: `set WFD_CLOCK=<clock ip> && test.bat -m device`.
 
