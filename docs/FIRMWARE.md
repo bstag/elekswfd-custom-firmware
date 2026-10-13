@@ -80,6 +80,10 @@ Two app slots are mandatory for OTA. The app is ~1 MB, well within a 1.875 MB sl
 
 ## Regenerating the generated headers
 
-`clock_panel.h` (LED/segment map) and `font14_table.h` (C font) are produced by the
-scripts in `wfd-firmware/tools/` from `panel_map.json` / `segmap.json` / `font14.py`.
-You only need to regenerate them if you re‑map a different panel revision.
+Both headers are committed, so a fresh clone builds as-is.
+
+- `font14_table.h` (C font): run `python wfd-control/font14.py` after changing a glyph there.
+  The Python app and the firmware then share one font.
+- `clock_panel.h` (LED/segment map): hand-assembled from the mapping results in
+  `wfd-firmware/tools/` (`panel_map.json`, `segmap.json`). It only changes if you re‑map a
+  different panel revision.

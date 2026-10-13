@@ -34,7 +34,7 @@ The TM1680 exposes **42 bytes of display RAM** (write address `0x00`, then the d
 bytes). Init sequence: `80 A4 98 81 83 Bx 88` (x = brightness nibble). Everything on the
 panel is one bit in that RAM.
 
-Panel elements (all mapped in `wfd-firmware/clock_panel.h`):
+Panel elements (all mapped in `wfd-firmware/clock/src/clock_panel.h`):
 
 | Element | Count | Notes |
 |---|---|---|
@@ -62,6 +62,6 @@ There's no datasheet for the wiring, so the LED → RAM‑bit map was discovered
    spot on a drawing of the panel in the browser. 384 bits → full element map.
 2. **`wfd-firmware/tools/segmap.py`** does the same per‑segment for one digit and one
    character, to pin down the 7‑ and 14‑segment layouts.
-3. The results are generated into `wfd-firmware/clock_panel.h`.
+3. The results are generated into `wfd-firmware/clock/src/clock_panel.h`.
 
 The reverse‑engineering of the original serial protocol is in [../PROTOCOL.md](../PROTOCOL.md).

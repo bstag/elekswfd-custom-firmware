@@ -42,3 +42,20 @@ def render6(text, start=0):
         lo, hi = glyph(ch)
         out += [lo, hi]
     return out
+
+
+def c_header():
+    """C tables FONT14_LO/HI for ASCII 32..127, as used by the clock firmware."""
+    los, his = zip(*(glyph(chr(c)) for c in range(32, 128)))
+    row = lambda bs: ",".join(f"0x{b:02x}" for b in bs)
+    return ("// 14-seg font for ASCII 32..127 (generated from font14.py)\n"
+            f"static const uint8_t FONT14_LO[96]={{{row(los)}}};\n"
+            f"static const uint8_t FONT14_HI[96]={{{row(his)}}};\n")
+
+
+if __name__ == "__main__":
+    # python font14.py  -> regenerates wfd-firmware/clock/src/font14_table.h
+    from pathlib import Path
+    out = Path(__file__).resolve().parent.parent / "wfd-firmware/clock/src/font14_table.h"
+    out.write_text(c_header(), newline="\r\n")
+    print("wrote", out)
