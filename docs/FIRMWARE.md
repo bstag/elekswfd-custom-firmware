@@ -56,7 +56,8 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 
 | Path | Purpose |
 |---|---|
-| `GET /` | Status page (time, NTP, WiFi, weather) |
+| `GET /` | Dashboard (setup portal in AP mode) |
+| `GET /status` | Status page (time, NTP, WiFi, weather) |
 | `GET/POST /control` | Phone control panel (brightness, weather ZIP/units, timezone, message line, standalone toggles) |
 | `GET /wifi`, `POST /save` | WiFi picker: scanned networks by signal, or type a hidden one (captive portal in AP mode) |
 | `GET/POST /update` | OTA firmware upload |
@@ -105,10 +106,20 @@ is set. Every key is checked first; if any is bad nothing changes, and you get a
 
 ```bash
 curl http://<clock-ip>/api/status
-curl -X POST -H "X-WFD: 1" -d '{"standalone_anim":"rain","standalone_fps":12}' http://<clock-ip>/api/set
+curl -X POST -H "X-WFD: 1" -H "Content-Type: application/json" -d '{"standalone_anim":"rain","standalone_fps":12}' http://<clock-ip>/api/set
 ```
 
-The phone page's form goes through the same checks, so both always agree.
+Send `Content-Type: application/json`. Without it the clock's web server treats the body as
+form fields and you get a 400. The phone page's form goes through the same checks, so both always agree.
+
+## Dashboard
+
+`/` serves a dashboard built on this API: a live preview (time, message line, the 7×7 grid as
+it is right now, weather/WiFi/NTP) and every setting, saved as you change it. The source is
+`clock/web/dashboard.html`. `embed_web.py` runs before every `pio run`, gzips the page into
+`src/web_dashboard.h` (about 6 KB), and one OTA update ships the page and firmware together.
+`/control` stays as a basic form for browsers without JavaScript; the old status page is at
+`/status`.
 
 ## Message line (when the app is off)
 

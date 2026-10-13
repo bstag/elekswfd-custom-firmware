@@ -40,6 +40,24 @@ def test_app_builtin_grid_list_matches_firmware(app):
     assert names == ["custom"] + app.BUILTIN_GRID
 
 
+def test_embedded_dashboard_matches_source():
+    """src/web_dashboard.h must be the gzip of web/dashboard.html (embed_web.py runs on pio builds)."""
+    import gzip
+    header = (ROOT / "wfd-firmware" / "clock" / "src" / "web_dashboard.h").read_text(encoding="utf-8")
+    data = bytes(int(b, 16) for b in re.findall(r"0x([0-9a-f]{2})", header.split("PROGMEM", 1)[1]))
+    assert int(re.search(r"DASHBOARD_GZ_LEN = (\d+)", header).group(1)) == len(data)
+    html = (ROOT / "wfd-firmware" / "clock" / "web" / "dashboard.html").read_bytes().replace(b"\r\n", b"\n")
+    assert gzip.decompress(data) == html, "web_dashboard.h is stale: run `python wfd-firmware/clock/embed_web.py`"
+
+
+def test_dashboard_only_sends_settings_the_firmware_has():
+    html = (ROOT / "wfd-firmware" / "clock" / "web" / "dashboard.html").read_text(encoding="utf-8")
+    sent = set(re.findall(r"set\(\{\s*(\w+):", html)) | set(re.findall(r"\(\{\s*(\w+):", html))
+    known = set(re.findall(r'c\["(\w+)"\]', MAIN_CPP.read_text(encoding="utf-8")))
+    assert len(sent) >= 14, sent
+    assert sent <= known, f"dashboard sends unknown settings: {sorted(sent - known)}"
+
+
 def test_firmware_font_table_is_generated_from_font14():
     assert FONT_H.read_text(encoding="utf-8") == font14.c_header(), \
         "font14_table.h is stale: run `python wfd-control/font14.py`"

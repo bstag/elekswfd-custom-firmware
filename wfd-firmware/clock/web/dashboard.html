@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WFD Clock</title>
+<style>
+  :root { --bg:#0e1013; --panel:#161a1f; --panel2:#1d2228; --line:#2a3038; --text:#e6e9ee;
+          --muted:#8b95a3; --accent:#72d3ff; --accent-dim:#1f4a5c; --ok:#3ccf7f; --bad:#ff5d5d; --off:#2b3036; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 "Segoe UI",system-ui,sans-serif; }
+  header { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:12px 16px;
+           border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:2; }
+  header h1 { font-size:17px; margin:0 auto 0 0; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--bad); display:inline-block; margin-right:6px; }
+  .dot.on { background:var(--ok); box-shadow:0 0 8px var(--ok); }
+  main { max-width:900px; margin:0 auto; padding:16px; display:grid; gap:14px;
+         grid-template-columns:repeat(auto-fit,minmax(min(100%,380px),1fr)); }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; min-width:0; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); margin:0 0 12px; font-weight:600;
+       display:flex; align-items:center; gap:10px; }
+  h2 small { text-transform:none; letter-spacing:0; font-weight:400; }
+  h2 .switch { margin-left:auto; }
+  .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0; }
+  .row > label:first-child { min-width:92px; }
+  label { color:var(--muted); font-size:13px; }
+  input[type=text], input[type=number], select { background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    border-radius:7px; padding:8px 10px; font:inherit; min-width:0; }
+  input[type=text] { flex:1; }
+  input[type=number] { width:76px; }
+  input[type=range] { accent-color:var(--accent); flex:1; min-width:120px; }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px;
+    padding:8px 12px; font:inherit; cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:disabled { opacity:.4; cursor:default; }
+  button.primary { background:var(--accent); color:#06212c; border-color:var(--accent); font-weight:600; }
+  .seg { display:grid; grid-template-columns:repeat(auto-fit,minmax(78px,1fr)); gap:6px; flex:1; }
+  .seg button { padding:8px 4px; font-size:13px; }
+  .seg button.sel { background:var(--accent-dim); border-color:var(--accent); color:var(--accent); }
+  .switch { position:relative; width:42px; height:24px; flex:0 0 auto; }
+  .switch input { opacity:0; width:0; height:0; }
+  .slider { position:absolute; inset:0; background:var(--off); border-radius:24px; transition:.2s; cursor:pointer; }
+  .slider:before { content:""; position:absolute; width:18px; height:18px; left:3px; top:3px; background:#fff;
+    border-radius:50%; transition:.2s; }
+  .switch input:checked + .slider { background:var(--accent-dim); }
+  .switch input:checked + .slider:before { transform:translateX(18px); background:var(--accent); }
+  .switch input:focus-visible + .slider { outline:2px solid var(--accent); }
+  .hint { color:var(--muted); font-size:12px; margin:6px 0 0; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; }
+  .chips button { padding:3px 8px; font-size:12px; font-family:ui-monospace,Consolas,monospace; }
+  .val { min-width:38px; text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); font-size:13px; }
+  .off-note { color:var(--muted); font-size:12px; }
+  [hidden] { display:none !important; }
+
+  /* live preview */
+  .preview { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  .time { font:600 34px/1 ui-monospace,Consolas,monospace; letter-spacing:2px; }
+  .msg { font:600 20px/1 ui-monospace,Consolas,monospace; color:var(--accent); background:#0a0c0e; border:1px solid var(--line);
+         border-radius:6px; padding:8px 10px; letter-spacing:3px; white-space:pre; overflow:hidden; text-overflow:ellipsis; min-width:8ch; max-width:100%; }
+  .grid7 { display:grid; grid-template-columns:repeat(9,10px); gap:3px; padding:2px; }
+  .grid7 i { width:10px; height:10px; border-radius:50%; background:#1b2026; }
+  .grid7 i.on { background:var(--accent); box-shadow:0 0 6px var(--accent); }
+  .grid7 i.edge { border-radius:2px; }
+  .grid7 i.edge.on { background:var(--accent-dim); box-shadow:none; }
+  .grid7 i.blank { visibility:hidden; }
+  .facts { color:var(--muted); font-size:13px; display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; }
+  .facts b { color:var(--text); font-weight:600; }
+  .banner { background:var(--accent-dim); color:var(--text); border-radius:7px; padding:8px 10px; font-size:13px; margin-top:10px; }
+
+  footer { max-width:900px; margin:0 auto; padding:4px 16px 24px; display:flex; gap:16px; flex-wrap:wrap; font-size:13px; }
+  footer a { color:var(--accent); }
+  #toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:var(--panel2); border:1px solid var(--line);
+           border-radius:8px; padding:9px 14px; font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none;
+           max-width:calc(100% - 32px); }
+  #toast.show { opacity:1; }
+  #toast.err { border-color:var(--bad); color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>WFD Clock</h1>
+  <span><span class="dot" id="dot"></span><span id="conn">connecting…</span></span>
+</header>
+
+<main>
+  <section style="grid-column:1/-1">
+    <h2>On the clock now</h2>
+    <div class="preview">
+      <div class="time" id="time">--:--:--</div>
+      <div class="msg" id="msg">      </div>
+      <div class="grid7" id="grid" aria-label="7 by 7 grid"></div>
+    </div>
+    <div class="facts">
+      <span>Weather <b id="wx">—</b></span>
+      <span>WiFi <b id="wifi">—</b></span>
+      <span>Time sync <b id="ntp">—</b></span>
+    </div>
+    <div class="banner" id="appBanner" hidden>The PC app is connected and driving the display. The settings
+      marked “when the app is off” take over when it stops.</div>
+  </section>
+
+  <section>
+    <h2>Clock</h2>
+    <div class="row"><label for="brightness">Brightness</label>
+      <input type="range" id="brightness" min="1" max="16"><span class="val" id="brightVal"></span></div>
+    <div class="row"><label>Format</label>
+      <div class="seg" id="fmt"><button data-v="1">24-hour</button><button data-v="0">12-hour</button></div></div>
+    <div class="row"><label>Spectrum</label>
+      <div class="seg" id="style">
+        <button data-v="1">Bars</button><button data-v="2">Top-down</button><button data-v="3">Center</button>
+        <button data-v="4">Peak dot</button><button data-v="5">Bars+peak</button></div></div>
+    <p class="hint">The spectrum shows PC audio while the app runs.</p>
+  </section>
+
+  <section>
+    <h2>Message line <small>when the app is off</small>
+      <label class="switch" title="Run the message line"><input type="checkbox" id="msg_standalone"><span class="slider"></span></label></h2>
+    <p class="off-note" id="msgOff" hidden>Off: the clock shows just the temperature.</p>
+    <div id="msgBody">
+      <div class="row"><label>Show</label>
+        <div class="seg" id="mode"><button data-v="weather">Temp</button><button data-v="text">Text</button>
+          <button data-v="date">Date</button><button data-v="rotate">Rotate</button></div></div>
+      <div class="row"><label for="offline_text">Text</label>
+        <input type="text" id="offline_text" maxlength="96" placeholder="e.g. HI {time12}">
+        <button class="primary" id="saveText">Save</button></div>
+      <div class="chips" id="chips">
+        <button data-p="{time}">{time}</button><button data-p="{time12}">{time12}</button>
+        <button data-p="{date}">{date}</button><button data-p="{day}">{day}</button><button data-p="{temp}">{temp}</button></div>
+      <div id="rotRow" hidden>
+        <div class="row"><label>Rotate</label>
+          <label><input type="checkbox" data-r="weather"> Temp</label>
+          <label><input type="checkbox" data-r="text"> Text</label>
+          <label><input type="checkbox" data-r="date"> Date</label></div>
+        <div class="row"><label for="dwell">Each for</label>
+          <input type="number" id="dwell" min="2" max="600"><label>seconds</label></div>
+      </div>
+      <div class="row"><label for="scroll">Scroll speed</label>
+        <input type="range" id="scroll" min="100" max="1000" step="50" style="direction:rtl"><span class="val" id="scrollVal"></span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Grid <small>when the app is off</small>
+      <label class="switch" title="Play an animation"><input type="checkbox" id="grid_standalone"><span class="slider"></span></label></h2>
+    <div id="gridBody">
+      <div class="seg" id="anim"></div>
+      <div class="row"><label for="fps">Speed</label>
+        <input type="range" id="fps" min="2" max="25"><span class="val" id="fpsVal"></span></div>
+      <div class="row"><label for="frame">Border</label>
+        <label class="switch"><input type="checkbox" id="frame"><span class="slider"></span></label></div>
+      <p class="hint">Draw your own animation in the PC app's grid animator, then “Save to clock”.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Weather &amp; time zone</h2>
+    <div class="row"><label for="zip">ZIP code</label>
+      <input type="text" id="zip" inputmode="numeric" maxlength="5" placeholder="76708" style="max-width:110px">
+      <button class="primary" id="saveZip">Save</button></div>
+    <div class="row"><label for="units">Units</label>
+      <select id="units"><option value="fahrenheit">°F</option><option value="celsius">°C</option></select></div>
+    <div class="row"><label for="tz">Time zone</label>
+      <select id="tz">
+        <option value="EST5EDT,M3.2.0,M11.1.0">Eastern</option><option value="CST6CDT,M3.2.0,M11.1.0">Central</option>
+        <option value="MST7MDT,M3.2.0,M11.1.0">Mountain</option><option value="MST7">Arizona</option>
+        <option value="PST8PDT,M3.2.0,M11.1.0">Pacific</option><option value="UTC0">UTC</option></select></div>
+  </section>
+</main>
+
+<footer>
+  <a href="/wifi">WiFi network</a><a href="/update">Firmware update</a>
+  <a href="/control">Basic controls</a><a href="/status">Status page</a><span class="off-note" id="fw"></span>
+</footer>
+<div id="toast" role="status"></div>
+
+<script>
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const ANIMS = ['spin','bounce','rain','wave','pulse','sparkle','scan','life','heart'];
+let cfg = {}, editing = null;
+
+// ---- talking to the clock ----
+function toast(text, err) {
+  const t = $('#toast'); t.textContent = text; t.className = 'show' + (err ? ' err' : '');
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.className = '', err ? 4000 : 1400);
+}
+async function set(patch) {
+  Object.assign(cfg, patch); render();
+  try {
+    const r = await fetch('/api/set', { method:'POST', headers:{'Content-Type':'application/json','X-WFD':'1'},
+                                        body: JSON.stringify(patch) });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const e = body.error;
+      toast(typeof e === 'object' ? Object.entries(e).map(([k, v]) => `${k}: ${v}`).join('; ') : (e || 'not saved'), true);
+    } else toast(body.warning ? Object.values(body.warning).join('; ') : 'Saved', !!body.warning);
+  } catch { toast('clock unreachable', true); }
+  poll();
+}
+async function poll() {
+  try {
+    const d = await (await fetch('/api/status', {cache:'no-store'})).json();
+    $('#dot').classList.add('on'); $('#conn').textContent = d.state.wifi.ssid ? 'online' : 'connected';
+    cfg = d.config; show(d.state); render();
+  } catch { $('#dot').classList.remove('on'); $('#conn').textContent = 'clock unreachable'; }
+}
+
+// ---- live preview ----
+const cells = [];
+(function buildGrid() {                       // 9x9: border frame around the 7x7 grid
+  const g = $('#grid');
+  for (let r = -1; r < 8; r++) for (let c = -1; c < 8; c++) {
+    const i = document.createElement('i');
+    const edge = r < 0 || r > 6 || c < 0 || c > 6, corner = (r < 0 || r > 6) && (c < 0 || c > 6);
+    if (corner) i.className = 'blank'; else if (edge) i.className = 'edge';
+    g.appendChild(i); if (!edge) cells.push(i);
+  }
+})();
+function show(s) {
+  $('#time').textContent = (s.time || '').slice(11) || '--:--:--';
+  const temp = s.weather.fresh ? `${s.weather.temp}${s.weather.unit}` : '';
+  $('#msg').textContent = s.app_connected ? '(from PC)'
+    : cfg.msg_standalone ? (s.message || '').padEnd(6) : temp.padStart(6);   // off: just the temperature
+  (s.grid_rows || []).forEach((row, r) => { for (let c = 0; c < 7; c++) cells[r * 7 + c].classList.toggle('on', !!(row & (1 << c))); });
+  const showGrid = !s.app_connected && cfg.grid_standalone;
+  $$('#grid .edge').forEach(e => e.classList.toggle('on', showGrid && !!cfg.standalone_frame));
+  if (!showGrid) cells.forEach(e => e.classList.remove('on'));
+  $('#wx').textContent = s.weather.fresh ? `${s.weather.temp}°${s.weather.unit} ${s.weather.cond}` : 'not loaded';
+  $('#wifi').textContent = `${s.wifi.ssid} · ${s.wifi.rssi} dBm`;
+  $('#ntp').textContent = s.ntp ? 'synced' : 'waiting';
+  $('#appBanner').hidden = !s.app_connected;
+  $('#fw').textContent = s.fw;
+  const custom = $('#anim [data-v=custom]');
+  custom.textContent = `Drawn (${s.stored_frames})`; custom.disabled = !s.stored_frames;
+}
+
+// ---- settings -> controls ----
+function sel(group, v) { $$(group + ' button').forEach(b => b.classList.toggle('sel', b.dataset.v === String(v))); }
+function val(id, v) { const e = $(id); if (e !== editing && e !== document.activeElement) e.value = v; }
+function render() {
+  val('#brightness', cfg.brightness); $('#brightVal').textContent = cfg.brightness;
+  sel('#fmt', cfg.clock_24h ? 1 : 0); sel('#style', cfg.style);
+  $('#msg_standalone').checked = cfg.msg_standalone; $('#msgBody').hidden = !cfg.msg_standalone; $('#msgOff').hidden = cfg.msg_standalone;
+  sel('#mode', cfg.standalone_msg_mode); $('#rotRow').hidden = cfg.standalone_msg_mode !== 'rotate';
+  val('#offline_text', cfg.offline_text); val('#dwell', cfg.standalone_dwell);
+  $$('[data-r]').forEach(b => b.checked = (cfg.standalone_rotate || []).includes(b.dataset.r));
+  val('#scroll', cfg.standalone_scroll_ms); $('#scrollVal').textContent = cfg.standalone_scroll_ms + ' ms';
+  $('#grid_standalone').checked = cfg.grid_standalone; $('#gridBody').hidden = !cfg.grid_standalone;
+  sel('#anim', cfg.standalone_anim); val('#fps', cfg.standalone_fps); $('#fpsVal').textContent = cfg.standalone_fps + '/s';
+  $('#frame').checked = cfg.standalone_frame;
+  val('#zip', cfg.location); val('#units', cfg.units); val('#tz', cfg.tz);
+}
+
+// ---- controls -> settings ----
+$('#anim').innerHTML = ANIMS.map(a => `<button data-v="${a}">${a[0].toUpperCase() + a.slice(1)}</button>`).join('')
+  + '<button data-v="custom" disabled>Drawn</button>';
+const seg = (id, f) => $(id).onclick = e => { if (e.target.dataset.v && !e.target.disabled) set(f(e.target.dataset.v)); };
+seg('#fmt', v => ({ clock_24h: v === '1' }));
+seg('#style', v => ({ style: +v }));
+seg('#mode', v => ({ standalone_msg_mode: v }));
+seg('#anim', v => ({ standalone_anim: v }));
+$('#brightness').oninput = e => { $('#brightVal').textContent = e.target.value; clearTimeout(set.b);
+  set.b = setTimeout(() => set({ brightness: +e.target.value }), 120); };
+$('#scroll').oninput = e => $('#scrollVal').textContent = e.target.value + ' ms';
+$('#scroll').onchange = e => set({ standalone_scroll_ms: +e.target.value });
+$('#fps').oninput = e => $('#fpsVal').textContent = e.target.value + '/s';
+$('#fps').onchange = e => set({ standalone_fps: +e.target.value });
+$('#dwell').onchange = e => set({ standalone_dwell: Math.round(+e.target.value) });
+$('#frame').onchange = e => set({ standalone_frame: e.target.checked });
+$('#msg_standalone').onchange = e => set({ msg_standalone: e.target.checked });
+$('#grid_standalone').onchange = e => set({ grid_standalone: e.target.checked });
+$$('[data-r]').forEach(b => b.onchange = () => set({ standalone_rotate: $$('[data-r]').filter(x => x.checked).map(x => x.dataset.r) }));
+$('#units').onchange = e => set({ units: e.target.value });
+$('#tz').onchange = e => set({ tz: e.target.value });
+const saveText = () => set({ offline_text: $('#offline_text').value });
+$('#saveText').onclick = saveText;
+$('#offline_text').onkeydown = e => { if (e.key === 'Enter') saveText(); };
+$('#chips').onclick = e => {                  // insert a placeholder at the cursor
+  const p = e.target.dataset.p, t = $('#offline_text'); if (!p) return;
+  const at = t.selectionStart ?? t.value.length;
+  t.value = t.value.slice(0, at) + p + t.value.slice(t.selectionEnd ?? at); t.focus();
+  t.setSelectionRange(at + p.length, at + p.length);
+};
+const saveZip = () => set({ location: $('#zip').value.trim() });
+$('#saveZip').onclick = saveZip;
+$('#zip').onkeydown = e => { if (e.key === 'Enter') saveZip(); };
+for (const id of ['#offline_text', '#zip', '#dwell']) {   // don't overwrite what's being typed
+  $(id).onfocus = e => editing = e.target; $(id).onblur = () => editing = null;
+}
+
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>

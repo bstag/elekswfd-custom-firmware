@@ -16,6 +16,7 @@
 #include "clock_panel.h"
 #include "font14_table.h"
 #include "grid_engine.h"
+#include "web_dashboard.h"
 
 static Preferences prefs;
 
@@ -735,7 +736,7 @@ static String controlPage() {
        "<input type=range name=mscroll min=100 max=1000 step=50 value=" + String(msgScroll) + ">";
   s += "<p class=dim style=font-size:13px>Now showing: <b>" + esc(msgShown.length() ? msgShown : String("—")) + "</b></p>";
   s += "<button type=submit>Apply</button></form>";
-  s += "<p class=dim><a href=/>Status</a> &middot; <a href=/update>Firmware update</a></p>";
+  s += "<p class=dim><a href=/>Dashboard</a> &middot; <a href=/status>Status</a> &middot; <a href=/update>Firmware update</a></p>";
   return page("WFD Control", s);
 }
 // ============================= settings (JSON API + phone form) =============================
@@ -927,7 +928,10 @@ static void handleApiSet() {
   if (web.header("X-WFD") != "1") { out["error"] = "missing X-WFD header"; return sendJson(403, out); }
   if (!webAuthed()) return;
   JsonDocument in;
-  if (deserializeJson(in, web.arg("plain")) || !in.is<JsonObject>()) { out["error"] = "expected a JSON object"; return sendJson(400, out); }
+  if (deserializeJson(in, web.arg("plain")) || !in.is<JsonObject>()) {
+    out["error"] = "expected a JSON object (send Content-Type: application/json)";
+    return sendJson(400, out);
+  }
   sendJson(applySettings(in.as<JsonObjectConst>(), out) ? 200 : 400, out);
 }
 
@@ -993,7 +997,13 @@ static const char *UPDATE_FORM =
     "<p class=dim>Upload a firmware .bin for this clock. It reboots when done. <a href=/>Back</a></p>";
 
 static void startWebRoutes() {
-  web.on("/", []() { web.send(200, "text/html", apMode ? setupPage() : statusPage()); });
+  web.on("/", []() {                             // setup portal in AP mode, else the dashboard
+    if (apMode) return web.send(200, "text/html", setupPage());
+    if (!webAuthed()) return;                      // so the browser has the login for the API calls
+    web.sendHeader("Content-Encoding", "gzip");
+    web.send_P(200, "text/html", (const char *)DASHBOARD_GZ, DASHBOARD_GZ_LEN);
+  });
+  web.on("/status", []() { web.send(200, "text/html", statusPage()); });
   web.on("/save", HTTP_POST, handleSave);
   web.on("/wifi", HTTP_GET, []() {                // change networks (also reachable in AP mode)
     if (!webAuthed()) return;
@@ -1021,7 +1031,10 @@ static void startWebRoutes() {
     delay(700);
     ESP.restart();
   }, handleUpdateUpload);
-  web.onNotFound([]() { web.send(200, "text/html", apMode ? setupPage() : statusPage()); });
+  web.onNotFound([]() {                          // captive portal: every URL is the setup page
+    if (apMode) web.send(200, "text/html", setupPage());
+    else web.send(404, "text/plain", "not found");
+  });
   web.begin();
 }
 
@@ -1129,7 +1142,7 @@ static String statusPage() {
   bool wxfresh = millis() - wxTime < 1200000;
   s += "<p>Weather: <b>" + (wxfresh ? String(wxTemp) + (wxUnit ? "C " : "F ") + cond : String("—")) +
        "</b> &nbsp; loc " + (g_lat.length() ? g_lat + "," + g_lon : String("unset")) + "</p>";
-  s += "<p><a href=/control style=font-weight:600>⚙ Control panel</a></p>";
+  s += "<p><a href=/ style=font-weight:600>⚙ Dashboard</a> &nbsp; <a href=/control>Basic controls</a></p>";
   s += "<p><a href=/update>Firmware update</a> &nbsp; <a href=/wifi class=warn>Change WiFi</a></p>";
   return page("WFD Clock", s);
 }
