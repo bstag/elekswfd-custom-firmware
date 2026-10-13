@@ -162,6 +162,7 @@ static void setStyle(int v) {
   if (v != specStyle) { specStyle = v; prefs.putInt("style", specStyle); }  // remember across power-off
 }
 
+static int clock24 = 1;               // 1 = 24-hour, 0 = 12-hour display
 static int brightness = 6;            // 1..16 (TM1680 PWM)
 static void setBrightness(int v) {
   if (v < 1) v = 1; if (v > 16) v = 16;
@@ -196,8 +197,14 @@ static void draw() {
   memset(ram, 0, sizeof ram);
   const uint8_t *t = curT;
   int hh = bcd2dec(t[2] & 0x3F), mi = bcd2dec(t[1]), ss = bcd2dec(t[0] & 0x7F);
+  bool blankTens = false;
+  if (!clock24) {                       // 12-hour display
+    hh %= 12; if (hh == 0) hh = 12;
+    blankTens = (hh < 10);              // drop the leading zero (e.g. 1:23 not 01:23)
+  }
   int d6[6] = {hh / 10, hh % 10, mi / 10, mi % 10, ss / 10, ss % 10};
-  for (int i = 0; i < 6; i++) ram[DIGIT_BYTE[i]] = DIGIT_FONT[d6[i] % 10];
+  for (int i = 0; i < 6; i++)
+    ram[DIGIT_BYTE[i]] = (i == 0 && blankTens) ? 0 : DIGIT_FONT[d6[i] % 10];
   for (int i = 0; i < 2; i++) ram[COLON_BYTE[i]] |= COLON_MASK[i];
   int dow = t[3] & 0x07;
   if (dow >= 1 && dow <= 7) ram[DAYS[dow - 1].byte] |= DAYS[dow - 1].mask;
@@ -405,6 +412,10 @@ static void handle(const String &s) {
     logoOn = s.substring(4).toInt() ? 1 : 0;
     logoTime = millis();
     draw();
+  } else if (s.startsWith("CLK24")) {
+    clock24 = s.substring(5).toInt() ? 1 : 0;
+    prefs.putInt("clk24", clock24);
+    draw();
   } else if (s.startsWith("BRIGHT")) {
     setBrightness(s.substring(6).toInt());
     Serial.printf("OK bright %d\n", brightness);
@@ -530,6 +541,8 @@ static String controlPage() {
     ".row{display:flex;gap:10px;align-items:center;margin-top:14px}.row input{width:auto}.row label{margin:0}</style>"
     "<h2>WFD Clock Control</h2><form method=POST action=/control>";
   s += "<label>Brightness</label><input type=range name=bright min=1 max=16 value=" + String(brightness) + ">";
+  s += "<label>Clock format</label><select name=clk24><option value=1" + String(clock24 ? " selected" : "") +
+       ">24-hour</option><option value=0" + String(clock24 ? "" : " selected") + ">12-hour</option></select>";
   s += "<label>Weather ZIP</label><input name=zip value='" + zip + "' placeholder='e.g. 76708'>";
   s += "<label>Units</label><select name=units><option value=f" + String(g_wunit ? "" : " selected") +
        ">Fahrenheit</option><option value=c" + String(g_wunit ? " selected" : "") + ">Celsius</option></select>";
@@ -551,6 +564,7 @@ static String controlPage() {
 }
 static void handleControlPost() {
   if (web.hasArg("bright")) setBrightness(web.arg("bright").toInt());
+  if (web.hasArg("clk24")) { clock24 = web.arg("clk24").toInt() ? 1 : 0; prefs.putInt("clk24", clock24); }
   if (web.hasArg("units")) { g_wunit = web.arg("units") == "c" ? 1 : 0; prefs.putInt("wunit", g_wunit); }
   if (web.hasArg("tz")) { g_tz = web.arg("tz"); prefs.putString("tz", g_tz);
                           configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov"); }
@@ -724,6 +738,7 @@ void setup() {
   prefs.begin("wfd", false);
   specStyle = prefs.getInt("style", 4);   // restore saved style, default = peak dot
   brightness = prefs.getInt("bright", 6);
+  clock24 = prefs.getInt("clk24", 1);
   tmCmd(0xB0 | ((brightness - 1) & 0x0F));
   gaN = prefs.getInt("gn", 0);            // restore stored standalone animation
   gaFps = prefs.getInt("gfps", 8);

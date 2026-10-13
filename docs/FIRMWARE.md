@@ -32,6 +32,7 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `BARS cpu gpu ram` | CPU/GPU/RAM bars, each 0–100 % |
 | `WX code temp unit` | Weather: code 1=sunny 2=cloud 3=rain, unit 0=F 1=C |
 | `BRIGHT 1..16` | Brightness (persisted) |
+| `CLK24 0/1` | 24‑hour (1) or 12‑hour (0) clock display (persisted) |
 | `MSG b0..b11` | 6 message chars, raw glyph bytes (lo,hi ×6) |
 | `GRID r0..r6 frame` | 7×7 grid rows (bit c = column c) + border‑frame flag |
 | `GCLR` / `GADD r0..r6` / `GCOMMIT fps frame` | Upload a stored grid animation to flash |

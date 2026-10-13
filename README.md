@@ -1,9 +1,19 @@
 # WFD — custom firmware & control app for the EleksWFD clock
 
+![platform](https://img.shields.io/badge/platform-ESP32--WROOM--32D-0A7BBB)
+![build](https://img.shields.io/badge/build-PlatformIO%20%2F%20Arduino-FF7F00)
+![updates](https://img.shields.io/badge/updates-OTA%20over%20WiFi-2f7a52)
+![interface](https://img.shields.io/badge/UI-phone%20web%20%2B%20PC%20app-72d3ff)
+![license](https://img.shields.io/badge/license-MIT-brightgreen)
+
 Open replacement firmware and a PC companion app for the **EleksMaker EleksWFD** desk
 clock (the LED‑matrix "word/weather/spectrum" clock). The stock firmware and its
 unmaintained Windows tool are replaced entirely, turning the clock into a fully
 controllable, WiFi‑connected device.
+
+| PC dashboard | Phone control (on the clock) | Grid animator |
+|---|---|---|
+| ![dashboard](docs/assets/dashboard.jpg) | ![phone](docs/assets/phone-control.jpg) | ![animator](docs/assets/grid-animator.jpg) |
 
 This started as reverse engineering of the stock device and grew into a complete
 custom firmware. If you have one of these clocks, you can go on the same adventure —
@@ -21,7 +31,7 @@ Runs on an **ESP32‑WROOM‑32D** driving a **TM1680** LED matrix, a **DS3231**
 buttons, and an electret mic.
 
 **Standalone (no PC — over WiFi):**
-- Self‑correcting **NTP time**, DST‑aware
+- Self‑correcting **NTP time**, DST‑aware, **12‑ or 24‑hour**
 - **Weather** (word + temperature) fetched directly from Open‑Meteo
 - A **phone web control panel** (brightness, weather location/units, timezone, offline
   message, standalone toggles)
@@ -31,7 +41,7 @@ buttons, and an electret mic.
 **With the PC companion app (`wfd-control`):**
 - **Spectrum** visualizer — PC audio output + microphone, five styles
 - **CPU / GPU / RAM** bar meters
-- **Message line** — scrolling window title, custom text, weather temp, or a rotation
+- **Message line** — scrolling window title, custom text (with date/time placeholders), weather temp, date, or a rotation
 - **7×7 grid** — 13 animations incl. audio/CPU‑reactive, plus a **drawing tool**
 - **Top‑row icons** (audio meter / system status) and **logo** toggle
 - Sets time, weather location, brightness, and uploads animations/messages to flash

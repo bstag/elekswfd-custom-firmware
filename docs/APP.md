@@ -18,12 +18,12 @@ drawing tool and fonts use `font14.py` / `grid_anim.py` (in the same folder).
 
 ## What it provides
 
-- **Clock** — time sync (DST‑aware), brightness
+- **Clock** — time sync (DST‑aware), **12/24‑hour** format, brightness
 - **Spectrum** — PC audio output (WASAPI loopback) on the left column, default mic on the
   right; five styles; gain sliders
 - **System bars** — live CPU (psutil) / GPU (`nvidia-smi`) / RAM
 - **Weather** — resolves a ZIP or "Town, State" and pushes it; shows condition + temp
-- **Message line** — weather temp / scrolling window title / custom text / rotation
+- **Message line** — weather temp / window title / custom text / **date** / rotation; custom text supports `{date} {time} {time12} {day}` placeholders
 - **Grid** — 13 animations incl. audio/CPU‑reactive; **Save to clock** stores repeatable
   ones to flash; the **grid animator** (`/draw`) is a 7×7 frame editor with live preview
 - **Top row** — icon modes (audio meter / system status) and the logo toggle

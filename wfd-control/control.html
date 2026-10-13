@@ -70,6 +70,10 @@
       <input type="range" id="brightness" min="1" max="16">
       <span id="brightVal"></span>
     </div>
+    <div class="row">
+      <label class="switch"><input type="checkbox" id="clock_24h"><span class="slider"></span></label>
+      <label for="clock_24h">24-hour clock <span class="hint">(off = 12-hour)</span></label>
+    </div>
   </section>
 
   <section>
@@ -123,14 +127,15 @@
   <section>
     <h2>Message line</h2>
     <label>What the 6 message characters show</label>
-    <div class="styles" id="msgMode" style="grid-template-columns:repeat(4,1fr); margin-bottom:10px">
-      <button data-m="weather">Weather temp</button>
-      <button data-m="window">Window title</button>
-      <button data-m="text">Custom text</button>
+    <div class="styles" id="msgMode" style="grid-template-columns:repeat(5,1fr); margin-bottom:10px">
+      <button data-m="weather">Weather</button>
+      <button data-m="window">Window</button>
+      <button data-m="text">Text</button>
+      <button data-m="date">Date</button>
       <button data-m="rotate">Rotate</button>
     </div>
     <div class="row">
-      <input type="text" id="custom_text" placeholder="Custom text to scroll" style="flex:1">
+      <input type="text" id="custom_text" placeholder="Custom text — use {date} {time} {time12} {day}" style="flex:1">
       <button class="primary" id="applyText">Set</button>
     </div>
     <div class="row" id="rotateRow">
@@ -138,6 +143,7 @@
       <label><input type="checkbox" id="rotate_weather"> Weather</label>
       <label><input type="checkbox" id="rotate_window"> Window</label>
       <label><input type="checkbox" id="rotate_text"> Text</label>
+      <label><input type="checkbox" id="rotate_date"> Date</label>
       <label>· every</label><input type="text" id="rotate_dwell" style="width:46px"> s
     </div>
     <div class="row" style="border-top:1px solid var(--line); padding-top:12px">
@@ -239,7 +245,7 @@ async function poll() {
 
 function applyConfig(c) {
   cfg = c;
-  for (const id of ['time_sync','spectrum','bars','weather']) $('#'+id).checked = !!c[id];
+  for (const id of ['time_sync','clock_24h','spectrum','bars','weather']) $('#'+id).checked = !!c[id];
   $('#brightness').value = c.brightness; $('#brightVal').textContent = c.brightness;
   $('#gain_out').value = c.gain_out; $('#gain_mic').value = c.gain_mic;
   if ($('#location') !== document.activeElement) $('#location').value = c.location;
@@ -247,7 +253,7 @@ function applyConfig(c) {
   [...$('#styles').children].forEach(b => b.classList.toggle('sel', +b.dataset.s === c.style));
   [...$('#msgMode').children].forEach(b => b.classList.toggle('sel', b.dataset.m === c.message_mode));
   if ($('#custom_text') !== document.activeElement) $('#custom_text').value = c.custom_text;
-  for (const k of ['rotate_weather','rotate_window','rotate_text']) $('#'+k).checked = !!c[k];
+  for (const k of ['rotate_weather','rotate_window','rotate_text','rotate_date']) $('#'+k).checked = !!c[k];
   if ($('#rotate_dwell') !== document.activeElement) $('#rotate_dwell').value = c.rotate_dwell;
   $('#rotateRow').style.display = c.message_mode === 'rotate' ? 'flex' : 'none';
   $('#grid_enable').checked = !!c.grid_enable;
@@ -268,7 +274,7 @@ function applyConfig(c) {
   $('#iconHint').textContent = ih[c.icon_mode] || '';
 }
 
-for (const id of ['time_sync','spectrum','bars','weather'])
+for (const id of ['time_sync','clock_24h','spectrum','bars','weather'])
   $('#'+id).onchange = e => setCfg({ [id]: e.target.checked });
 $('#brightness').oninput = e => { $('#brightVal').textContent = e.target.value; setCfg({ brightness: +e.target.value }); };
 $('#gain_out').onchange = e => setCfg({ gain_out: +e.target.value });
@@ -282,7 +288,7 @@ $('#msgMode').onclick = e => { if (e.target.dataset.m) { setCfg({ message_mode: 
 $('#applyText').onclick = () => setCfg({ custom_text: $('#custom_text').value, message_mode: 'text' });
 $('#custom_text').onfocus = () => suppress = true;
 $('#custom_text').onblur = () => suppress = false;
-for (const k of ['rotate_weather','rotate_window','rotate_text'])
+for (const k of ['rotate_weather','rotate_window','rotate_text','rotate_date'])
   $('#'+k).onchange = e => setCfg({ [k]: e.target.checked });
 $('#rotate_dwell').onchange = e => setCfg({ rotate_dwell: Math.max(2, +e.target.value || 8) });
 $('#grid_enable').onchange = e => setCfg({ grid_enable: e.target.checked });

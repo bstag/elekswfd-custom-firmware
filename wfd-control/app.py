@@ -38,7 +38,7 @@ CONFIG = HERE / "wfd_config.json"
 NLEV = 12
 
 DEFAULTS = {
-    "time_sync": True,
+    "time_sync": True, "clock_24h": True,
     "spectrum": True, "style": 4, "gain_out": 1.0, "gain_mic": 1.0,
     "bars": True,
     "weather": True, "location": "", "units": "fahrenheit",
@@ -46,7 +46,7 @@ DEFAULTS = {
     "message_mode": "weather",        # weather | window | text | rotate
     "custom_text": "HELLO",
     "scroll_ms": 350,
-    "rotate_weather": True, "rotate_window": True, "rotate_text": False,
+    "rotate_weather": True, "rotate_window": True, "rotate_text": False, "rotate_date": False,
     "rotate_dwell": 8,                 # seconds per item in rotate mode
     "grid_enable": False, "grid_anim": "spin", "grid_frame": False, "grid_fps": 12,
     "grid_custom": [],                 # list of frames, each = [r0..r6] row bytes
@@ -339,6 +339,7 @@ def worker():
     last_grid = 0.0
     sent_gauto = sent_omauto = None
     sent_geo = None
+    sent_clk24 = None
     worker.sync_now = False
     while not stop.is_set():
         if s is None or not s.is_open:
@@ -366,6 +367,9 @@ def worker():
             if sent_bright != c["brightness"]:
                 s.write(f"BRIGHT {c['brightness']}\n".encode())
                 sent_bright = c["brightness"]
+            if sent_clk24 != c["clock_24h"]:
+                s.write(f"CLK24 {1 if c['clock_24h'] else 0}\n".encode())
+                sent_clk24 = c["clock_24h"]
             if sent_gauto != c["grid_standalone"]:
                 s.write(f"GAUTO {1 if c['grid_standalone'] else 0}\n".encode())
                 sent_gauto = c["grid_standalone"]
@@ -423,10 +427,10 @@ def worker():
             # message line: weather temp / window title / custom text / rotation
             mode = c["message_mode"]
             cur = None                      # which source to show right now
-            if mode in ("window", "text"):
+            if mode in ("window", "text", "date"):
                 cur = mode
             elif mode == "rotate":
-                srcs = [x for x in ("weather", "window", "text") if c.get("rotate_" + x)]
+                srcs = [x for x in ("weather", "window", "text", "date") if c.get("rotate_" + x)]
                 if srcs:
                     if time.time() >= rot_until:
                         rot_idx = (rot_idx + 1) % len(srcs)
@@ -443,7 +447,20 @@ def worker():
                     frame = font14.render6(txt.rjust(6), 0)
                     state["message"] = "temp " + txt
                 else:
-                    txt = (foreground_title() if cur == "window" else c["custom_text"]).strip() or " "
+                    now = datetime.datetime.now()
+                    fill = {"date": now.strftime("%a %b %d").upper(),
+                            "time": now.strftime("%H:%M"),
+                            "time12": now.strftime("%I:%M").lstrip("0") + now.strftime("%p"),
+                            "day": now.strftime("%A").upper()}
+                    if cur == "window":
+                        txt = foreground_title()
+                    elif cur == "date":
+                        txt = fill["date"]
+                    else:                       # custom text, with {date}/{time}/{time12}/{day} placeholders
+                        txt = c["custom_text"]
+                        for k, v in fill.items():
+                            txt = txt.replace("{" + k + "}", v)
+                    txt = txt.strip() or " "
                     if txt != cur_src:
                         cur_src = txt
                         scroll_pos = 0
