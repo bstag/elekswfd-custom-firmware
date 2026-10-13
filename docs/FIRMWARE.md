@@ -91,3 +91,20 @@ Both headers are committed, so a fresh clone builds as-is.
 - `clock_panel.h` (LED/segment map): hand-assembled from the mapping results in
   `wfd-firmware/tools/` (`panel_map.json`, `segmap.json`). It only changes if you re‑map a
   different panel revision.
+
+## Making the release binaries
+
+After `pio run` in `wfd-firmware/clock`, refresh `wfd-firmware/releases/`:
+
+```bash
+cd wfd-firmware
+B=clock/.pio/build/wfd
+cp $B/firmware.bin releases/wfd-clock-firmware.bin          # OTA image
+uvx --from "esptool>=4.7,<5" esptool --chip esp32 merge_bin \
+  -o releases/wfd-clock-merged.bin --flash_mode dio --flash_freq 80m --flash_size 4MB \
+  0x1000 $B/bootloader.bin 0x8000 $B/partitions.bin \
+  0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+  0x10000 $B/firmware.bin                                    # USB image (flash at 0x0)
+```
+
+Keep `--flash_freq 80m`. Without it, esptool rewrites the bootloader header to 40 MHz.
