@@ -14,6 +14,7 @@
 #include <time.h>
 #include "clock_panel.h"
 #include "font14_table.h"
+#include "grid_engine.h"
 
 static Preferences prefs;
 
@@ -115,6 +116,11 @@ static uint8_t upBuf[GA_MAX * 7];
 static int upN = 0;
 static int gaIdx = 0;
 static uint32_t gaStep = 0;
+static int gaAnim = grid::SPIN;       // what plays when the app is off: grid::CUSTOM = gaFrames
+static grid::Engine gEng(esp_random);
+static uint8_t gEngRows[7] = {0};     // current built-in animation frame
+static bool gridReady() { return gaAnim != grid::CUSTOM || gaN > 0; }
+static void setGridAnim(int anim, int fps, int flag);
 
 static void drawGrid(const uint8_t *rows, bool frame) {   // rows[r] bit c = cell (r,c)
   for (int r = 0; r < 7; r++)
@@ -222,8 +228,8 @@ static void draw() {
     drawTemp();                                     // live temperature
   }
   if (millis() - gridTime < 1500) drawGrid(gridRows, gridFrame);    // live grid from the app
-  else if (!appOn && gaAuto && gaN > 0)                             // app off -> stored animation
-    drawGrid(&gaFrames[gaIdx * 7], gaFlag);
+  else if (!appOn && gaAuto && gridReady())                         // app off -> own animation
+    drawGrid(gaAnim == grid::CUSTOM ? &gaFrames[gaIdx * 7] : gEngRows, gaFlag);
   if (millis() - iconTime < 1500)                    // top-row status icons
     for (int i = 0; i < N_ICONS; i++)
       if (iconMask & (1UL << i)) {
@@ -300,12 +306,24 @@ static void handle(const String &s) {
   } else if (cmd == "GCOMMIT") {
     int v[2] = {8, 0};
     parseInts(arg, v, 2);
-    gaN = upN; gaFps = v[0] < 1 ? 1 : v[0]; gaFlag = v[1] ? 1 : 0; gaAuto = 1; gaIdx = 0;
+    gaN = upN; gaIdx = 0;
     memcpy(gaFrames, upBuf, gaN * 7);
     prefs.putBytes("ganim", gaFrames, gaN * 7);
-    prefs.putInt("gn", gaN); prefs.putInt("gfps", gaFps);
-    prefs.putInt("gflag", gaFlag); prefs.putInt("gauto", gaAuto);
+    prefs.putInt("gn", gaN);
+    setGridAnim(grid::CUSTOM, v[0], v[1]);
     Serial.printf("OK stored %d frames\n", gaN);
+  } else if (cmd == "GANIM") {                  // "GANIM <name> [fps] [frame]"  built-in animation
+    int sp2 = arg.indexOf(' ');
+    String name = sp2 < 0 ? arg : arg.substring(0, sp2);
+    int v[2] = {gaFps, gaFlag};
+    if (sp2 > 0) parseInts(arg.substring(sp2 + 1), v, 2);
+    int a = grid::animFromName(name.c_str());
+    if (a < 0) Serial.printf("ERR unknown animation '%s'\n", name.c_str());
+    else { setGridAnim(a, v[0], v[1]); Serial.printf("OK ganim %s %d %d\n", grid::NAMES[gaAnim], gaFps, gaFlag); }
+  } else if (cmd == "GINFO") {
+    const uint8_t *r = gaAnim == grid::CUSTOM ? &gaFrames[gaIdx * 7] : gEngRows;
+    Serial.printf("grid auto=%d anim=%s fps=%d frame=%d stored=%d rows=%d %d %d %d %d %d %d\n", gaAuto,
+                  grid::NAMES[gaAnim], gaFps, gaFlag, gaN, r[0], r[1], r[2], r[3], r[4], r[5], r[6]);
   } else if (cmd == "GAUTO") {
     gaAuto = arg.toInt() ? 1 : 0;
     prefs.putInt("gauto", gaAuto);
@@ -545,6 +563,17 @@ static void render6(const String &s, int start, uint8_t *out) {   // out[12]
     glyph14(c, &out[i * 2], &out[i * 2 + 1]);
   }
 }
+// Choose what the grid plays when the app is off (turns that on), and persist it.
+static void setGridAnim(int anim, int fps, int flag) {
+  gaAnim = constrain(anim, 0, grid::N_ANIM - 1);
+  gaFps = constrain(fps, 1, 30);
+  gaFlag = flag ? 1 : 0;
+  gaAuto = 1;
+  gaIdx = 0;
+  prefs.putInt("gaid", gaAnim); prefs.putInt("gfps", gaFps);
+  prefs.putInt("gflag", gaFlag); prefs.putInt("gauto", gaAuto);
+}
+
 // ---- on-device message engine ----
 static const char *DAY_ABBR[7] = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"};
 static const char *DAY_FULL[7] = {"MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"};
@@ -668,8 +697,21 @@ static String controlPage() {
                          {"Pacific", "PST8PDT,M3.2.0,M11.1.0"}, {"UTC", "UTC0"}};
   for (auto &z : zn) s += "<option value='" + String(z[1]) + "'" + (g_tz == z[1] ? " selected" : "") + ">" + z[0] + "</option>";
   s += "</select>";
+  s += "<h3>Grid <small class=dim>when the app is off</small></h3>";
   s += "<div class=row><input type=checkbox name=gauto id=gauto " + String(gaAuto ? "checked" : "") +
-       "><label for=gauto>Play stored grid animation when app is off</label></div>";
+       "><label for=gauto>Play an animation</label></div>";
+  s += "<label>Animation</label><select name=ganim>";
+  for (int i = 1; i < grid::N_ANIM; i++) {
+    String n = grid::NAMES[i];
+    n.setCharAt(0, n[0] - 32);                       // "spin" -> "Spin"
+    s += "<option value=" + String(i) + (gaAnim == i ? " selected" : "") + ">" + n + "</option>";
+  }
+  s += "<option value=0" + String(gaAnim == grid::CUSTOM ? " selected" : "") + (gaN ? "" : " disabled") +
+       ">Drawn in the app (" + String(gaN) + " frames)</option></select>";
+  s += "<label>Speed <small>(frames per second)</small></label>"
+       "<input type=range name=gfps min=2 max=25 value=" + String(gaFps) + ">";
+  s += "<div class=row><input type=checkbox name=gflag id=gflag " + String(gaFlag ? "checked" : "") +
+       "><label for=gflag>Light the border frame</label></div>";
 
   s += "<h3>Message line <small class=dim>when the app is off</small></h3>";
   s += "<div class=row><input type=checkbox name=omauto id=omauto " + String(omAuto ? "checked" : "") +
@@ -715,7 +757,12 @@ static void handleControlPost() {
     for (int i = 0; i < N_SRC; i++) if (web.hasArg("rot" + String(i))) rot |= 1 << i;
     setMsgCfg(web.arg("mmode").toInt(), rot, web.arg("mdwell").toInt(), web.arg("mscroll").toInt());
   }
-  gaAuto = web.hasArg("gauto") ? 1 : 0; prefs.putInt("gauto", gaAuto);
+  if (web.hasArg("ganim")) {
+    int a = web.arg("ganim").toInt(), f = web.arg("gfps").toInt(), fl = web.hasArg("gflag");
+    if (a != gaAnim || f != gaFps || fl != gaFlag) setGridAnim(a, f, fl);
+  }
+  int ga = web.hasArg("gauto") ? 1 : 0;
+  if (ga != gaAuto) { gaAuto = ga; prefs.putInt("gauto", gaAuto); }
   omAuto = web.hasArg("omauto") ? 1 : 0; prefs.putInt("omauto", omAuto);
   web.sendHeader("Location", "/control");
   web.send(303);
@@ -901,6 +948,8 @@ void setup() {
   gaFlag = prefs.getInt("gflag", 0);
   gaAuto = prefs.getInt("gauto", 0);
   if (gaN > 0 && prefs.getBytes("ganim", gaFrames, gaN * 7) != (size_t)gaN * 7) gaN = 0;
+  // stored frames keep playing after the upgrade; otherwise default to a built-in animation
+  gaAnim = constrain(prefs.getInt("gaid", gaN > 0 ? grid::CUSTOM : grid::SPIN), 0, grid::N_ANIM - 1);
   omAuto = prefs.getInt("omauto", 0);    // restore the message-line engine
   msgMode = constrain(prefs.getInt("mmode", SRC_TEXT), 0, MODE_ROTATE);
   msgRot = prefs.getInt("mrot", 0b111);
@@ -942,10 +991,11 @@ void loop() {
   // advance stored animations only when the app is off
   bool redraw = false;
   bool appOff = millis() - appTime > 2000;
-  if (appOff && gaAuto && gaN > 0 &&
+  if (appOff && gaAuto && gridReady() &&
       millis() - gaStep > (uint32_t)(1000 / (gaFps < 1 ? 1 : gaFps))) {
     gaStep = millis();
-    gaIdx = (gaIdx + 1) % gaN;
+    if (gaAnim == grid::CUSTOM) gaIdx = (gaIdx + 1) % gaN;
+    else gEng.frame(gaAnim, gEngRows);
     redraw = true;
   }
   if (appOff && omAuto && (msgStepAt == 0 || millis() - msgStepAt >= (uint32_t)msgScroll)) {

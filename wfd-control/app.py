@@ -122,17 +122,10 @@ def compute_icons(mode, levels, metrics, online, battery):
         if battery is not None and battery < 30: on.add("battery")
     return sum(1 << ICON[n] for n in on)
 
-REPEATABLE = ["spin", "bounce", "rain", "wave", "pulse", "sparkle", "scan", "life", "heart", "custom"]
-_PERIOD = {"spin": 24, "scan": 7, "pulse": 8, "wave": 18, "heart": 16}
-
-
-def render_grid_frames(anim, custom):
-    if anim == "custom":
-        return [list(f)[:7] for f in (custom or [])] or [[0] * 7]
-    p = _PERIOD.get(anim)
-    n = p * max(1, round(36 / p)) if p else 48
-    eng = grid_anim.GridEngine()
-    return [eng.frame(anim, {}) for _ in range(n)]
+# Animations the clock runs itself (firmware grid_engine.h); "custom" = frames drawn in /draw.
+# The rest (audio, cpu, mouth) need live PC data and can't play standalone.
+BUILTIN_GRID = ["spin", "bounce", "rain", "wave", "pulse", "sparkle", "scan", "life", "heart"]
+REPEATABLE = BUILTIN_GRID + ["custom"]
 
 
 def scroll_frame(text, pos):
@@ -487,6 +480,11 @@ class ClockLink:
             self.send(f"OMTEXT {job['text']}")
             set_state(saved=f"message: {job['text']!r}")
             return
+        if job["type"] == "ganim":         # the clock runs the animation itself
+            self.send(f"GANIM {job['name']} {job['fps']} {1 if job['frame'] else 0}")
+            set_state(saved=f"grid: {job['name']}")
+            self.sent.pop("GAUTO", None)   # GANIM turns auto on; re-assert the setting
+            return
         self.send("GCLR")
         time.sleep(0.03)
         for fr in job["frames"][:80]:
@@ -657,12 +655,19 @@ class H(BaseHTTPRequestHandler):
                 custom = body.get("frames") or cfg.get("grid_custom")
                 fps = int(body.get("fps", cfg["grid_fps"]))
                 frame = bool(body.get("frame", cfg["grid_frame"]))
-            if anim not in REPEATABLE and not body.get("frames"):
+            if body.get("frames") or anim == "custom":
+                if not custom:
+                    return self._send(400, {"error": "no frames drawn yet"})
+                job = {"type": "grid", "frames": custom, "fps": fps, "frame": frame}
+                queued = len(custom)
+            elif anim in BUILTIN_GRID:
+                job = {"type": "ganim", "name": anim, "fps": fps, "frame": frame}
+                queued = 1
+            else:
                 return self._send(400, {"error": f"'{anim}' needs live data; can't store it standalone"})
-            frames = body.get("frames") or render_grid_frames(anim, custom)
             with uploads_lock:
-                uploads.append({"type": "grid", "frames": frames, "fps": fps, "frame": frame})
-            return self._send(200, {"queued": len(frames)})
+                uploads.append(job)
+            return self._send(200, {"queued": queued})
         if self.path == "/api/om_save":
             with cfg_lock:
                 text = body.get("text", cfg["offline_text"])

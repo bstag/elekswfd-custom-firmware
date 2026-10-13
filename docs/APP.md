@@ -24,8 +24,8 @@ drawing tool and fonts use `font14.py` / `grid_anim.py` (in the same folder).
 - **System bars** — live CPU (psutil) / GPU (`nvidia-smi`) / RAM
 - **Weather** — resolves a ZIP or "Town, State" and pushes it; shows condition + temp
 - **Message line** — weather temp / window title / custom text / **date** / rotation; custom text supports `{date} {time} {time12} {day} {temp}` placeholders
-- **Grid** — 13 animations incl. audio/CPU‑reactive; **Save to clock** stores repeatable
-  ones to flash; the **grid animator** (`/draw`) is a 7×7 frame editor with live preview
+- **Grid** — 13 animations incl. audio/CPU‑reactive; **Save to clock** makes the clock play the
+  nine built‑ins itself (or stores your drawing); the **grid animator** (`/draw`) is a 7×7 frame editor with live preview
 - **Top row** — icon modes (audio meter / system status) and the logo toggle
 - **Offline message** + standalone toggles — what the clock shows when the app is off. *Save to clock*
   sends the text (placeholders and all); the clock's phone page picks the mode, rotation and speed
@@ -35,7 +35,8 @@ drawing tool and fonts use `font14.py` / `grid_anim.py` (in the same folder).
 A worker thread connects to the CH340 port (auto‑found by VID/PID `1A86:7523`), then at
 ~30 fps sends `SPEC`, and as needed `BARS`, `WX`, `MSG`, `GRID`, `ICON`, `LOGO`,
 `STYLE`, `BRIGHT`, `GEO`, plus `SET` every 10 min. Uploads (`Save to clock`) go through
-`GCLR/GADD/GCOMMIT` (grid frames) and `OMTEXT` (offline message text). It reconnects automatically if the clock
+`GANIM` (built‑in grid animation, by name), `GCLR/GADD/GCOMMIT` (drawn grid frames) and `OMTEXT`
+(offline message text). It reconnects automatically if the clock
 is unplugged.
 
 **It holds the serial port.** Stop the app (end `pythonw.exe` / `app.py`) before flashing

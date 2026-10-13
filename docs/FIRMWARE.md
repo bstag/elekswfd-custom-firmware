@@ -13,7 +13,7 @@ driven; stale regions clear. Priorities and sources:
 - **Live regions** (spectrum, bars, message, grid, icons, logo, weather) — shown while a
   corresponding command arrived recently (≈1.5 s window).
 - **"App off" fallback** — `appTime` records the last serial command; if none for >2 s
-  the PC app is considered off, and the clock plays its **stored grid animation** and runs
+  the PC app is considered off, and the clock plays its own **grid animation** and runs
   its own **message line** (see below). NTP and on‑device weather run regardless.
 
 WiFi/NTP/weather/web run from the same loop (`wifiLoop()`); the HTTPS weather fetch
@@ -35,8 +35,10 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `CLK24 0/1` | 24‑hour (1) or 12‑hour (0) clock display (persisted) |
 | `MSG b0..b11` | 6 message chars, raw glyph bytes (lo,hi ×6) |
 | `GRID r0..r6 frame` | 7×7 grid rows (bit c = column c) + border‑frame flag |
-| `GCLR` / `GADD r0..r6` / `GCOMMIT fps frame` | Upload a stored grid animation to flash |
-| `GAUTO 0/1` | Play the stored grid animation when the app is off |
+| `GANIM <name> [fps] [frame]` | Play a built‑in animation when the app is off: `spin bounce rain wave pulse sparkle scan life heart`, or `custom` for the uploaded frames |
+| `GCLR` / `GADD r0..r6` / `GCOMMIT fps frame` | Upload drawn frames (≤ 80) to flash and play them (`custom`) |
+| `GAUTO 0/1` | Play the grid animation when the app is off |
+| `GINFO` | Print the grid settings and the current frame's row bytes |
 | `OMTEXT <text>` | Message text for the on-device message line (≤ 96 chars, placeholders allowed) |
 | `MSGCFG mode rot dwell scroll` | Message line: mode `0`=temp `1`=text `2`=date `3`=rotate; `rot` bitmask (1 temp, 2 text, 4 date); seconds per item; ms per scroll step |
 | `MSGINFO` | Print the message line's settings and what it's showing now |
@@ -85,9 +87,17 @@ Set it from the phone page (`/control`) or over serial (`OMTEXT`, `MSGCFG`). Whi
 is connected it drives the message line instead. Any serial command counts as the app being
 connected, so the line pauses for 2 s after each one.
 
+## Grid animations (when the app is off)
+
+`grid_engine.h` is a C++ port of the PC app's `grid_anim.py` for the nine animations that
+need no live data. It's plain C++, so the test suite compiles it on the PC (MSVC, g++ or
+clang++) and checks the deterministic ones frame by frame against the Python engine. Pick
+one on the phone page or with `GANIM`; the app's *Save to clock* sends `GANIM` for these, and
+uploads frames only for drawings (`custom`). Audio, CPU and mouth need the PC and stay app‑only.
+
 ## Persistent storage (NVS namespace `wfd`)
 
-`style`, `bright`, `clk24`, `webpass`; grid animation `gn/gfps/gflag/gauto` + `ganim` (blob); message line
+`style`, `bright`, `clk24`, `webpass`; grid `gaid/gfps/gflag/gauto` + drawn frames `gn` + `ganim` (blob); message line
 `omauto/mmode/mrot/mdwell/mscroll` + `omtext`; WiFi/location `ssid/pass/tz/lat/lon/wunit/zip`.
 Settings survive OTA and USB flashes (the `nvs` partition offset is unchanged).
 

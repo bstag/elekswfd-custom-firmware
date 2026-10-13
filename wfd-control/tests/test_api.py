@@ -46,6 +46,20 @@ def test_grid_save_queues_validated_frames(app, api):
     assert api("/api/grid_save", {"frames": "junk"})[0] == 400
 
 
+def test_grid_save_builtin_sends_name_not_frames(app, api):
+    app.cfg.update(grid_anim="rain", grid_fps=14, grid_frame=True)
+    assert api("/api/grid_save", {}) == (200, {"queued": 1})
+    assert app.uploads[-1] == {"type": "ganim", "name": "rain", "fps": 14, "frame": True}
+
+
+def test_grid_save_custom_needs_frames(app, api):
+    app.cfg.update(grid_anim="custom", grid_custom=[])
+    assert api("/api/grid_save", {})[0] == 400
+    app.cfg["grid_custom"] = [[1] * 7, [2] * 7]
+    assert api("/api/grid_save", {}) == (200, {"queued": 2})
+    assert app.uploads[-1]["type"] == "grid"
+
+
 def test_grid_save_refuses_live_only_animation(app, api):
     status, body = api("/api/grid_save", {"anim": "audio"})
     assert status == 400 and "live data" in body["error"]

@@ -74,6 +74,17 @@ def test_uploads_send_clear_add_commit_then_reassert_auto(app, sim):
     assert app.state["saved"] == "grid: 2 frames"
 
 
+def test_builtin_grid_animation_is_sent_by_name(app, sim):
+    app.cfg["grid_standalone"] = False
+    app.uploads.append({"type": "ganim", "name": "life", "fps": 6, "frame": False})
+    s = sim(1)
+    s.run()
+    sent = [line.split(maxsplit=2)[2] for line in s.lines]
+    assert "GANIM life 6 0" in sent
+    assert "GAUTO 0" in sent[sent.index("GANIM life 6 0"):], "GANIM turns auto on; the user's 'off' must be re-sent"
+    assert "GCLR" not in sent
+
+
 def test_offline_text_is_sent_as_text(app, sim):
     app.uploads.append({"type": "omtext", "text": "HELLO {day}"})
     s = sim(1)

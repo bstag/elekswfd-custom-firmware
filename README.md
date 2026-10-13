@@ -36,7 +36,7 @@ buttons, and an electret mic.
 - A **phone web control panel** (brightness, weather location/units, timezone, message
   line, standalone toggles) and a tap‑to‑pick **WiFi setup** page
 - **OTA firmware updates** from the browser — no USB after the first flash
-- Plays a stored **grid animation**, and runs its own **message line** (text with live
+- Plays its own **grid animation** (nine built‑ins, or one you drew), and runs its own **message line** (text with live
   `{time}`/`{date}`/`{temp}`, date, temperature, or a rotation) when the PC app is off
 
 **With the PC companion app (`wfd-control`):**

@@ -17,6 +17,7 @@ def test_firmware_understands_everything_the_app_sends(app, sim):
     app.cfg.update(message_mode="rotate", rotate_date=True, grid_enable=True, icon_mode="system", logo=True)
     app.uploads.append({"type": "omtext", "text": "HELLO WORLD"})
     app.uploads.append({"type": "grid", "frames": [[1] * 7], "fps": 8, "frame": False})
+    app.uploads.append({"type": "ganim", "name": "spin", "fps": 8, "frame": False})
     s = sim(30, events={10: app.sync_now.set})
     s.run()
     sent = set(s.commands())
@@ -31,6 +32,12 @@ def test_app_expands_every_firmware_placeholder(app, sim):
     app.cfg.update(message_mode="text", custom_text=" ".join("{%s}" % n for n in sorted(names)))
     sim(1).run()
     assert "{" not in app.state["message"], app.state["message"]
+
+
+def test_app_builtin_grid_list_matches_firmware(app):
+    header = (ROOT / "wfd-firmware" / "clock" / "src" / "grid_engine.h").read_text(encoding="utf-8")
+    names = re.findall(r'"(\w+)"', re.search(r"NAMES\[N_ANIM\]\s*=\s*\{([^}]*)\}", header).group(1))
+    assert names == ["custom"] + app.BUILTIN_GRID
 
 
 def test_firmware_font_table_is_generated_from_font14():
