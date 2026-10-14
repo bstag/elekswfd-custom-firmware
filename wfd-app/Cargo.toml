@@ -1,0 +1,16 @@
+[package]
+name = "wfd-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.45"
+cpal = "0.15"
+rustfft = "6.4.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+serialport = "4.10.1"
+sysinfo = "0.39.6"
+tiny_http = "0.12.0"
+ureq = { version = "3.4.2", features = ["json"] }
+windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Power", "Win32_Foundation"] }

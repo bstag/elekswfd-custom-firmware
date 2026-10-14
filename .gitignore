@@ -33,3 +33,6 @@ legacy/daemon/wfd_config.json
 wfd-firmware/wfd_daemon.log
 legacy/daemon/wfd_daemon.log
 wfd-control/firmware/*.bin
+
+# ---- Rust port ----
+wfd-app/target/

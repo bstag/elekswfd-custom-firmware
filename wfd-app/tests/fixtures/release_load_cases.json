@@ -1,0 +1,94 @@
+[
+ {
+  "content": "{\"fw\": \"wfd-clock X\", \"protocol\": 3}",
+  "release": {
+   "fw": "wfd-clock X",
+   "protocol": 3
+  }
+ },
+ {
+  "content": "{\"fw\": 5, \"protocol\": \"3\"}",
+  "release": {
+   "fw": "5",
+   "protocol": 3
+  }
+ },
+ {
+  "content": "{\"fw\": true, \"protocol\": 2.9}",
+  "release": {
+   "fw": "True",
+   "protocol": 2
+  }
+ },
+ {
+  "content": "{\"fw\": null, \"protocol\": \" 4 \"}",
+  "release": {
+   "fw": "None",
+   "protocol": 4
+  }
+ },
+ {
+  "content": "{\"fw\": [1, \"a\"], \"protocol\": false}",
+  "release": {
+   "fw": "[1, 'a']",
+   "protocol": 0
+  }
+ },
+ {
+  "content": "{\"fw\": 1.0, \"protocol\": 3}",
+  "release": {
+   "fw": "1.0",
+   "protocol": 3
+  }
+ },
+ {
+  "content": "{\"fw\": \"x\"}",
+  "release": null
+ },
+ {
+  "content": "{\"protocol\": 3}",
+  "release": null
+ },
+ {
+  "content": "[1, 2]",
+  "release": null
+ },
+ {
+  "content": "\"str\"",
+  "release": null
+ },
+ {
+  "content": "not json",
+  "release": null
+ },
+ {
+  "content": "",
+  "release": null
+ },
+ {
+  "content": "{\"fw\": \"x\", \"protocol\": null}",
+  "release": null
+ },
+ {
+  "content": "{\"fw\": \"x\", \"protocol\": \"3.0\"}",
+  "release": null
+ },
+ {
+  "content": "{\"fw\": {\"a\": 1}, \"protocol\": 1_0}",
+  "release": null
+ },
+ {
+  "content": "{\"fw\": \"x\", \"protocol\": \"1_0\"}",
+  "release": {
+   "fw": "x",
+   "protocol": 10
+  }
+ },
+ {
+  "content": "{\"fw\": 1e16, \"protocol\": 3}",
+  "release": {
+   "fw": "1e+16",
+   "protocol": 3
+  }
+ }
+]
