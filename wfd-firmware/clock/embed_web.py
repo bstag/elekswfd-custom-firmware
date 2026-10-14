@@ -3,7 +3,8 @@ DASHBOARD_GZ / DASHBOARD_GZ_LEN, draw.html -> DRAW_GZ / DRAW_GZ_LEN, ...
 
 Runs before every `pio run` (extra_scripts in platformio.ini), or by hand:
     python embed_web.py
-The output is deterministic (gzip mtime 0), so an unchanged page gives an unchanged header.
+The output is deterministic (gzip mtime 0, OS byte fixed), so an unchanged page gives an unchanged
+header on any machine.
 """
 import gzip
 from pathlib import Path
@@ -24,6 +25,7 @@ def build():
     for src in sorted(WEB.glob("*.html")):
         html = src.read_bytes().replace(b"\r\n", b"\n")   # same bytes whatever git did to line endings
         gz = gzip.compress(html, compresslevel=9, mtime=0)
+        gz = gz[:9] + b"\xff" + gz[10:]                  # OS byte: Python writes 0xff on Windows, 3 on Linux
         name = src.stem.upper() + "_GZ"
         rows = [", ".join(f"0x{b:02x}" for b in gz[i:i + 20]) for i in range(0, len(gz), 20)]
         parts.append(f"\n// {src.name}: {len(html)} B -> {len(gz)} B\n"

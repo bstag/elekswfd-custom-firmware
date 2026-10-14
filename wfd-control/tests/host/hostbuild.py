@@ -28,7 +28,8 @@ def build(driver: Path, out_dir: Path) -> Path:
     out = out_dir / (driver.stem + ".exe")
     gxx = shutil.which("g++") or shutil.which("clang++")
     if gxx:
-        r = subprocess.run([gxx, "-std=c++17", "-O1", "-I", str(FW_SRC), str(driver), "-o", str(out)],
+        r = subprocess.run([gxx, "-std=c++17", "-O1", "-D_USE_MATH_DEFINES", "-I", str(FW_SRC), str(driver),
+                            "-o", str(out)],
                            capture_output=True, text=True)
     else:
         vcvars = _msvc_vcvars()

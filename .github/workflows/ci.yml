@@ -37,7 +37,7 @@ jobs:
         working-directory: wfd-control
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - name: Test
         run: uv run --with-requirements requirements.txt --with pytest pytest -ra
 
@@ -49,10 +49,10 @@ jobs:
         working-directory: wfd-firmware/clock
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.platformio
           key: pio-${{ hashFiles('wfd-firmware/clock/platformio.ini') }}

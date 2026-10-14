@@ -1,5 +1,7 @@
 # WFD — custom firmware & control app for the EleksWFD clock
 
+[![CI](https://github.com/bstag/elekswfd-custom-firmware/actions/workflows/ci.yml/badge.svg)](https://github.com/bstag/elekswfd-custom-firmware/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/bstag/elekswfd-custom-firmware)](https://github.com/bstag/elekswfd-custom-firmware/releases/latest)
 ![platform](https://img.shields.io/badge/platform-ESP32--WROOM--32D-0A7BBB)
 ![build](https://img.shields.io/badge/build-PlatformIO%20%2F%20Arduino-FF7F00)
 ![updates](https://img.shields.io/badge/updates-OTA%20over%20WiFi-2f7a52)

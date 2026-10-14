@@ -154,6 +154,9 @@ The PC app replaces it with the full UI and feature set.
 
 The Rust app: `cd wfd-app && cargo test` (see [wfd-app/README.md](../wfd-app/README.md)).
 The Python suite below also covers the firmware's C++ engines and the device tests.
+GitHub Actions (`.github/workflows/ci.yml`) runs both suites, clippy and the firmware build on
+every push and pull request; the firmware job also fails if `src/web_pages.h` wasn't regenerated
+after a page change.
 
 ```bash
 wfd-control/test.bat            # or: cd wfd-control && uv run --with-requirements requirements.txt --with pytest pytest
