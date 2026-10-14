@@ -31,12 +31,13 @@ static FIRMWARE: &[u8] = include_bytes!("../../wfd-firmware/releases/wfd-clock-f
 const DEFAULT_ADDR: &str = "127.0.0.1:8737";
 const WEATHER_EVERY: Duration = Duration::from_secs(900);
 
-const USAGE: &str = "usage: wfd-app [--no-browser] [--config <path>] [--addr <host:port>]
+const USAGE: &str = "usage: wfd-app [--no-browser] [--config <path>] [--addr <host:port>] [--version]
 
   --no-browser       don't open the dashboard in the browser
   --config <path>    settings file (default: wfd_config.json next to wfd-app.exe);
                      use ..\\wfd-control\\wfd_config.json to share the Python app's settings
-  --addr <host:port> where to serve the dashboard (default: 127.0.0.1:8737)";
+  --addr <host:port> where to serve the dashboard (default: 127.0.0.1:8737)
+  --version          print the app version and the clock firmware it ships";
 
 struct Args {
     browser: bool,
@@ -56,6 +57,11 @@ fn parse_args() -> Result<Args, String> {
             "--no-browser" => args.browser = false,
             "--config" => args.config = it.next().ok_or("--config needs a path")?.into(),
             "--addr" => args.addr = it.next().ok_or("--addr needs host:port")?,
+            "-V" | "--version" => {
+                let fw = embedded_release().map_or("?".into(), |r| format!("{} (protocol {})", r.fw, r.protocol));
+                println!("wfd-app {}, ships {fw}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "-h" | "--help" => {
                 println!("{USAGE}");
                 std::process::exit(0);

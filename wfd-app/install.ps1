@@ -3,7 +3,10 @@ Install WFD Control (the Rust app) for the current user and start it at login.
 
     powershell -ExecutionPolicy Bypass -File wfd-app\install.ps1 [-NoStart]
 
-- builds the release exe (cargo build --release)
+Works from the repo (builds the exe) or from the unzipped release download (uses the
+wfd-app.exe next to this script; no Rust needed).
+
+- in the repo: builds the release exe (cargo build --release)
 - copies it to %LOCALAPPDATA%\WFD Clock\wfd-app.exe (stops a running copy first)
 - first install only: copies your settings from wfd-control\wfd_config.json if it exists
 - adds a "WFD Clock" shortcut to your Startup folder (runs wfd-app.exe --no-browser)
@@ -22,9 +25,15 @@ $exe     = Join-Path $dest 'wfd-app.exe'
 $config  = Join-Path $dest 'wfd_config.json'
 $startup = [Environment]::GetFolderPath('Startup')
 
-Write-Host "Building..."
-& cargo build --release --manifest-path (Join-Path $crate 'Cargo.toml')
-if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+if (Test-Path (Join-Path $crate 'Cargo.toml')) {
+    Write-Host "Building..."
+    & cargo build --release --manifest-path (Join-Path $crate 'Cargo.toml')
+    if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
+    $built = Join-Path $crate 'target\release\wfd-app.exe'
+} else {
+    $built = Join-Path $crate 'wfd-app.exe'                     # the release download
+    if (-not (Test-Path $built)) { throw "wfd-app.exe isn't next to install.ps1" }
+}
 
 # a running copy (or the Python app) holds the clock's COM port and port 8737
 Get-Process wfd-app -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -33,7 +42,7 @@ if ($listener) { Stop-Process -Id $listener.OwningProcess -Force }
 Start-Sleep -Milliseconds 500
 
 New-Item -ItemType Directory -Force $dest | Out-Null
-Copy-Item (Join-Path $crate 'target\release\wfd-app.exe') $exe -Force
+Copy-Item $built $exe -Force
 Write-Host "Installed $exe"
 
 $pyConfig = Join-Path $repo 'wfd-control\wfd_config.json'

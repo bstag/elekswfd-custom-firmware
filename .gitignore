@@ -17,6 +17,7 @@ firmware-backup/*.bin
 
 # ---- build artifacts ----
 .pio/
+dist/
 **/__pycache__/
 .pytest_cache/
 *.pyc

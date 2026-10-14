@@ -15,7 +15,9 @@ There are two implementations with the same behaviour, settings file and pages:
 
 ## Running
 
-The Rust app (needs Rust from [rustup.rs](https://rustup.rs)):
+The Rust app: download the zip from the [latest release](https://github.com/bstag/elekswfd-custom-firmware/releases/latest), unzip, and run
+`powershell -ExecutionPolicy Bypass -File install.ps1` (no Rust needed). From a clone (needs
+Rust from [rustup.rs](https://rustup.rs)):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File wfd-app\install.ps1   # build, install, start at login

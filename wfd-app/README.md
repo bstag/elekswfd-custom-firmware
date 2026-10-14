@@ -12,6 +12,9 @@ clock itself serves. The release exe has those pages **and the clock's current f
 
 ## Install (current user, starts at login)
 
+Without building: download `wfd-app-…-windows-x64.zip` from the [releases](https://github.com/bstag/elekswfd-custom-firmware/releases/latest),
+unzip, and run `install.ps1` from there. From the repo:
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File wfd-app\install.ps1
 ```
@@ -21,6 +24,20 @@ This builds the release exe, copies it to `%LOCALAPPDATA%\WFD Clock\`, copies yo
 Startup folder. It also turns off the Python app's login script (renamed to `.vbs.disabled`) and
 starts the app. Run it again after pulling changes to update. To undo, delete the shortcut from
 `shell:startup` and rename the `.vbs.disabled` back.
+
+## Releases
+
+Bump `version` in `Cargo.toml`, commit, then push a matching tag:
+
+```
+git tag v1.0.1 && git push origin v1.0.1
+```
+
+`.github/workflows/release.yml` runs the tests, then `release/package.ps1` (also runnable
+locally; output in `dist/`) and publishes the zip (exe + `install.ps1` + `release/README.txt`)
+and the clock firmware from `wfd-firmware/releases/`. The exe links the C runtime statically
+(`.cargo/config.toml`), so it needs nothing installed. `wfd-app --version` prints the app
+version and the firmware it ships.
 
 ## Run by hand
 

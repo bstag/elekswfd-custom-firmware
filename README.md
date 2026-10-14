@@ -65,6 +65,7 @@ Full teardown of how the panel is wired is in [docs/HARDWARE.md](docs/HARDWARE.m
 pip install esptool pyserial
 python wfd-firmware/flash_usb.py
 ```
+(The firmware files are also attached to each [release](https://github.com/bstag/elekswfd-custom-firmware/releases/latest).)
 Use a **USB 2.0 port** — the CH340 bridge won't enter flashing mode on USB 3. See
 [docs/FLASHING.md](docs/FLASHING.md) if it won't connect. (Developers can instead
 `cd wfd-firmware/clock && pio run -t upload`.)
@@ -76,11 +77,13 @@ can't see 5 GHz), enter the password, Save. It restarts and joins your WiFi, the
 syncs time and weather on its own.
 
 ### 3. (Optional) Install the PC app for the live features
+Download `wfd-app-…-windows-x64.zip` from the [latest release](https://github.com/bstag/elekswfd-custom-firmware/releases/latest), unzip it and run
 ```powershell
-powershell -ExecutionPolicy Bypass -File wfd-app\install.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
-Builds the app (needs Rust from [rustup.rs](https://rustup.rs)), installs it for your user,
-starts it at login and opens the dashboard at `http://127.0.0.1:8737`. See
+It installs the app for your user, starts it at login and opens the dashboard at
+`http://127.0.0.1:8737`. Nothing else is needed. From a clone, the same script in `wfd-app\`
+builds it first (needs Rust from [rustup.rs](https://rustup.rs)). See
 [docs/APP.md](docs/APP.md). (The original Python app still runs too: `cd wfd-control`,
 `uv run app.py`.)
 

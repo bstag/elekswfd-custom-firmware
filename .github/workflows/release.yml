@@ -1,0 +1,33 @@
+# Push a tag like v1.0.0 (matching wfd-app/Cargo.toml) to test, build and publish a release:
+# the PC app zip plus the clock firmware it ships.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: cargo test --release --manifest-path wfd-app/Cargo.toml
+
+      - name: Build and package
+        shell: pwsh
+        run: ./wfd-app/release/package.ps1 -Tag "${{ github.ref_name }}"
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}"
+          (Get-ChildItem dist -Include *.zip, *.bin -Recurse).FullName
+          --title "WFD Clock ${{ github.ref_name }}"
+          --notes-file dist/notes.md
