@@ -1,0 +1,53 @@
+{
+  "time_sync": true,
+  "spectrum": true,
+  "gain_out": 1e-05,
+  "gain_mic": 0.1,
+  "bars": true,
+  "weather": true,
+  "message_mode": "weather",
+  "custom_text": "caf\u00e9 \u2603 \ud83d\ude00 \u0001\u007f \"q\" back\\slash\nline\ttab/",
+  "scroll_ms": 350.5,
+  "rotate_weather": true,
+  "rotate_window": true,
+  "rotate_text": false,
+  "rotate_date": false,
+  "rotate_dwell": 12345678901234567890,
+  "grid_enable": false,
+  "grid_anim": {
+    "a": [
+      1,
+      {}
+    ],
+    "b": {}
+  },
+  "grid_frame": false,
+  "grid_fps": 12,
+  "grid_custom": [
+    [
+      8,
+      8,
+      8,
+      127,
+      8,
+      8,
+      8
+    ],
+    [],
+    [
+      0
+    ]
+  ],
+  "icon_mode": "off",
+  "link": [
+    1.5e-07,
+    1e+16,
+    1000000000000000.0,
+    -0.0,
+    1.2345678901234568e+17,
+    0.0001
+  ],
+  "clock_host": null,
+  "clock_pass": "",
+  "logo": false
+}
