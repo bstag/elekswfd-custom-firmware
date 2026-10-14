@@ -45,7 +45,7 @@ import mdns  # noqa: E402
 HERE = Path(__file__).parent
 CONFIG = HERE / "wfd_config.json"
 RELEASES = HERE.parent / "wfd-firmware" / "releases"   # firmware this app ships (make_release.py)
-WEB = HERE.parent / "wfd-firmware" / "clock" / "web"    # pages shared with the clock (draw.html)
+WEB = HERE.parent / "wfd-firmware" / "clock" / "web"    # pages shared with the clock (dashboard, draw)
 PROTOCOL = 3                                           # firmware WFD_PROTOCOL this app speaks
 HTTP_ADDR = ("127.0.0.1", 8737)
 CH340_VID, CH340_PID = 0x1A86, 0x7523    # the clock's USB-serial chip
@@ -206,6 +206,7 @@ state = {
     "clock_fw": None, "clock_protocol": None,          # what the clock runs (None until read)
     "release": None,                   # releases/version.json: the firmware this app ships
     "update": {"state": "idle", "message": ""},        # "Update clock": idle|uploading|done|failed
+    "grid_rows": None,                 # the grid frame the app last sent (dashboard preview), None = none
 }
 state_lock = threading.Lock()           # writers replace whole values via set_state(); readers of a
                                         # single key need no lock, /api/status serializes under it
@@ -953,6 +954,7 @@ class ClockLink:
         if time.time() - grid_preview["at"] < 2.0:          # live drawing-tool preview wins
             if since > 1.0 / 20:
                 self.send(_frame_cmd("GRID", grid_preview["rows"] + [grid_preview["frame"]]))
+                set_state(grid_rows=list(grid_preview["rows"]))
                 self.last_grid = time.time()
         elif (c["grid_enable"] or c["grid_frame"]) and since > 1.0 / max(2, c["grid_fps"]):
             if c["grid_enable"]:
@@ -963,7 +965,10 @@ class ClockLink:
             else:
                 rows = [0] * 7
             self.send(_frame_cmd("GRID", list(rows) + [1 if c["grid_frame"] else 0]))
+            set_state(grid_rows=list(rows))
             self.last_grid = time.time()
+        elif not (c["grid_enable"] or c["grid_frame"]) and state["grid_rows"] is not None:
+            set_state(grid_rows=None)                     # app grid off: the clock shows its own
 
 
 # ============================================================ web server
@@ -982,7 +987,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
-            return self._send(200, (HERE / "control.html").read_bytes(), "text/html; charset=utf-8")
+            return self._send(200, (WEB / "dashboard.html").read_bytes(), "text/html; charset=utf-8")
         if self.path in ("/draw", "/draw.html"):
             return self._send(200, (WEB / "draw.html").read_bytes(), "text/html; charset=utf-8")
         if self.path == "/api/status":            # config = app settings + the clock's own

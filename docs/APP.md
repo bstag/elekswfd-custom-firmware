@@ -42,6 +42,17 @@ is unplugged.
 **It holds the serial port.** Stop the app (end `pythonw.exe` / `app.py`) before flashing
 over USB or running the old vendor tool. (OTA over WiFi does **not** need the port free.)
 
+## One dashboard
+
+The app serves the clock's own dashboard (`wfd-firmware/clock/web/dashboard.html`), the same file
+the clock serves at `http://wfd-clock.local/`. Served by the app, it also shows the PC sections:
+PC audio and gains, CPU/GPU/RAM bars, the PC's weather, top‑row icons and logo, the message line
+and grid *while the app runs*, and Connection & firmware. Everything else (brightness, format,
+spectrum style, the mic, what the clock does when the app is off, ZIP, units, time zone) is the
+clock's, so it looks and works the same on both. The grid animator (`/draw`) is shared the same
+way. Tests check that every setting a shared page sends has an owner, and that every clock
+setting has a control on the dashboard.
+
 ## Settings
 
 Every setting has one owner:

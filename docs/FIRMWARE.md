@@ -148,7 +148,10 @@ The PC app can drive the clock over WiFi instead of USB (see [APP.md](APP.md#con
 
 ## Dashboard
 
-`/` serves a dashboard built on this API: a live preview (time, message line, the 7×7 grid as
+`/` serves a dashboard built on this API. It's **the same page the PC app serves**: it checks
+`/api/status` (the app's has a `link` field) and, when the app serves it, also shows the PC sections
+(audio, CPU/GPU/RAM bars, the live message line and grid, icons, connection and firmware). On the
+clock you get a live preview (time, message line, the 7×7 grid as
 it is right now, weather/WiFi/NTP) and every setting, saved as you change it. The source is
 `clock/web/dashboard.html`. `embed_web.py` runs before every `pio run`, gzips every page in `web/`
 (dashboard, grid animator) into `src/web_pages.h` (about 6 + 4 KB), and one OTA update ships the page and firmware together.

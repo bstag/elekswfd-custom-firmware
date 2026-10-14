@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WFD Clock</title>
+<!-- One dashboard for both: the clock serves it at / (its own settings), and the PC app serves the
+     same file at http://127.0.0.1:8737/ with the PC sections (class "app-only") shown too. -->
 <style>
   :root { --bg:#0e1013; --panel:#161a1f; --panel2:#1d2228; --line:#2a3038; --text:#e6e9ee;
           --muted:#8b95a3; --accent:#72d3ff; --accent-dim:#1f4a5c; --ok:#3ccf7f; --bad:#ff5d5d; --off:#2b3036; }
@@ -24,9 +26,9 @@
   .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 0; }
   .row > label:first-child { min-width:92px; }
   label { color:var(--muted); font-size:13px; }
-  input[type=text], input[type=number], select { background:var(--panel2); color:var(--text); border:1px solid var(--line);
-    border-radius:7px; padding:8px 10px; font:inherit; min-width:0; }
-  input[type=text] { flex:1; }
+  input[type=text], input[type=number], input[type=password], select { background:var(--panel2); color:var(--text);
+    border:1px solid var(--line); border-radius:7px; padding:8px 10px; font:inherit; min-width:0; }
+  input[type=text], input[type=password] { flex:1; }
   input[type=number] { width:76px; }
   input[type=range] { accent-color:var(--accent); flex:1; min-width:120px; }
   button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px;
@@ -50,7 +52,12 @@
   .chips button { padding:3px 8px; font-size:12px; font-family:ui-monospace,Consolas,monospace; }
   .val { min-width:38px; text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); font-size:13px; }
   .off-note { color:var(--muted); font-size:12px; }
-  [hidden] { display:none !important; }
+  .meter { height:12px; background:var(--panel2); border-radius:4px; overflow:hidden; flex:1; min-width:100px; }
+  .meter div { height:100%; width:0; background:var(--accent); transition:width .1s; }
+  .stat { display:flex; align-items:center; gap:10px; margin:8px 0; }
+  .stat b { width:44px; color:var(--muted); font-size:12px; font-weight:600; }
+  .sub { border-top:1px solid var(--line); padding-top:10px; margin-top:12px; }
+  [hidden], body:not(.app) .app-only, body.app .clock-only { display:none !important; }
 
   /* live preview */
   .preview { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
@@ -81,7 +88,7 @@
 </head>
 <body>
 <header>
-  <h1>WFD Clock</h1>
+  <h1 id="title">WFD Clock</h1>
   <span><span class="dot" id="dot"></span><span id="conn">connecting…</span></span>
 </header>
 
@@ -96,10 +103,10 @@
     </div>
     <div class="facts">
       <span>Weather <b id="wx">—</b></span>
-      <span>WiFi <b id="wifi">—</b></span>
-      <span>Time sync <b id="ntp">—</b></span>
+      <span id="linkFact">WiFi <b id="wifi">—</b></span>
+      <span class="clock-only">Time sync <b id="ntp">—</b></span>
     </div>
-    <div class="banner" id="appBanner" hidden>The PC app is connected and driving the display. The settings
+    <div class="banner clock-only" id="appBanner" hidden>The PC app is connected and driving the display. The settings
       marked “when the app is off” take over when it stops.</div>
   </section>
 
@@ -109,6 +116,9 @@
       <input type="range" id="brightness" min="1" max="16"><span class="val" id="brightVal"></span></div>
     <div class="row"><label>Format</label>
       <div class="seg" id="fmt"><button data-v="1">24-hour</button><button data-v="0">12-hour</button></div></div>
+    <div class="row app-only"><label for="time_sync">PC time</label>
+      <label class="switch"><input type="checkbox" id="time_sync"><span class="slider"></span></label>
+      <button id="syncNow">Sync now</button></div>
     <div class="row"><label>Spectrum</label>
       <div class="seg" id="style">
         <button data-v="1">Bars</button><button data-v="2">Top-down</button><button data-v="3">Center</button>
@@ -116,7 +126,52 @@
     <div class="row"><label for="mic_standalone">Mic spectrum</label>
       <label class="switch"><input type="checkbox" id="mic_standalone"><span class="slider"></span></label>
       <span class="off-note">when the app is off: bass left, treble right</span></div>
-    <p class="hint">While the app runs, the spectrum shows PC audio.</p>
+    <div class="sub app-only">
+      <div class="row"><label for="spectrum">PC audio</label>
+        <label class="switch"><input type="checkbox" id="spectrum"><span class="slider"></span></label>
+        <span class="off-note">left: what the PC plays · right: PC mic</span></div>
+      <div class="stat"><b>Audio</b><div class="meter"><div id="mOut"></div></div><span class="val" id="vOut">0</span></div>
+      <div class="stat"><b>Mic</b><div class="meter"><div id="mMic"></div></div><span class="val" id="vMic">0</span></div>
+      <div class="row"><label for="gain_out">Audio gain</label><input type="range" id="gain_out" min="0.2" max="4" step="0.1"></div>
+      <div class="row"><label for="gain_mic">Mic gain</label><input type="range" id="gain_mic" min="0.2" max="4" step="0.1"></div>
+      <p class="hint" id="audioInfo"></p>
+    </div>
+  </section>
+
+  <section class="app-only">
+    <h2>From the PC
+      <small>CPU / GPU / RAM bars</small>
+      <label class="switch" title="Show the bars"><input type="checkbox" id="bars"><span class="slider"></span></label></h2>
+    <div class="stat"><b>CPU</b><div class="meter"><div id="mCpu"></div></div><span class="val" id="vCpu">0%</span></div>
+    <div class="stat"><b>GPU</b><div class="meter"><div id="mGpu"></div></div><span class="val" id="vGpu">0%</span></div>
+    <div class="stat"><b>RAM</b><div class="meter"><div id="mRam"></div></div><span class="val" id="vRam">0%</span></div>
+    <div class="row sub"><label for="weather">Weather</label>
+      <label class="switch"><input type="checkbox" id="weather"><span class="slider"></span></label>
+      <span class="off-note">send the PC's weather to the clock</span></div>
+    <div class="row"><label>Top row</label>
+      <div class="seg" id="iconMode"><button data-v="off">Off</button><button data-v="audio">Audio</button>
+        <button data-v="system">System</button><button data-v="all">All</button></div></div>
+    <div class="row"><label for="logo">Logo</label>
+      <label class="switch"><input type="checkbox" id="logo"><span class="slider"></span></label></div>
+  </section>
+
+  <section class="app-only">
+    <h2>Message line <small>while the app runs</small></h2>
+    <div class="row"><label>Show</label>
+      <div class="seg" id="liveMode"><button data-v="weather">Temp</button><button data-v="window">Window</button>
+        <button data-v="text">Text</button><button data-v="date">Date</button><button data-v="rotate">Rotate</button></div></div>
+    <div class="row"><label for="custom_text">Text</label>
+      <input type="text" id="custom_text" placeholder="e.g. HI {time12}">
+      <button class="primary" id="saveLiveText">Set</button></div>
+    <div id="liveRotRow" hidden>
+      <div class="row"><label>Rotate</label>
+        <label><input type="checkbox" data-lr="weather"> Temp</label><label><input type="checkbox" data-lr="window"> Window</label>
+        <label><input type="checkbox" data-lr="text"> Text</label><label><input type="checkbox" data-lr="date"> Date</label></div>
+      <div class="row"><label for="rotate_dwell">Each for</label>
+        <input type="number" id="rotate_dwell" min="2" max="600"><label>seconds</label></div>
+    </div>
+    <div class="row"><label for="scroll_ms">Scroll speed</label>
+      <input type="range" id="scroll_ms" min="100" max="1000" step="50" style="direction:rtl"><span class="val" id="scrollMsVal"></span></div>
   </section>
 
   <section>
@@ -146,6 +201,18 @@
     </div>
   </section>
 
+  <section class="app-only">
+    <h2>Grid <small>while the app runs</small>
+      <label class="switch" title="Animate the grid"><input type="checkbox" id="grid_enable"><span class="slider"></span></label></h2>
+    <div class="seg" id="liveAnim"></div>
+    <div class="row"><label for="grid_fps">Speed</label>
+      <input type="range" id="grid_fps" min="3" max="25"><span class="val" id="gridFpsVal"></span></div>
+    <div class="row"><label for="grid_frame">Border</label>
+      <label class="switch"><input type="checkbox" id="grid_frame"><span class="slider"></span></label>
+      <button class="primary" id="gridSave">Save to clock</button></div>
+    <p class="hint" id="gridSaveHint">“Save to clock” makes it the animation the clock plays when the app is off.</p>
+  </section>
+
   <section>
     <h2>Grid <small>when the app is off</small>
       <label class="switch" title="Play an animation"><input type="checkbox" id="grid_standalone"><span class="slider"></span></label></h2>
@@ -172,43 +239,92 @@
         <option value="MST7MDT,M3.2.0,M11.1.0">Mountain</option><option value="MST7">Arizona</option>
         <option value="PST8PDT,M3.2.0,M11.1.0">Pacific</option><option value="UTC0">UTC</option></select></div>
   </section>
+
+  <section class="app-only">
+    <h2>Connection &amp; firmware</h2>
+    <div class="row"><label for="link">Talk to the clock over</label>
+      <select id="link"><option value="auto">Auto (USB if plugged in, else WiFi)</option>
+        <option value="usb">USB only</option><option value="wifi">WiFi only</option></select></div>
+    <div class="row"><label for="clock_host">Clock</label>
+      <input type="text" id="clock_host" placeholder="wfd-clock.local or an IP"></div>
+    <div class="row"><label for="clock_pass">Password</label>
+      <input type="password" id="clock_pass" autocomplete="off">
+      <button class="primary" id="applyLink">Apply</button></div>
+    <div class="row sub"><label>Clock firmware</label><span id="fwClock">–</span></div>
+    <div class="row"><label>This app ships</label><span id="fwRelease">–</span>
+      <button class="primary" id="updateClock" disabled>Update clock</button></div>
+    <p class="hint" id="fwNote"></p>
+  </section>
 </main>
 
 <footer>
-  <a href="/wifi">WiFi network</a><a href="/update">Firmware update</a>
-  <a href="/control">Basic controls</a><a href="/status">Status page</a><span class="off-note" id="fw"></span>
+  <a href="/draw">Grid animator</a>
+  <a class="clock-only" href="/wifi">WiFi network</a><a class="clock-only" href="/update">Firmware update</a>
+  <a class="clock-only" href="/control">Basic controls</a><a class="clock-only" href="/status">Status page</a>
+  <a class="app-only" id="clockPage" href="http://wfd-clock.local/">The clock's own page</a>
+  <span class="off-note" id="fw"></span>
 </footer>
 <div id="toast" role="status"></div>
 
 <script>
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const ANIMS = ['spin','bounce','rain','wave','pulse','sparkle','scan','life','heart','audio','mouth'];
-let cfg = {}, editing = null;
+const LIVE_ANIMS = ANIMS.concat(['cpu']);               // the app also has a live CPU-load animation
+let cfg = {}, editing = null, isApp = false;
 
-// ---- talking to the clock ----
+// ---- talking to whoever serves this page (the clock, or the PC app) ----
 function toast(text, err) {
   const t = $('#toast'); t.textContent = text; t.className = 'show' + (err ? ' err' : '');
   clearTimeout(toast.h); toast.h = setTimeout(() => t.className = '', err ? 4000 : 1400);
 }
+const describe = e => typeof e === 'object' && e ? Object.entries(e).map(([k, v]) => `${k}: ${v}`).join('; ') : String(e);
+async function call(path, body) {
+  try {
+    const r = await fetch(path, { method:'POST', headers:{'Content-Type':'application/json','X-WFD':'1'},
+                                  body: JSON.stringify(body || {}) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(describe(d.error || 'not saved'), true); return false; }
+    if (d.warning) toast(describe(d.warning), true);
+    return d;
+  } catch { toast(isApp ? 'app unreachable' : 'clock unreachable', true); return false; }
+}
 async function set(patch) {
   Object.assign(cfg, patch); render();
-  try {
-    const r = await fetch('/api/set', { method:'POST', headers:{'Content-Type':'application/json','X-WFD':'1'},
-                                        body: JSON.stringify(patch) });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      const e = body.error;
-      toast(typeof e === 'object' ? Object.entries(e).map(([k, v]) => `${k}: ${v}`).join('; ') : (e || 'not saved'), true);
-    } else toast(body.warning ? Object.values(body.warning).join('; ') : 'Saved', !!body.warning);
-  } catch { toast('clock unreachable', true); }
+  const ok = await call('/api/set', patch);
+  if (ok && !ok.warning) toast('Saved');
   poll();
+  return ok;
 }
 async function poll() {
   try {
     const d = await (await fetch('/api/status', {cache:'no-store'})).json();
-    $('#dot').classList.add('on'); $('#conn').textContent = d.state.wifi.ssid ? 'online' : 'connected';
-    cfg = d.config; show(d.state); render();
-  } catch { $('#dot').classList.remove('on'); $('#conn').textContent = 'clock unreachable'; }
+    isApp = 'link' in d.state;                          // the app's status has a link; the clock's doesn't
+    document.body.classList.toggle('app', isApp);
+    cfg = d.config; show(view(d.state)); render();
+  } catch { $('#dot').classList.remove('on'); $('#conn').textContent = 'unreachable'; }
+}
+
+// One shape for the preview, whichever status format came back.
+function view(s) {
+  if (!isApp) return {
+    online: true, conn: s.wifi.ssid ? 'online' : 'connected', time: (s.time || '').slice(11), appDriving: s.app_connected,
+    message: s.app_connected ? '(from PC)' : cfg.msg_standalone ? (s.message || '') : (s.weather.fresh ? `${s.weather.temp}${s.weather.unit}` : ''),
+    rows: (!s.app_connected && cfg.grid_standalone) ? s.grid_rows : null, border: !!cfg.standalone_frame,
+    cols: s.mic && s.mic.active ? [s.mic.bass, s.mic.treble] : [0, 0],
+    wx: s.weather.fresh ? `${s.weather.temp}°${s.weather.unit} ${s.weather.cond}` : 'not loaded',
+    link: `WiFi <b>${s.wifi.ssid} · ${s.wifi.rssi} dBm</b>`, ntp: s.ntp ? 'synced' : 'waiting', fw: s.fw, s,
+  };
+  const w = s.weather || {};
+  return {
+    online: s.connected, appDriving: false, s,
+    conn: s.connected ? (s.link === 'wifi' ? 'clock on WiFi · ' + s.port.slice(5) : 'clock on USB · ' + s.port)
+                      : (cfg.link === 'usb' ? 'clock not found on USB' : 'looking for the clock (USB / WiFi)…'),
+    time: (s.time || '').split(' ').pop() || '--:--:--', message: (s.message || '').replace(/^temp /, ''),
+    rows: s.grid_rows || null, border: !!(s.grid_rows && cfg.grid_frame),
+    cols: cfg.spectrum ? [s.levels.out, s.levels.mic] : [0, 0],
+    wx: w.label ? `${w.temp}°${w.unit ? 'C' : 'F'} ${w.cond} · ${w.label}` : 'not loaded',
+    link: `Link <b>${s.connected ? s.port : 'none'}</b>`, fw: s.clock_fw || '',
+  };
 }
 
 // ---- live preview ----
@@ -222,70 +338,118 @@ const cells = [];
     g.appendChild(i); if (!edge) cells.push(i);
   }
 })();
-function show(s) {
-  $('#time').textContent = (s.time || '').slice(11) || '--:--:--';
-  const temp = s.weather.fresh ? `${s.weather.temp}${s.weather.unit}` : '';
-  $('#msg').textContent = s.app_connected ? '(from PC)'
-    : cfg.msg_standalone ? (s.message || '').padEnd(6) : temp.padStart(6);   // off: just the temperature
-  (s.grid_rows || []).forEach((row, r) => { for (let c = 0; c < 7; c++) cells[r * 7 + c].classList.toggle('on', !!(row & (1 << c))); });
-  const showGrid = !s.app_connected && cfg.grid_standalone;
-  $$('#grid .edge').forEach(e => e.classList.toggle('on', showGrid && !!cfg.standalone_frame));
-  if (!showGrid) cells.forEach(e => e.classList.remove('on'));
-  $('#wx').textContent = s.weather.fresh ? `${s.weather.temp}°${s.weather.unit} ${s.weather.cond}` : 'not loaded';
-  $('#wifi').textContent = `${s.wifi.ssid} · ${s.wifi.rssi} dBm`;
-  $('#ntp').textContent = s.ntp ? 'synced' : 'waiting';
-  const m = s.mic || {}, cols = $$('#cols i');
-  cols[0].style.height = (m.active ? m.bass : 0) / 12 * 100 + '%';
-  cols[1].style.height = (m.active ? m.treble : 0) / 12 * 100 + '%';
-  $('#appBanner').hidden = !s.app_connected;
-  $('#fw').textContent = s.fw;
+const pct = (id, v, max, unit) => { $(id).style.width = Math.min(100, v / max * 100) + '%'; };
+function show(v) {
+  $('#dot').classList.toggle('on', v.online); $('#conn').textContent = v.conn;
+  document.title = $('#title').textContent = isApp ? 'WFD Control' : 'WFD Clock';
+  $('#time').textContent = v.time || '--:--:--';
+  $('#msg').textContent = (v.message || '').padEnd(6);
+  cells.forEach((e, k) => e.classList.toggle('on', !!(v.rows && v.rows[k / 7 | 0] & (1 << (k % 7)))));
+  $$('#grid .edge').forEach(e => e.classList.toggle('on', !!v.rows && v.border));
+  const cols = $$('#cols i'); v.cols.forEach((h, i) => cols[i].style.height = h / 12 * 100 + '%');
+  $('#wx').textContent = v.wx; $('#linkFact').innerHTML = v.link;
+  if (v.ntp) $('#ntp').textContent = v.ntp;
+  $('#appBanner').hidden = !v.appDriving;
+  $('#fw').textContent = v.fw || '';
   const custom = $('#anim [data-v=custom]');
-  custom.textContent = `Drawn (${s.stored_frames})`; custom.disabled = !s.stored_frames;
+  if (!isApp) { custom.textContent = `Drawn (${v.s.stored_frames})`; custom.disabled = !v.s.stored_frames; }
+  else { custom.textContent = 'Drawn'; custom.disabled = false; }   // the clock says if there's none
+  if (isApp) showApp(v.s);
+}
+function showApp(s) {
+  pct('#mOut', s.levels.out, 12); $('#vOut').textContent = s.levels.out;
+  pct('#mMic', s.levels.mic, 12); $('#vMic').textContent = s.levels.mic;
+  $('#audioInfo').textContent = s.audio && (s.audio.out || s.audio.mic) ? `${s.audio.out || '–'} · ${s.audio.mic || '–'}` : '';
+  for (const k of ['cpu', 'gpu', 'ram']) { pct('#m' + k[0].toUpperCase() + k.slice(1), s.metrics[k], 100); $('#v' + k[0].toUpperCase() + k.slice(1)).textContent = s.metrics[k] + '%'; }
+  // firmware: what the clock runs vs what this app ships
+  $('#fwClock').textContent = s.clock_fw ? `${s.clock_fw.replace('wfd-clock ', '')} · protocol ${s.clock_protocol ?? '?'}` : '–';
+  $('#fwRelease').textContent = s.release ? `${s.release.fw.replace('wfd-clock ', '')} · protocol ${s.release.protocol}` : 'none';
+  const up = s.update || {};
+  $('#updateClock').disabled = !s.update_available || up.state === 'uploading';
+  $('#fwNote').textContent = up.state && up.state !== 'idle' ? up.message
+    : s.compat === 'older' ? 'The clock firmware is older than this app expects: some features may not work until you update it.'
+    : s.compat === 'newer' ? 'The clock runs newer firmware than this app knows; update the app.'
+    : s.update_available ? 'A newer build is available. Updating takes about 20 s; the clock restarts.' : '';
+  $('#fwNote').style.color = s.compat === 'older' || up.state === 'failed' ? 'var(--bad)' : '';
+  if (s.clock_ip) $('#clockPage').href = `http://${s.clock_ip}/`;
+  if (editing !== $('#clock_pass')) $('#clock_pass').placeholder = s.clock_pass_set ? '(saved, unchanged)' : 'only if the clock has one';
 }
 
 // ---- settings -> controls ----
 function sel(group, v) { $$(group + ' button').forEach(b => b.classList.toggle('sel', b.dataset.v === String(v))); }
-function val(id, v) { const e = $(id); if (e !== editing && e !== document.activeElement) e.value = v; }
+function val(id, v) { const e = $(id); if (e && e !== editing && e !== document.activeElement && v !== undefined) e.value = v; }
+function check(id, v) { const e = $(id); if (e && v !== undefined) e.checked = !!v; }
 function render() {
   val('#brightness', cfg.brightness); $('#brightVal').textContent = cfg.brightness;
   sel('#fmt', cfg.clock_24h ? 1 : 0); sel('#style', cfg.style);
-  $('#msg_standalone').checked = cfg.msg_standalone; $('#msgBody').hidden = !cfg.msg_standalone; $('#msgOff').hidden = cfg.msg_standalone;
+  check('#mic_standalone', cfg.mic_standalone);
+  check('#msg_standalone', cfg.msg_standalone); $('#msgBody').hidden = !cfg.msg_standalone; $('#msgOff').hidden = !!cfg.msg_standalone;
   sel('#mode', cfg.standalone_msg_mode); $('#rotRow').hidden = cfg.standalone_msg_mode !== 'rotate';
   val('#offline_text', cfg.offline_text); val('#dwell', cfg.standalone_dwell);
   $$('[data-r]').forEach(b => b.checked = (cfg.standalone_rotate || []).includes(b.dataset.r));
   val('#scroll', cfg.standalone_scroll_ms); $('#scrollVal').textContent = cfg.standalone_scroll_ms + ' ms';
-  $('#mic_standalone').checked = cfg.mic_standalone;
-  $('#grid_standalone').checked = cfg.grid_standalone; $('#gridBody').hidden = !cfg.grid_standalone;
+  check('#grid_standalone', cfg.grid_standalone); $('#gridBody').hidden = !cfg.grid_standalone;
   sel('#anim', cfg.standalone_anim); val('#fps', cfg.standalone_fps); $('#fpsVal').textContent = cfg.standalone_fps + '/s';
-  $('#frame').checked = cfg.standalone_frame;
+  check('#frame', cfg.standalone_frame);
   val('#zip', cfg.location); val('#units', cfg.units); val('#tz', cfg.tz);
+  if (!isApp) return;
+  for (const id of ['time_sync', 'spectrum', 'bars', 'weather', 'logo', 'grid_enable', 'grid_frame']) check('#' + id, cfg[id]);
+  val('#gain_out', cfg.gain_out); val('#gain_mic', cfg.gain_mic);
+  sel('#iconMode', cfg.icon_mode); sel('#liveMode', cfg.message_mode);
+  $('#liveRotRow').hidden = cfg.message_mode !== 'rotate';
+  $$('[data-lr]').forEach(b => b.checked = !!cfg['rotate_' + b.dataset.lr]);
+  val('#custom_text', cfg.custom_text); val('#rotate_dwell', cfg.rotate_dwell);
+  val('#scroll_ms', cfg.scroll_ms); $('#scrollMsVal').textContent = cfg.scroll_ms + ' ms';
+  sel('#liveAnim', cfg.grid_anim); val('#grid_fps', cfg.grid_fps); $('#gridFpsVal').textContent = cfg.grid_fps + '/s';
+  $('#gridSave').disabled = cfg.grid_anim === 'cpu';
+  $('#gridSaveHint').textContent = cfg.grid_anim === 'cpu' ? '“cpu” needs the PC; the clock can’t play it on its own.'
+    : '“Save to clock” makes it the animation the clock plays when the app is off.';
+  val('#link', cfg.link); val('#clock_host', cfg.clock_host);
 }
 
 // ---- controls -> settings ----
-$('#anim').innerHTML = ANIMS.map(a => `<button data-v="${a}">${a[0].toUpperCase() + a.slice(1)}</button>`).join('')
-  + '<button data-v="custom" disabled>Drawn</button>';
+const label = a => a[0].toUpperCase() + a.slice(1);
+$('#anim').innerHTML = ANIMS.map(a => `<button data-v="${a}">${label(a)}</button>`).join('')
+  + '<button data-v="custom">Drawn</button>';
+$('#liveAnim').innerHTML = LIVE_ANIMS.map(a => `<button data-v="${a}">${label(a)}</button>`).join('')
+  + '<button data-v="custom">Drawn</button>';
 const seg = (id, f) => $(id).onclick = e => { if (e.target.dataset.v && !e.target.disabled) set(f(e.target.dataset.v)); };
 seg('#fmt', v => ({ clock_24h: v === '1' }));
 seg('#style', v => ({ style: +v }));
 seg('#mode', v => ({ standalone_msg_mode: v }));
 seg('#anim', v => ({ standalone_anim: v }));
+seg('#iconMode', v => ({ icon_mode: v }));
+seg('#liveMode', v => ({ message_mode: v }));
+seg('#liveAnim', v => ({ grid_anim: v }));
 $('#brightness').oninput = e => { $('#brightVal').textContent = e.target.value; clearTimeout(set.b);
   set.b = setTimeout(() => set({ brightness: +e.target.value }), 120); };
-$('#scroll').oninput = e => $('#scrollVal').textContent = e.target.value + ' ms';
-$('#scroll').onchange = e => set({ standalone_scroll_ms: +e.target.value });
-$('#fps').oninput = e => $('#fpsVal').textContent = e.target.value + '/s';
-$('#fps').onchange = e => set({ standalone_fps: +e.target.value });
+const slider = (id, out, unit, key, f = Number) => {
+  $(id).oninput = e => $(out).textContent = e.target.value + unit;
+  $(id).onchange = e => set({ [key]: f(e.target.value) });
+};
+slider('#scroll', '#scrollVal', ' ms', 'standalone_scroll_ms');
+slider('#fps', '#fpsVal', '/s', 'standalone_fps');
+slider('#scroll_ms', '#scrollMsVal', ' ms', 'scroll_ms');
+slider('#grid_fps', '#gridFpsVal', '/s', 'grid_fps');
+$('#gain_out').onchange = e => set({ gain_out: +e.target.value });
+$('#gain_mic').onchange = e => set({ gain_mic: +e.target.value });
 $('#dwell').onchange = e => set({ standalone_dwell: Math.round(+e.target.value) });
-$('#frame').onchange = e => set({ standalone_frame: e.target.checked });
-$('#msg_standalone').onchange = e => set({ msg_standalone: e.target.checked });
-$('#grid_standalone').onchange = e => set({ grid_standalone: e.target.checked });
-$('#mic_standalone').onchange = e => set({ mic_standalone: e.target.checked });
+$('#rotate_dwell').onchange = e => set({ rotate_dwell: Math.max(2, Math.round(+e.target.value) || 8) });
+for (const id of ['frame', 'msg_standalone', 'grid_standalone', 'mic_standalone']) {
+  const key = id === 'frame' ? 'standalone_frame' : id;
+  $('#' + id).onchange = e => set({ [key]: e.target.checked });
+}
+for (const id of ['time_sync', 'spectrum', 'bars', 'weather', 'logo', 'grid_enable', 'grid_frame'])
+  $('#' + id).onchange = e => set({ [id]: e.target.checked });
 $$('[data-r]').forEach(b => b.onchange = () => set({ standalone_rotate: $$('[data-r]').filter(x => x.checked).map(x => x.dataset.r) }));
+$$('[data-lr]').forEach(b => b.onchange = () => set({ ['rotate_' + b.dataset.lr]: b.checked }));
 $('#units').onchange = e => set({ units: e.target.value });
 $('#tz').onchange = e => set({ tz: e.target.value });
+const onEnter = (id, f) => $(id).onkeydown = e => { if (e.key === 'Enter') f(); };
 const saveText = () => set({ offline_text: $('#offline_text').value });
-$('#saveText').onclick = saveText;
-$('#offline_text').onkeydown = e => { if (e.key === 'Enter') saveText(); };
+$('#saveText').onclick = saveText; onEnter('#offline_text', saveText);
+const saveLive = () => set({ custom_text: $('#custom_text').value });
+$('#saveLiveText').onclick = saveLive; onEnter('#custom_text', saveLive);
 $('#chips').onclick = e => {                  // insert a placeholder at the cursor
   const p = e.target.dataset.p, t = $('#offline_text'); if (!p) return;
   const at = t.selectionStart ?? t.value.length;
@@ -293,10 +457,20 @@ $('#chips').onclick = e => {                  // insert a placeholder at the cur
   t.setSelectionRange(at + p.length, at + p.length);
 };
 const saveZip = () => set({ location: $('#zip').value.trim() });
-$('#saveZip').onclick = saveZip;
-$('#zip').onkeydown = e => { if (e.key === 'Enter') saveZip(); };
-for (const id of ['#offline_text', '#zip', '#dwell']) {   // don't overwrite what's being typed
-  $(id).onfocus = e => editing = e.target; $(id).onblur = () => editing = null;
+$('#saveZip').onclick = saveZip; onEnter('#zip', saveZip);
+$('#syncNow').onclick = async () => { if (await call('/api/sync')) toast('Time sent'); };
+$('#gridSave').onclick = async () => { if (await call('/api/grid_save')) toast('Saved to clock'); poll(); };
+$('#updateClock').onclick = async () => {
+  if (!confirm('Upload the firmware this app ships to the clock? It restarts when done.')) return;
+  await call('/api/update_clock'); poll();
+};
+$('#applyLink').onclick = () => {             // blank password field = keep the saved one
+  const patch = { link: $('#link').value, clock_host: $('#clock_host').value.trim() };
+  if ($('#clock_pass').value) patch.clock_pass = $('#clock_pass').value;
+  set(patch); $('#clock_pass').value = '';
+};
+for (const id of ['#offline_text', '#zip', '#dwell', '#custom_text', '#rotate_dwell', '#clock_host', '#clock_pass', '#link']) {
+  $(id).onfocus = e => editing = e.target; $(id).onblur = () => editing = null;   // don't overwrite what's being typed
 }
 
 poll(); setInterval(poll, 500);

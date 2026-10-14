@@ -60,12 +60,30 @@ def test_embedded_pages_match_their_source():
         assert gzip.decompress(data) == html, f"{page.name} changed: run `python wfd-firmware/clock/embed_web.py`"
 
 
-def test_dashboard_only_sends_settings_the_firmware_has():
-    html = (ROOT / "wfd-firmware" / "clock" / "web" / "dashboard.html").read_text(encoding="utf-8")
-    sent = set(re.findall(r"set\(\{\s*(\w+):", html)) | set(re.findall(r"\(\{\s*(\w+):", html))
-    known = set(re.findall(r'\bc\["(\w+)"\]', MAIN_CPP.read_text(encoding="utf-8")))
-    assert len(sent) >= 14, sent
-    assert sent <= known, f"dashboard sends unknown settings: {sorted(sent - known)}"
+def _sent_keys(html):
+    """Setting names a page sends: set({ key: ... }), set({ [id]: ... }) loops over literal lists,
+    and slider(..., 'key')."""
+    sent = set(re.findall(r"set\(\{\s*(\w+):", html)) | set(re.findall(r"\bv => \(\{\s*(\w+):", html))   # seg() buttons
+    for ids in re.findall(r"for \(const \w+ of \[([^\]]*)\]\)[^;]{0,160}?set\(\{ \[", html):
+        sent |= set(re.findall(r"'(\w+)'", ids))
+    sent |= set(re.findall(r"slider\('[^']+', '[^']+', '[^']*', '(\w+)'", html))
+    return sent
+
+
+def test_shared_pages_only_send_known_settings(app):
+    """The dashboard and animator talk to the clock and to the app: every setting they send must
+    have an owner (app DEFAULTS or the clock's CLOCK_KEYS)."""
+    known = set(app.DEFAULTS) | app.CLOCK_KEYS
+    for page in ("dashboard.html", "draw.html"):
+        sent = _sent_keys((WEB / page).read_text(encoding="utf-8"))
+        assert not sent - known, f"{page} sends settings nobody owns: {sorted(sent - known)}"
+    assert len(_sent_keys((WEB / "dashboard.html").read_text(encoding="utf-8"))) >= 25
+
+
+def test_every_clock_setting_is_on_the_dashboard(app):
+    html = (WEB / "dashboard.html").read_text(encoding="utf-8")
+    missing = {k for k in app.CLOCK_KEYS if not re.search(r"\b%s\b" % k, html)}
+    assert not missing, f"clock settings with no control on the dashboard: {sorted(missing)}"
 
 
 def test_clock_owned_settings_match_the_firmware(app):
@@ -73,20 +91,6 @@ def test_clock_owned_settings_match_the_firmware(app):
     fw = set(re.findall(r'\bc\["(\w+)"\]', MAIN_CPP.read_text(encoding="utf-8")))
     assert app.CLOCK_KEYS == fw
     assert not app.CLOCK_KEYS & set(app.DEFAULTS), "a setting has one owner"
-
-
-def test_app_pages_only_send_known_settings(app):
-    here = Path(__file__).resolve().parents[1]
-    sent = set()
-    for page in (here / "control.html", WEB / "draw.html"):     # draw.html is shared with the clock
-        html = page.read_text(encoding="utf-8")
-        sent |= set(re.findall(r"set(?:Cfg)?\(\{\s*(\w+):", html))
-        for _, ids in re.findall(r"for \(const (\w+) of \[([^\]]*)\]\)[^;]{0,120}?setCfg\(\{ \[\1\]", html):
-            sent |= set(re.findall(r"'(\w+)'", ids))                       # setCfg({ [id]: ... }) loops
-        sent |= set(re.findall(r"\{\s*(\w+):\s*zip", html)) | set(re.findall(r"\{\s*(?:\w+:[^,}]+,\s*)?(\w+):\s*\$\('#units'\)", html))
-    assert len(sent) >= 20, sorted(sent)
-    unknown = sent - set(app.DEFAULTS) - app.CLOCK_KEYS - {"grid_custom"}
-    assert not unknown, f"pages send settings nobody owns: {sorted(unknown)}"
 
 
 def test_app_and_shipped_firmware_speak_the_same_protocol(app):
