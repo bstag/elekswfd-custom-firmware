@@ -134,6 +134,7 @@ static volatile bool micPause = false;                          // MIC/MICLOG us
 static volatile uint32_t micTraceUntil = 0;                     // MICTRACE: print every frame
 static void micCapture(int n, int rate);
 static void micLog(int secs);
+static void serialCfg(const String &json);   // CFG / CFGSET: the settings layer over USB
 
 static void drawGrid(const uint8_t *rows, bool frame) {   // rows[r] bit c = cell (r,c)
   for (int r = 0; r < 7; r++)
@@ -448,6 +449,10 @@ static void handle(const String &s) {
     int v = arg.toInt();
     if (v >= 1 && v <= N_STYLES) { setStyle(v); dirty = true; Serial.printf("OK style %d\n", specStyle); }
     else Serial.printf("ERR style 1..%d\n", N_STYLES);
+  } else if (cmd == "CFG") {                    // print every setting: "CFG {json}"
+    serialCfg("");
+  } else if (cmd == "CFGSET") {                 // "CFGSET {json}" -> "CFGOK {settings}" or "CFGERR {errors}"
+    serialCfg(arg);
   } else if (cmd == "GET") {
     uint8_t t[7];
     if (rtcRead(t))
@@ -981,6 +986,32 @@ static bool applySettings(JsonObjectConst in, JsonDocument &out) {
   return true;
 }
 
+static void configJson(JsonObject c);
+
+// Same settings and checks as /api/set, for the PC app over USB. Replies are one line each.
+static void serialCfg(const String &json) {
+  JsonDocument out;
+  if (json.length()) {
+    JsonDocument in;
+    if (deserializeJson(in, json) || !in.is<JsonObject>()) {
+      Serial.println("CFGERR {\"error\":\"expected a JSON object\"}");
+      return;
+    }
+    if (!applySettings(in.as<JsonObjectConst>(), out)) {
+      Serial.print("CFGERR ");
+      serializeJson(out, Serial);
+      Serial.println();
+      return;
+    }
+  }
+  JsonDocument cfg;
+  configJson(cfg.to<JsonObject>());
+  if (out["warning"].is<JsonObject>()) cfg["_warning"] = out["warning"];
+  Serial.print(json.length() ? "CFGOK " : "CFG ");
+  serializeJson(cfg, Serial);
+  Serial.println();
+}
+
 static void configJson(JsonObject c) {
   c["brightness"] = brightness;
   c["clock_24h"] = (bool)clock24;
@@ -1335,7 +1366,7 @@ void loop() {
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n' || c == '\r') { if (line.length()) { handle(line); line = ""; } }
-    else if (line.length() < 200) line += c;
+    else if (line.length() < 1024) line += c;   // room for CFGSET {json}
   }
   wifiLoop();
   checkButtons();

@@ -3,10 +3,10 @@ import pytest
 
 
 @pytest.mark.parametrize("key, value, expected", [
-    ("brightness", "6", 6),
-    ("brightness", 99, 16),            # clamped to the TM1680's range
-    ("brightness", 0, 1),
-    ("style", 7.9, 5),
+    ("grid_fps", "6", 6),
+    ("grid_fps", 99, 30),              # clamped
+    ("grid_fps", 0, 2),
+    ("rotate_dwell", 700.9, 600),
     ("scroll_ms", 10, 50),
     ("gain_mic", "1.5", 1.5),
     ("message_mode", "date", "date"),
@@ -17,12 +17,12 @@ def test_coerce_accepts_and_normalizes(app, key, value, expected):
 
 
 @pytest.mark.parametrize("key, value", [
-    ("brightness", "abc"),
-    ("brightness", True),              # bools are not numbers here
-    ("brightness", None),
+    ("grid_fps", "abc"),
+    ("grid_fps", True),                # bools are not numbers here
+    ("grid_fps", None),
     ("logo", "yes"),
     ("message_mode", "bogus"),
-    ("units", "kelvin"),
+    ("icon_mode", "disco"),
     ("custom_text", 5),
     ("grid_custom", [1, 2]),
 ])

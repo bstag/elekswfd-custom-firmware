@@ -15,7 +15,7 @@ def firmware_commands():
 
 def test_firmware_understands_everything_the_app_sends(app, sim):
     app.cfg.update(message_mode="rotate", rotate_date=True, grid_enable=True, icon_mode="system", logo=True)
-    app.uploads.append({"type": "omtext", "text": "HELLO WORLD"})
+    app.clock_requests.append([{"offline_text": "HELLO WORLD"}, __import__("threading").Event(), None])
     app.uploads.append({"type": "grid", "frames": [[1] * 7], "fps": 8, "frame": False})
     app.uploads.append({"type": "ganim", "name": "spin", "fps": 8, "frame": False})
     s = sim(30, events={10: app.sync_now.set})
@@ -53,9 +53,30 @@ def test_embedded_dashboard_matches_source():
 def test_dashboard_only_sends_settings_the_firmware_has():
     html = (ROOT / "wfd-firmware" / "clock" / "web" / "dashboard.html").read_text(encoding="utf-8")
     sent = set(re.findall(r"set\(\{\s*(\w+):", html)) | set(re.findall(r"\(\{\s*(\w+):", html))
-    known = set(re.findall(r'c\["(\w+)"\]', MAIN_CPP.read_text(encoding="utf-8")))
+    known = set(re.findall(r'\bc\["(\w+)"\]', MAIN_CPP.read_text(encoding="utf-8")))
     assert len(sent) >= 14, sent
     assert sent <= known, f"dashboard sends unknown settings: {sorted(sent - known)}"
+
+
+def test_clock_owned_settings_match_the_firmware(app):
+    """The app forwards exactly the settings the clock reports (configJson), no more, no fewer."""
+    fw = set(re.findall(r'\bc\["(\w+)"\]', MAIN_CPP.read_text(encoding="utf-8")))
+    assert app.CLOCK_KEYS == fw
+    assert not app.CLOCK_KEYS & set(app.DEFAULTS), "a setting has one owner"
+
+
+def test_app_pages_only_send_known_settings(app):
+    here = Path(__file__).resolve().parents[1]
+    sent = set()
+    for page in ("control.html", "draw.html"):
+        html = (here / page).read_text(encoding="utf-8")
+        sent |= set(re.findall(r"set(?:Cfg)?\(\{\s*(\w+):", html))
+        for _, ids in re.findall(r"for \(const (\w+) of \[([^\]]*)\]\)[^;]{0,120}?setCfg\(\{ \[\1\]", html):
+            sent |= set(re.findall(r"'(\w+)'", ids))                       # setCfg({ [id]: ... }) loops
+        sent |= set(re.findall(r"\{\s*(\w+):\s*zip", html)) | set(re.findall(r"\{\s*(?:\w+:[^,}]+,\s*)?(\w+):\s*\$\('#units'\)", html))
+    assert len(sent) >= 20, sorted(sent)
+    unknown = sent - set(app.DEFAULTS) - app.CLOCK_KEYS - {"grid_custom"}
+    assert not unknown, f"pages send settings nobody owns: {sorted(unknown)}"
 
 
 def test_firmware_font_table_is_generated_from_font14():

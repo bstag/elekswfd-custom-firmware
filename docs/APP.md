@@ -44,9 +44,22 @@ over USB or running the old vendor tool. (OTA over WiFi does **not** need the po
 
 ## Settings
 
-All UI settings persist in `wfd-control/wfd_config.json` (location, units, style, gains,
-brightness, message mode, grid animation, icon mode, logo, offline text, standalone
-toggles, …). Edit the file directly or use the UI; changes apply live.
+Every setting has one owner:
+
+- **The clock** owns everything about itself: brightness, 12/24‑hour, spectrum style, units,
+  time zone, weather ZIP, the offline message, and all "when the app is off" behaviour. They
+  live in the clock's flash. The app reads them over USB (`CFG`) when it connects and every
+  5 s, and changes them with `CFGSET`. The clock checks them exactly as its own dashboard does.
+  A change made on the clock's dashboard or phone page therefore shows up in the app, and the
+  app never overwrites it.
+- **The app** owns what needs the PC: PC audio spectrum and gains, CPU/GPU/RAM bars, the live
+  message line (window title, custom text, rotation), live grid animations, icons and logo.
+  These persist in `wfd-control/wfd_config.json`.
+
+The app's UI shows both together. Saving a clock setting while the clock is unplugged fails
+with "clock not connected", and the clock's own error messages (e.g. a bad ZIP) are shown
+as they are. The app's weather uses the clock's ZIP and units. It sends a location to the clock
+(`GEO`) only if the clock has none.
 
 ## Auto‑start at login (Windows)
 
@@ -54,12 +67,11 @@ toggles, …). Edit the file directly or use the UI; changes apply live.
 your Startup folder (`shell:startup`) — e.g. named "WFD Clock Helper.vbs". To disable,
 delete it from Startup. Point its paths at a **persistent** Python env (not a temp venv).
 
-## Phone vs app — who wins
+## App and clock together
 
-Brightness, weather location, and the offline message can be set from **either** the
-clock's phone page **or** this app, so last‑writer‑wins for those three. Everything else
-is cleanly split: the phone page owns standalone behavior; the app owns the live,
-PC‑fed features (spectrum, bars, window title, generated animations).
+While the app is connected it drives the live display (spectrum, bars, message line, grid).
+When it stops, the clock carries on with its own settings after 2 s. Settings never fight:
+see *Settings* above.
 
 ## Note on the older headless helper
 

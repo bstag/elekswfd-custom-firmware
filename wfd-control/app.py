@@ -45,12 +45,14 @@ CH340_VID, CH340_PID = 0x1A86, 0x7523    # the clock's USB-serial chip
 BAUD = 115200
 NLEV = 12                                # spectrum column height
 
+# Settings the app owns (wfd_config.json). Everything about the clock itself lives on the clock
+# (CLOCK_KEYS): the app reads it with CFG and changes it with CFGSET, so the clock, its dashboard
+# and this app always agree.
 DEFAULTS = {
-    "time_sync": True, "clock_24h": True,
-    "spectrum": True, "style": 4, "gain_out": 1.0, "gain_mic": 1.0,
+    "time_sync": True,
+    "spectrum": True, "gain_out": 1.0, "gain_mic": 1.0,
     "bars": True,
-    "weather": True, "location": "", "units": "fahrenheit",
-    "brightness": 6,
+    "weather": True,
     "message_mode": "weather",        # weather | window | text | date | rotate
     "custom_text": "HELLO",
     "scroll_ms": 350,
@@ -58,18 +60,21 @@ DEFAULTS = {
     "rotate_dwell": 8,                 # seconds per item in rotate mode
     "grid_enable": False, "grid_anim": "spin", "grid_frame": False, "grid_fps": 12,
     "grid_custom": [],                 # list of frames, each = [r0..r6] row bytes
-    "grid_standalone": True,           # clock plays the stored grid animation when the app is off
-    "offline_text": "WFD CLOCK",       # message shown on the clock when the app is off
-    "msg_standalone": True,
     "icon_mode": "off",                # off | audio | system | all
     "logo": False,                     # ELEKSMAKER logo on/off
 }
 
-_RANGES = {"style": (1, 5), "brightness": (1, 16), "gain_out": (0.0, 10.0), "gain_mic": (0.0, 10.0),
+# Owned by the clock (firmware configJson / applySettings). The clock validates them.
+CLOCK_KEYS = {
+    "brightness", "clock_24h", "style", "units", "tz", "location", "offline_text", "msg_standalone",
+    "standalone_msg_mode", "standalone_rotate", "standalone_dwell", "standalone_scroll_ms",
+    "mic_standalone", "grid_standalone", "standalone_anim", "standalone_fps", "standalone_frame",
+}
+
+_RANGES = {"gain_out": (0.0, 10.0), "gain_mic": (0.0, 10.0),
            "scroll_ms": (50, 5000), "rotate_dwell": (2, 600), "grid_fps": (2, 30)}
 _CHOICES = {"message_mode": {"weather", "window", "text", "date", "rotate"},
-            "icon_mode": {"off", "audio", "system", "all"},
-            "units": {"fahrenheit", "celsius"}}
+            "icon_mode": {"off", "audio", "system", "all"}}
 
 
 def coerce(key, v):
@@ -160,7 +165,8 @@ def foreground_title():
 def load_config():
     cfg = dict(DEFAULTS)
     try:
-        cfg.update({k: v for k, v in json.loads(CONFIG.read_text()).items() if not k.startswith("_")})
+        # only the app's own settings: older files also hold clock settings, which the clock owns now
+        cfg.update({k: v for k, v in json.loads(CONFIG.read_text()).items() if k in DEFAULTS})
     except Exception:
         pass
     return cfg
@@ -183,6 +189,7 @@ state = {
     "online": False,
     "battery": None,
     "geo": None,
+    "clock": None,                     # the clock's own settings (CFG), None until read
 }
 state_lock = threading.Lock()           # writers replace whole values via set_state(); readers of a
                                         # single key need no lock, /api/status serializes under it
@@ -204,6 +211,25 @@ _BAND_EDGES = [60, 160, 320, 640, 1280, 2560, 5120, 12000]
 grid_engine = grid_anim.GridEngine()
 grid_preview = {"rows": [0] * 7, "frame": 0, "at": 0.0}   # live frame from the drawing tool
 sync_now = threading.Event()           # set by /api/sync: push the PC time to the clock now
+clock_requests = []                    # CFGSET requests for the link thread: [patch, Event, result]
+clock_requests_lock = threading.Lock()
+
+
+def set_clock(patch, timeout=3.0):
+    """Change clock-owned settings through the link (CFGSET). Returns (ok, errors_or_None)."""
+    if not state["connected"]:
+        return False, {k: "clock not connected" for k in patch}
+    req = [patch, threading.Event(), None]
+    with clock_requests_lock:
+        clock_requests.append(req)
+    if not req[1].wait(timeout):
+        return False, {k: "clock didn't answer" for k in patch}
+    return req[2]
+
+
+def clock_setting(key, default):
+    c = state["clock"]
+    return c.get(key, default) if c else default
 uploads = []                           # queued serial uploads for the worker to perform
 uploads_lock = threading.Lock()
 
@@ -327,8 +353,8 @@ def weather_reader():
     lat = lon = label = None
     while not stop.is_set():
         try:
-            with cfg_lock:
-                loc, units = cfg["location"].strip(), cfg["units"].lower()
+            loc = clock_setting("location", "").strip()       # the clock's ZIP; blank = by IP
+            units = clock_setting("units", "fahrenheit").lower()
             if loc != cur_loc or lat is None:
                 lat, lon, label = resolve_location(loc)
                 cur_loc = loc
@@ -389,6 +415,7 @@ class ClockLink:
         self.scroll_pos = 0
         self.rot_idx = -1
         self.rot_until = 0.0
+        self.last_cfg = 0.0
 
     def run(self):
         while not stop.is_set():
@@ -422,7 +449,46 @@ class ClockLink:
                 self.set_time()
         self.last_sync = time.time()
         self.sent.clear()                  # a fresh (or power-cycled) clock needs everything again
+        self.read_clock_config()
         return True
+
+    def request(self, line, prefixes, timeout=1.5):
+        """Send a command and wait for a reply line starting with one of prefixes -> (prefix, json)."""
+        self.send(line)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            raw = self.s.readline()
+            if not raw:
+                continue
+            text = raw.decode(errors="replace").strip()
+            for pre in prefixes:           # other replies (OK ...) from earlier commands are skipped
+                if text.startswith(pre + " "):
+                    return pre, json.loads(text[len(pre) + 1:])
+        return None, None
+
+    def read_clock_config(self):
+        pre, cfg_ = self.request("CFG", ["CFG"])
+        if pre:
+            set_state(clock=cfg_)
+        self.last_cfg = time.time()
+
+    def run_clock_requests(self):
+        with clock_requests_lock:
+            reqs = clock_requests[:]
+            clock_requests.clear()
+        for req in reqs:
+            pre, body = self.request("CFGSET " + json.dumps(req[0], separators=(",", ":")),
+                                     ["CFGOK", "CFGERR"])
+            if pre == "CFGOK":
+                warning = body.pop("_warning", None)
+                set_state(clock=body)
+                req[2] = (True, warning)
+            elif pre == "CFGERR":
+                err = body.get("error")
+                req[2] = (False, err if isinstance(err, dict) else {k: str(err) for k in req[0]})
+            else:
+                req[2] = (False, {k: "clock didn't answer" for k in req[0]})
+            req[1].set()
 
     def send(self, line):
         self.s.write((line + "\n").encode())
@@ -447,7 +513,10 @@ class ClockLink:
             self.set_time()
             self.last_sync = time.time()
             sync_now.clear()
-        self.push_settings(c)
+        self.run_clock_requests()
+        if time.time() - self.last_cfg > 5:            # pick up changes made on the clock itself
+            self.read_clock_config()
+        self.push_location()
         self.run_upload()
         levels = self.audio_levels(c)
         vals = levels if c["spectrum"] else {"out": 0, "mic": 0}
@@ -460,14 +529,10 @@ class ClockLink:
         self.send_message(c, now)
         self.send_grid(c)
 
-    def push_settings(self, c):
-        self.push("STYLE", c["style"])
-        self.push("BRIGHT", c["brightness"])
-        self.push("CLK24", int(c["clock_24h"]))
-        self.push("GAUTO", int(c["grid_standalone"]))
-        self.push("OMAUTO", int(c["msg_standalone"]))
-        g = state["geo"]
-        if g:                                          # location for on-device weather
+    def push_location(self):
+        """Give the clock our weather location only if it has none of its own (no ZIP set)."""
+        g, clk = state["geo"], state["clock"]
+        if g and clk is not None and not clk.get("location"):
             self.push("GEO", f"{g['lat']} {g['lon']} {g['unit']}")
 
     def run_upload(self):
@@ -476,14 +541,10 @@ class ClockLink:
             job = uploads.pop(0) if uploads else None
         if not job:
             return
-        if job["type"] == "omtext":        # the clock renders and scrolls the text itself
-            self.send(f"OMTEXT {job['text']}")
-            set_state(saved=f"message: {job['text']!r}")
-            return
         if job["type"] == "ganim":         # the clock runs the animation itself
             self.send(f"GANIM {job['name']} {job['fps']} {1 if job['frame'] else 0}")
             set_state(saved=f"grid: {job['name']}")
-            self.sent.pop("GAUTO", None)   # GANIM turns auto on; re-assert the setting
+            self.last_cfg = 0              # GANIM changes the clock's settings: re-read them
             return
         self.send("GCLR")
         time.sleep(0.03)
@@ -492,7 +553,7 @@ class ClockLink:
             time.sleep(0.015)
         self.send(f"GCOMMIT {job['fps']} {1 if job['frame'] else 0}")
         set_state(saved=f"grid: {len(job['frames'])} frames")
-        self.sent.pop("GAUTO", None)       # a commit turns auto on; re-assert the setting
+        self.last_cfg = 0                  # GCOMMIT changes the clock's settings: re-read them
 
     def audio_levels(self, c):
         """0..NLEV levels for output/mic (always computed: used by the spectrum and the icon row)."""
@@ -606,9 +667,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, (HERE / "control.html").read_bytes(), "text/html; charset=utf-8")
         if self.path in ("/draw", "/draw.html"):
             return self._send(200, (HERE / "draw.html").read_bytes(), "text/html; charset=utf-8")
-        if self.path == "/api/status":
+        if self.path == "/api/status":            # config = app settings + the clock's own
             with cfg_lock, state_lock:
-                body = json.dumps({"state": state, "config": cfg}).encode()
+                body = json.dumps({"state": state, "config": {**cfg, **(state["clock"] or {})}}).encode()
             return self._send(200, body)
         self._send(404, {"error": "not found"})
 
@@ -622,7 +683,10 @@ class H(BaseHTTPRequestHandler):
             return self._send(400, {"error": "bad json"})
         if self.path == "/api/set":
             clean, errors = {}, {}
+            clock = {k: v for k, v in body.items() if k in CLOCK_KEYS}
             for k, v in body.items():
+                if k in CLOCK_KEYS:
+                    continue
                 if k not in DEFAULTS:
                     errors[k] = "unknown setting"
                     continue
@@ -630,12 +694,18 @@ class H(BaseHTTPRequestHandler):
                     clean[k] = coerce(k, v)
                 except (TypeError, ValueError) as e:
                     errors[k] = str(e)
-            if errors:
+            if errors:                             # nothing reaches the clock unless the app part is valid
                 return self._send(400, {"error": errors})
+            warning = None
+            if clock:                              # the clock checks its own; all-or-nothing there too
+                ok, info = set_clock(clock)
+                if not ok:
+                    return self._send(400, {"error": info})
+                warning = info
             with cfg_lock:
                 cfg.update(clean)
                 save_config(cfg)
-            return self._send(200, {"ok": True})
+            return self._send(200, {"ok": True, "warning": warning} if warning else {"ok": True})
         if self.path == "/api/sync":
             sync_now.set()
             return self._send(200, {"ok": True})
@@ -668,14 +738,14 @@ class H(BaseHTTPRequestHandler):
             with uploads_lock:
                 uploads.append(job)
             return self._send(200, {"queued": queued})
-        if self.path == "/api/om_save":
-            with cfg_lock:
-                text = body.get("text", cfg["offline_text"])
+        if self.path == "/api/om_save":              # kept for older pages: same as setting offline_text
+            text = body.get("text", clock_setting("offline_text", ""))
             if not isinstance(text, str):
                 return self._send(400, {"error": "text: expected a string"})
             text = clean_omtext(text)
-            with uploads_lock:
-                uploads.append({"type": "omtext", "text": text})
+            ok, info = set_clock({"offline_text": text})
+            if not ok:
+                return self._send(400, {"error": info})
             return self._send(200, {"queued": 1, "text": text})
         self._send(404, {"error": "not found"})
 

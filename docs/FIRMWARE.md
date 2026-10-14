@@ -42,6 +42,8 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `OMTEXT <text>` | Message text for the on-device message line (≤ 96 chars, placeholders allowed) |
 | `MSGCFG mode rot dwell scroll` | Message line: mode `0`=temp `1`=text `2`=date `3`=rotate; `rot` bitmask (1 temp, 2 text, 4 date); seconds per item; ms per scroll step |
 | `MSGINFO` | Print the message line's settings and what it's showing now |
+| `CFG` | Print every setting as JSON: `CFG {...}` (the same keys as `/api/status` config) |
+| `CFGSET {json}` | Change settings with the same checks as `POST /api/set`: replies `CFGOK {settings}` or `CFGERR {"error": {...}}` |
 | `MIC [0-3]` | Mic diagnostics: one 2048‑sample capture at 10 kHz with stats (optional ADC attenuation 0/2.5/6/11 dB for this capture) |
 | `MICLOG <s>` | Mic level bar every 100 ms |
 | `MICTRACE <s>` | Per processed frame: `T ms rms low high level% bass treble` (for tuning; see below) |

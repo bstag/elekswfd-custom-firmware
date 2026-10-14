@@ -45,6 +45,11 @@
   .stat span { width:40px; text-align:right; font-variant-numeric:tabular-nums; }
   .big { font-size:22px; font-weight:600; }
   .hint { color:var(--muted); font-size:12px; margin-top:8px; }
+  #toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:var(--panel2);
+           border:1px solid var(--bad); color:var(--bad); border-radius:8px; padding:9px 14px; font-size:13px;
+           opacity:0; transition:opacity .2s; pointer-events:none; max-width:calc(100% - 32px); }
+  #toast.show { opacity:1; }
+  #toast.warn { border-color:var(--accent); color:var(--text); }
   .wx { font-size:30px; font-weight:600; }
 </style>
 </head>
@@ -116,8 +121,8 @@
       <span id="wxCond" class="big"></span>
     </div>
     <div class="row">
-      <label>Location</label>
-      <input type="text" id="location" placeholder="ZIP or Town, State" style="flex:1">
+      <label>ZIP code</label>
+      <input type="text" id="location" inputmode="numeric" maxlength="5" placeholder="e.g. 76708 (blank: locate by IP)" style="flex:1">
       <select id="units"><option value="fahrenheit">°F</option><option value="celsius">°C</option></select>
       <button class="primary" id="applyLoc">Apply</button>
     </div>
@@ -214,10 +219,23 @@
 const $ = s => document.querySelector(s);
 let cfg = {}, suppress = false;
 
-async function post(body) {
-  await fetch('/api/set', { method:'POST', headers:{'Content-Type':'application/json','X-WFD':'1'}, body: JSON.stringify(body) });
+// Settings about the clock itself live on the clock; the app passes them on and the clock checks
+// them, so errors (e.g. a bad ZIP, or the clock unplugged) come back here.
+function toast(text, warn) {
+  const t = $('#toast'); t.textContent = text; t.className = 'show' + (warn ? ' warn' : '');
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.className = '', 4000);
 }
-function setCfg(patch) { Object.assign(cfg, patch); post(patch); }
+async function post(body) {
+  try {
+    const r = await fetch('/api/set', { method:'POST', headers:{'Content-Type':'application/json','X-WFD':'1'}, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => ({}));
+    const msg = e => typeof e === 'object' ? Object.entries(e).map(([k, v]) => `${k}: ${v}`).join('; ') : String(e);
+    if (!r.ok) { toast(msg(d.error || 'not saved')); poll(); return false; }
+    if (d.warning) toast(msg(d.warning), true);
+    return true;
+  } catch { toast('app unreachable'); return false; }
+}
+function setCfg(patch) { Object.assign(cfg, patch); return post(patch); }
 
 async function poll() {
   let d;
@@ -282,7 +300,10 @@ $('#gain_out').onchange = e => setCfg({ gain_out: +e.target.value });
 $('#gain_mic').onchange = e => setCfg({ gain_mic: +e.target.value });
 $('#styles').onclick = e => { if (e.target.dataset.s) setCfg({ style: +e.target.dataset.s }), applyConfig(cfg); };
 $('#syncNow').onclick = () => fetch('/api/sync', { method:'POST', headers:{'Content-Type':'application/json','X-WFD':'1'}, body:'{}' });
-$('#applyLoc').onclick = () => setCfg({ location: $('#location').value.trim(), units: $('#units').value });
+$('#applyLoc').onclick = () => {             // ZIP and units are the clock's settings
+  const zip = $('#location').value.trim();
+  setCfg(zip ? { location: zip, units: $('#units').value } : { units: $('#units').value });
+};
 $('#location').onfocus = () => suppress = true;
 $('#location').onblur = () => suppress = false;
 $('#msgMode').onclick = e => { if (e.target.dataset.m) { setCfg({ message_mode: e.target.dataset.m }); applyConfig(cfg); } };
@@ -304,9 +325,14 @@ async function apiPost(path, body) { return (await fetch(path, { method:'POST', 
 $('#gridSave').onclick = async () => { const r = await apiPost('/api/grid_save', {}); $('#gridSave').textContent = r.error ? 'Error' : '✓ Saved'; setTimeout(() => $('#gridSave').textContent = 'Save to clock', 1500); };
 $('#iconMode').onclick = e => { if (e.target.dataset.i) { setCfg({ icon_mode: e.target.dataset.i }); applyConfig(cfg); } };
 $('#logo').onchange = e => setCfg({ logo: e.target.checked });
-$('#omSave').onclick = async () => { setCfg({ offline_text: $('#offline_text').value }); const r = await apiPost('/api/om_save', { text: $('#offline_text').value }); $('#omSave').textContent = r.error ? 'Error' : '✓ Saved'; setTimeout(() => $('#omSave').textContent = 'Save to clock', 1500); };
+$('#omSave').onclick = async () => {
+  const ok = await setCfg({ offline_text: $('#offline_text').value });
+  $('#omSave').textContent = ok ? '✓ Saved' : 'Error';
+  setTimeout(() => $('#omSave').textContent = 'Save to clock', 1500);
+};
 
 poll(); setInterval(poll, 1000);
 </script>
+<div id="toast" role="status"></div>
 </body>
 </html>

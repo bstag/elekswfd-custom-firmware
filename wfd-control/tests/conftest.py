@@ -38,21 +38,54 @@ def app(tmp_path):
     sys.modules.pop("app", None)
 
 
+CLOCK_DEFAULTS = {                          # what a real clock reports for CFG
+    "brightness": 6, "clock_24h": True, "style": 4, "units": "fahrenheit",
+    "tz": "CST6CDT,M3.2.0,M11.1.0", "location": "76708", "offline_text": "HELLO",
+    "msg_standalone": True, "standalone_msg_mode": "text", "standalone_rotate": ["weather", "text", "date"],
+    "standalone_dwell": 8, "standalone_scroll_ms": 350, "mic_standalone": True, "grid_standalone": True,
+    "standalone_anim": "spin", "standalone_fps": 8, "standalone_frame": False,
+}
+
+
 class FakeSerial:
-    """Records every line written. Can simulate an unplug after N writes on its first connection."""
+    """Records every line written; answers CFG / CFGSET like the firmware. Can simulate an unplug
+    after N writes on its first connection."""
 
     def __init__(self, sim, n):
         self.sim, self.port, self.is_open, self.writes, self.n = sim, f"COM{n}", True, 0, n
+        self.replies = []
 
     def write(self, b):
         self.writes += 1
         if self.n == 1 and self.writes == self.sim.unplug_after:
             self.is_open = False
             raise serial.SerialException("unplugged")
-        self.sim.lines.append(f"{self.sim.now():8.3f} {self.port} {b.decode().rstrip()}")
+        line = b.decode().rstrip()
+        self.sim.lines.append(f"{self.sim.now():8.3f} {self.port} {line}")
+        cmd, _, arg = line.partition(" ")
+        if cmd == "CFG":
+            self.replies.append("CFG " + json.dumps(self.sim.clock_cfg))
+        elif cmd == "CFGSET":
+            patch = json.loads(arg)
+            bad = {k: "unknown setting" for k in patch if k not in self.sim.clock_cfg}
+            if "brightness" in patch and not (isinstance(patch["brightness"], int) and 1 <= patch["brightness"] <= 16):
+                bad["brightness"] = "expected an integer 1..16"
+            if bad:
+                self.replies.append("CFGERR " + json.dumps({"error": bad}))
+            else:
+                self.sim.clock_cfg.update(patch)
+                self.replies.append("CFGOK " + json.dumps(self.sim.clock_cfg))
+        elif cmd in ("GANIM", "GCOMMIT"):
+            self.replies.append("OK")               # unrelated replies the app must skip
+
+    def readline(self):
+        if self.replies:
+            return (self.replies.pop(0) + "\r\n").encode()
+        self.sim.sleep(0.05)                       # like the real port's read timeout
+        return b""
 
     def reset_input_buffer(self):
-        pass
+        self.replies.clear()
 
 
 class Sim:
@@ -64,6 +97,7 @@ class Sim:
         self.t = T0
         self.lines = []
         self.opens = 0
+        self.clock_cfg = json.loads(json.dumps(CLOCK_DEFAULTS))
         sim = self
 
         class FakeDT(_dt.datetime):
