@@ -62,6 +62,7 @@ pub fn app() -> Arc<Ctx> {
             unit: 0,
             label: "Waco".into(),
             cond: "Sunny".into(),
+            scene: "clear".into(),
         };
         st.metrics = Metrics {
             cpu: 37,

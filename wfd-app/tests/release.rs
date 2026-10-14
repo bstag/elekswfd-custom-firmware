@@ -29,12 +29,13 @@ type StatusCase = (
 #[test]
 fn firmware_status_table() {
     let cases: [StatusCase; 6] = [
-        ("A", Some(3), Some(rel("A", 3)), "ok", false),
-        ("A", Some(3), Some(rel("B", 3)), "ok", true), // newer build, same protocol
-        ("old", None, Some(rel("B", 3)), "older", true), // before versions were reported
-        ("A", Some(2), Some(rel("B", 3)), "older", true),
-        ("A", Some(4), Some(rel("B", 3)), "newer", false), // never "update" to an older protocol
-        ("A", Some(3), None, "ok", false),                 // no release shipped
+        // the app speaks protocol 4 (config::PROTOCOL)
+        ("A", Some(4), Some(rel("A", 4)), "ok", false),
+        ("A", Some(4), Some(rel("B", 4)), "ok", true), // newer build, same protocol
+        ("old", None, Some(rel("B", 4)), "older", true), // before versions were reported
+        ("A", Some(3), Some(rel("B", 4)), "older", true),
+        ("A", Some(5), Some(rel("B", 4)), "newer", false), // never "update" to an older protocol
+        ("A", Some(4), None, "ok", false),                 // no release shipped
     ];
     for (fw, proto, release, compat, available) in cases {
         assert_eq!(

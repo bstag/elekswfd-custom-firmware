@@ -274,8 +274,8 @@ fn status_returns_state_and_config() {
     assert_eq!(st["update"], json!({"state": "idle", "message": "", "last": null}));
     assert_eq!(
         st["weather"].as_object().unwrap().keys().len(),
-        5,
-        "code, temp, unit, label, cond"
+        6,
+        "code, temp, unit, label, cond, scene"
     );
 }
 
@@ -283,14 +283,14 @@ fn status_returns_state_and_config() {
 fn status_reports_firmware_compat() {
     let app = start_with(Some(Release {
         fw: "wfd-clock new".into(),
-        protocol: 3,
+        protocol: config::PROTOCOL,
     }));
     {
         let mut st = app.ctx.state();
         st.connected = true;
         st.link = Some("usb".into());
         st.clock_fw = Some("wfd-clock old".into());
-        st.clock_protocol = Some(3);
+        st.clock_protocol = Some(config::PROTOCOL);
     }
     let (_, body) = get(&app, "/api/status");
     assert_eq!(body["state"]["compat"], json!("ok"));
@@ -298,7 +298,7 @@ fn status_reports_firmware_compat() {
     assert_eq!(body["state"]["link"], json!("usb"));
     assert_eq!(
         body["state"]["release"],
-        json!({"fw": "wfd-clock new", "protocol": 3})
+        json!({"fw": "wfd-clock new", "protocol": config::PROTOCOL})
     );
 }
 

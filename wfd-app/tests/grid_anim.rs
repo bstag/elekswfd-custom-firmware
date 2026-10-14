@@ -47,7 +47,9 @@ fn animation_list_matches_python() {
         .iter()
         .map(|n| n.as_str().unwrap())
         .collect();
-    assert_eq!(names, ANIMATIONS);
+    // Python's list, plus "weather" (Rust only; see tests/weather_anim.rs)
+    assert_eq!(ANIMATIONS.last(), Some(&"weather"));
+    assert_eq!(names, ANIMATIONS[..ANIMATIONS.len() - 1]);
 }
 
 #[test]

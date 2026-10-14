@@ -8,6 +8,7 @@ use serde_json::Value;
 use ureq::Agent;
 
 /// Current weather as the clock shows it. `code`: 1 sunny, 2 cloudy, 3 rain; `unit`: 1 = Celsius.
+/// `scene`: the finer picture for the "weather" grid animation (`grid_anim::SCENES`), "" = unknown.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct Weather {
     pub code: u8,
@@ -15,6 +16,7 @@ pub struct Weather {
     pub unit: u8,
     pub label: String,
     pub cond: String,
+    pub scene: String,
 }
 
 /// Resolved location (rounded to 4 decimals like app.py's `geo` state) and unit (1 = Celsius).
@@ -148,6 +150,18 @@ pub fn parse_current(d: &Value) -> Result<(u8, i32), String> {
     Ok((wmo(code), temp.round_ties_even() as i32))
 }
 
+/// forecast `current` -> the weather animation's scene (WMO code + `is_day`, day if missing).
+pub fn parse_scene(d: &Value) -> Result<&'static str, String> {
+    let c = &d["current"];
+    let wc = &c["weather_code"];
+    let code = wc
+        .as_i64()
+        .or_else(|| wc.as_f64().map(|f| f.trunc() as i64))
+        .ok_or("no weather_code")?;
+    let day = c["is_day"].as_i64().or_else(|| c["is_day"].as_f64().map(|f| f as i64)) != Some(0);
+    Ok(crate::grid_anim::SCENES[crate::grid_anim::scene_from_wmo(code, day)])
+}
+
 fn resolve_with(agent: &Agent, loc: &str) -> Result<(f64, f64, String), String> {
     if loc.is_empty() {
         return parse_ip_api(&get_json(
@@ -173,20 +187,23 @@ pub fn resolve_location(loc: &str) -> Result<(f64, f64, String), String> {
     resolve_with(&agent(), loc)
 }
 
-fn fetch_with(agent: &Agent, lat: f64, lon: f64, celsius: bool) -> Result<(u8, i32), String> {
+/// (clock code, rounded temperature, scene) at a location.
+fn fetch_with(agent: &Agent, lat: f64, lon: f64, celsius: bool) -> Result<(u8, i32, &'static str), String> {
     let uname = if celsius { "celsius" } else { "fahrenheit" };
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}\
-         &current=temperature_2m,weather_code&temperature_unit={uname}",
+         &current=temperature_2m,weather_code,is_day&temperature_unit={uname}",
         py_float(lat),
         py_float(lon)
     );
-    parse_current(&get_json(agent, &url)?)
+    let d = get_json(agent, &url)?;
+    let (code, temp) = parse_current(&d)?;
+    Ok((code, temp, parse_scene(&d)?))
 }
 
 /// Current (clock code, rounded temperature) at a location.
 pub fn fetch_current(lat: f64, lon: f64, celsius: bool) -> Result<(u8, i32), String> {
-    fetch_with(&agent(), lat, lon, celsius)
+    fetch_with(&agent(), lat, lon, celsius).map(|(code, temp, _)| (code, temp))
 }
 
 /// One `weather_reader` iteration at a time; re-resolves the location only when it changes.
@@ -221,7 +238,7 @@ impl WeatherReader {
             self.cur_loc = Some(loc.to_string());
         }
         let (lat, lon, label) = self.place.clone().expect("resolved above");
-        let (code, temp) = fetch_with(&self.agent, lat, lon, celsius)?;
+        let (code, temp, scene) = fetch_with(&self.agent, lat, lon, celsius)?;
         let unit = u8::from(celsius);
         let geo = Geo {
             lat: round4(lat),
@@ -234,6 +251,7 @@ impl WeatherReader {
             unit,
             label,
             cond: condition(code).to_string(),
+            scene: scene.to_string(),
         };
         Ok((geo, weather))
     }

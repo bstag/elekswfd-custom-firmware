@@ -237,6 +237,9 @@
     <div class="row"><label for="zip">ZIP code</label>
       <input type="text" id="zip" inputmode="numeric" maxlength="5" placeholder="76708" style="max-width:110px">
       <button class="primary" id="saveZip">Save</button></div>
+    <div class="row"><label for="weather_scene">Grid scene</label>
+      <select id="weather_scene"></select><span class="hint" id="sceneNow" style="margin:0"></span></div>
+    <p class="hint" style="margin-top:-4px">What the <b>Weather</b> grid animation draws: <i>Follow the weather</i>, or pick one to see it.</p>
     <div class="row"><label for="units">Units</label>
       <select id="units"><option value="fahrenheit">°F</option><option value="celsius">°C</option></select></div>
     <div class="row"><label for="tz">Time zone</label>
@@ -282,7 +285,9 @@
 
 <script>
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
-const ANIMS = ['spin','bounce','rain','wave','pulse','sparkle','scan','life','heart','audio','mouth'];
+const ANIMS = ['spin','bounce','rain','wave','pulse','sparkle','scan','life','heart','audio','mouth','weather'];
+const SCENES = { clear: 'Sunny', partly: 'Partly cloudy', cloudy: 'Cloudy', fog: 'Fog', rain: 'Rain', snow: 'Snow',
+                 storm: 'Storm', night: 'Clear night', night_partly: 'Partly cloudy night' };
 const LIVE_ANIMS = ANIMS.concat(['cpu']);               // the app also has a live CPU-load animation
 let cfg = {}, editing = null, isApp = false;
 
@@ -369,6 +374,8 @@ function show(v) {
   $('#usbBanner').hidden = !v.usbProblem;
   if (v.usbProblem) $('#usbProblem').textContent = v.usbProblem[0].toUpperCase() + v.usbProblem.slice(1);
   $('#fw').textContent = v.fw || '';
+  const scene = cfg.weather_scene && cfg.weather_scene !== 'auto' ? cfg.weather_scene : (v.s.weather || {}).scene;
+  $('#sceneNow').textContent = scene ? 'showing: ' + (SCENES[scene] || scene) : '';
   const custom = $('#anim [data-v=custom]');
   if (!isApp) { custom.textContent = `Drawn (${v.s.stored_frames})`; custom.disabled = !v.s.stored_frames; }
   else { custom.textContent = 'Drawn'; custom.disabled = false; }   // the clock says if there's none
@@ -425,6 +432,7 @@ function render() {
   sel('#anim', cfg.standalone_anim); val('#fps', cfg.standalone_fps); $('#fpsVal').textContent = cfg.standalone_fps + '/s';
   check('#frame', cfg.standalone_frame);
   val('#zip', cfg.location); val('#units', cfg.units); val('#tz', cfg.tz);
+  val('#weather_scene', cfg.weather_scene || 'auto');
   if (!isApp) return;
   for (const id of ['time_sync', 'spectrum', 'bars', 'weather', 'logo', 'grid_enable', 'grid_frame']) check('#' + id, cfg[id]);
   val('#gain_out', cfg.gain_out); val('#gain_mic', cfg.gain_mic);
@@ -476,6 +484,9 @@ for (const id of ['time_sync', 'spectrum', 'bars', 'weather', 'logo', 'grid_enab
   $('#' + id).onchange = e => set({ [id]: e.target.checked });
 $$('[data-r]').forEach(b => b.onchange = () => set({ standalone_rotate: $$('[data-r]').filter(x => x.checked).map(x => x.dataset.r) }));
 $$('[data-lr]').forEach(b => b.onchange = () => set({ ['rotate_' + b.dataset.lr]: b.checked }));
+$('#weather_scene').innerHTML = '<option value="auto">Follow the weather</option>'
+  + Object.entries(SCENES).map(([k, name]) => `<option value="${k}">${name}</option>`).join('');
+$('#weather_scene').onchange = e => set({ weather_scene: e.target.value });
 $('#units').onchange = e => set({ units: e.target.value });
 $('#tz').onchange = e => set({ tz: e.target.value });
 const onEnter = (id, f) => $(id).onkeydown = e => { if (e.key === 'Enter') f(); };

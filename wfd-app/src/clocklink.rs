@@ -13,7 +13,7 @@
 use crate::ctx::{Ctx, UploadJob};
 use crate::dsp::Levels;
 use crate::font14;
-use crate::grid_anim::{Extra, GridEngine};
+use crate::grid_anim::{Extra, GridEngine, scene_from_name};
 use crate::icons::compute_icons;
 use crate::link::{
     self, Clock, Link, LinkLost, RealClock, SerialIo, UsbLink, frame_cmd, per_key, truthy,
@@ -136,6 +136,30 @@ pub struct ClockLink {
 }
 
 impl ClockLink {
+    /// The "weather" animation's scene, like the firmware's `currentScene`: the clock's
+    /// `weather_scene` pick, else our weather's scene, else the 3-way code with day/night by
+    /// the local hour.
+    fn weather_scene(&self) -> usize {
+        let pick = self.ctx.clock_setting("weather_scene", Value::from("auto"));
+        if let Some(i) = pick.as_str().and_then(scene_from_name) {
+            return i;
+        }
+        let (scene, code) = {
+            let st = self.ctx.state();
+            (scene_from_name(&st.weather.scene), st.weather.code)
+        };
+        scene.unwrap_or_else(|| {
+            let day = (6..20).contains(&chrono::Local::now().hour());
+            let name = match code {
+                2 => "cloudy",
+                3 => "rain",
+                _ if day => "clear",
+                _ => "night",
+            };
+            scene_from_name(name).unwrap_or(0)
+        })
+    }
+
     pub fn new(ctx: Arc<Ctx>, p: Platform) -> Self {
         let clock = Rc::clone(&p.clock);
         let grid = GridEngine::new(p.grid_seed);
@@ -620,6 +644,7 @@ impl ClockLink {
             }
         } else if (enable || framed) && since > 1.0 / num(c, "grid_fps").max(2.0) {
             let rows = if enable {
+                let scene = self.weather_scene();
                 let extra = {
                     let st = self.ctx.state();
                     Extra {
@@ -628,6 +653,7 @@ impl ClockLink {
                         gpu: f64::from(st.metrics.gpu),
                         ram: f64::from(st.metrics.ram),
                         custom: custom_frames(c),
+                        scene,
                     }
                 };
                 self.grid.frame(text(c, "grid_anim"), &extra)

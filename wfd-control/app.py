@@ -46,7 +46,7 @@ HERE = Path(__file__).parent
 CONFIG = HERE / "wfd_config.json"
 RELEASES = HERE.parent / "wfd-firmware" / "releases"   # firmware this app ships (make_release.py)
 WEB = HERE.parent / "wfd-firmware" / "clock" / "web"    # pages shared with the clock (dashboard, draw)
-PROTOCOL = 3                                           # firmware WFD_PROTOCOL this app speaks
+PROTOCOL = 4                                           # firmware WFD_PROTOCOL this app speaks
 HTTP_ADDR = ("127.0.0.1", 8737)
 CH340_VID, CH340_PID = 0x1A86, 0x7523    # the clock's USB-serial chip
 BAUD = 115200
@@ -79,6 +79,7 @@ CLOCK_KEYS = {
     "brightness", "clock_24h", "style", "units", "tz", "location", "offline_text", "msg_standalone",
     "standalone_msg_mode", "standalone_rotate", "standalone_dwell", "standalone_scroll_ms",
     "mic_standalone", "grid_standalone", "standalone_anim", "standalone_fps", "standalone_frame",
+    "weather_scene",
 }
 
 _RANGES = {"gain_out": (0.0, 10.0), "gain_mic": (0.0, 10.0),

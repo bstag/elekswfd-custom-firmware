@@ -74,7 +74,7 @@ fn defaults_match_app_py() {
     assert_eq!(d["gain_out"], json!(1.0));
     assert!(d["gain_out"].is_f64() && d["scroll_ms"].is_i64());
     assert_eq!(d["grid_custom"], json!([]));
-    assert_eq!(PROTOCOL, 3);
+    assert_eq!(PROTOCOL, 4);
     assert!(CLOCK_KEYS.iter().all(|k| !d.contains_key(*k)));
     // Python writes exactly this for DEFAULTS
     let path = temp_file("defaults.json");

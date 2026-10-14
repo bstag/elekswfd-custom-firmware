@@ -26,7 +26,8 @@ static Preferences prefs;
 // What the PC app checks before talking to this firmware. Bump WFD_PROTOCOL whenever commands,
 // settings or the JSON API change in a way the app must know about (app.py PROTOCOL).
 //   1 serial display commands   2 settings over USB (CFG/CFGSET) + JSON API   3 WiFi link (UDP, BYE, /api/frames)
-#define WFD_PROTOCOL 3
+//   4 "weather" grid animation + weather_scene setting
+#define WFD_PROTOCOL 4
 static const char *FW_BUILD = "wfd-clock " __DATE__ " " __TIME__;
 
 // WiFi / NTP state (declared early so serial command handlers can see them)
@@ -93,6 +94,9 @@ static int barCpu = 0, barGpu = 0, barRam = 0;   // 0..100 percent
 static uint32_t barsTime = 0;
 static int wxCode = 0, wxTemp = 0, wxUnit = 0;   // code 0=none 1=sunny 2=cloud 3=rains; unit 0=F 1=C
 static uint32_t wxTime = 0;
+static int wxScene = -1;              // grid::Scene from our own fetch (WMO code + day/night), -1 = none yet
+static uint32_t wxSceneTime = 0;
+static int wxScenePick = -1;          // "weather_scene" setting: a grid::Scene, or -1 = auto
 
 static uint8_t msgRam[12] = {0};      // raw glyphs for the 6 message chars (lo,hi x6 = bytes 0..11)
 static uint32_t msgTime = 0;
@@ -996,6 +1000,11 @@ static bool setting(const char *k, JsonVariantConst v, bool apply, Pending &pd, 
   } else if (!strcmp(k, "standalone_frame")) {
     if (!boolOf(v, pd.flag, err)) return false;
     pd.grid = true;
+  } else if (!strcmp(k, "weather_scene")) {
+    const char *s = v.as<const char *>() ? v.as<const char *>() : "";
+    i = strcmp(s, "auto") ? grid::sceneFromName(s) : -1;
+    if (i < 0 && strcmp(s, "auto")) { err = "expected auto or a scene: clear, partly, cloudy, fog, rain, snow, storm, night, night_partly"; return false; }
+    if (apply && i != wxScenePick) { wxScenePick = i; prefs.putInt("wxsc", wxScenePick); }
   } else {
     err = "unknown setting";
     return false;
@@ -1056,6 +1065,16 @@ static void serialCfg(const String &json) {
   Serial.println();
 }
 
+// The weather grid animation's scene: the picked one, else our own latest fetch, else the 3-way
+// code (also what the app sends) with day/night from the local time.
+static int currentScene() {
+  if (wxScenePick >= 0) return wxScenePick;
+  if (wxScene >= 0 && millis() - wxSceneTime < 7200000) return wxScene;
+  struct tm tmv;
+  bool day = !getLocalTime(&tmv, 0) || (tmv.tm_hour >= 6 && tmv.tm_hour < 20);
+  return wxCode == 2 ? grid::SC_CLOUDY : wxCode == 3 ? grid::SC_RAIN : day ? grid::SC_CLEAR : grid::SC_NIGHT;
+}
+
 static void configJson(JsonObject c) {
   c["brightness"] = brightness;
   c["clock_24h"] = (bool)clock24;
@@ -1075,6 +1094,7 @@ static void configJson(JsonObject c) {
   c["standalone_anim"] = grid::NAMES[gaAnim];
   c["standalone_fps"] = gaFps;
   c["standalone_frame"] = (bool)gaFlag;
+  c["weather_scene"] = wxScenePick < 0 ? "auto" : grid::SCENE_NAMES[wxScenePick];
 }
 
 static void stateJson(JsonObject s) {
@@ -1099,6 +1119,7 @@ static void stateJson(JsonObject s) {
   wx["temp"] = wxTemp;
   wx["unit"] = wxUnit ? "C" : "F";
   wx["cond"] = wxCode == 1 ? "Sunny" : wxCode == 2 ? "Cloudy" : wxCode == 3 ? "Rain" : "";
+  wx["scene"] = grid::SCENE_NAMES[currentScene()];   // what the weather animation shows now
   s["app_connected"] = millis() - appTime < 2000;
   s["message"] = msgShown;
   s["stored_frames"] = gaN;
@@ -1443,7 +1464,7 @@ static void netWeatherFetch() {       // fetch Open-Meteo directly over HTTPS
   HTTPClient http;
   http.setTimeout(6000);
   String url = "https://api.open-meteo.com/v1/forecast?latitude=" + g_lat + "&longitude=" + g_lon +
-               "&current=temperature_2m,weather_code&temperature_unit=" + (g_wunit ? "celsius" : "fahrenheit");
+               "&current=temperature_2m,weather_code,is_day&temperature_unit=" + (g_wunit ? "celsius" : "fahrenheit");
   if (!http.begin(cli, url)) return;
   int rc = http.GET();
   if (rc == 200) {
@@ -1455,6 +1476,9 @@ static void netWeatherFetch() {       // fetch Open-Meteo directly over HTTPS
       int temp = (int)lroundf(p.substring(ti + 16).toFloat());
       int code = p.substring(ci + 14).toInt();
       wxCode = code <= 1 ? 1 : (code == 2 || code == 3 || code == 45 || code == 48) ? 2 : 3;
+      int di = p.indexOf("is_day\":", cur < 0 ? 0 : cur);
+      wxScene = grid::sceneFromWmo(code, di < 0 || p.substring(di + 8).toInt() != 0);
+      wxSceneTime = millis();
       wxTemp = temp;
       wxUnit = g_wunit;
       wxTime = millis();
@@ -1539,6 +1563,7 @@ void setup() {
   // stored frames keep playing after the upgrade; otherwise default to a built-in animation
   gaAnim = constrain(prefs.getInt("gaid", gaN > 0 ? grid::CUSTOM : grid::SPIN), 0, grid::N_ANIM - 1);
   webPass = prefs.getString("webpass", "");
+  wxScenePick = constrain(prefs.getInt("wxsc", -1), -1, grid::N_SCENE - 1);
   otaLogValid = prefs.getBytes("otalog", &otaLog, sizeof otaLog) == sizeof otaLog;   // last upload
   micAuto = prefs.getInt("micauto", 1);
   analogSetPinAttenuation(MIC_PIN, ADC_11db);   // dead zone hides the room's hum (see mic_dsp.h)
@@ -1590,7 +1615,7 @@ void loop() {
       millis() - gaStep > (uint32_t)(1000 / (gaFps < 1 ? 1 : gaFps))) {
     gaStep = millis();
     if (gaAnim == grid::CUSTOM) gaIdx = (gaIdx + 1) % gaN;
-    else gEng.frame(gaAnim, gEngRows);
+    else { gEng.scene = currentScene(); gEng.frame(gaAnim, gEngRows); }
     redraw = true;
   }
   if (appOff && omAuto && (msgStepAt == 0 || millis() - msgStepAt >= (uint32_t)msgScroll)) {

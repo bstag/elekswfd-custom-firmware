@@ -14,13 +14,13 @@ def test_version_is_read_over_usb_and_kept_out_of_settings(app, sim):
     assert not {"_fw", "_protocol"} & set(app.state["clock"])
 
 
-@pytest.mark.parametrize("clock_fw, clock_proto, release, compat, available", [
-    ("A", 3, {"fw": "A", "protocol": 3}, "ok", False),
-    ("A", 3, {"fw": "B", "protocol": 3}, "ok", True),          # newer build, same protocol
-    ("old", None, {"fw": "B", "protocol": 3}, "older", True),   # before versions were reported
-    ("A", 2, {"fw": "B", "protocol": 3}, "older", True),
-    ("A", 4, {"fw": "B", "protocol": 3}, "newer", False),       # never "update" to an older protocol
-    ("A", 3, None, "ok", False),                                # no release shipped
+@pytest.mark.parametrize("clock_fw, clock_proto, release, compat, available", [   # the app speaks protocol 4
+    ("A", 4, {"fw": "A", "protocol": 4}, "ok", False),
+    ("A", 4, {"fw": "B", "protocol": 4}, "ok", True),          # newer build, same protocol
+    ("old", None, {"fw": "B", "protocol": 4}, "older", True),   # before versions were reported
+    ("A", 3, {"fw": "B", "protocol": 4}, "older", True),
+    ("A", 5, {"fw": "B", "protocol": 4}, "newer", False),       # never "update" to an older protocol
+    ("A", 4, None, "ok", False),                                # no release shipped
 ])
 def test_firmware_status(app, clock_fw, clock_proto, release, compat, available):
     st = {**app.state, "connected": True, "clock": {}, "clock_fw": clock_fw,

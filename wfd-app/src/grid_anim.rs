@@ -4,6 +4,9 @@
 //! Deterministic animations produce exactly the Python frames. The random ones (rain,
 //! sparkle, life, cpu flicker) follow the same algorithm with a small seeded PRNG instead
 //! of Python's Mersenne Twister, so their frames differ but behave the same.
+//!
+//! "weather" (Rust only, not in the Python app) draws a scene for the current weather; the clock
+//! firmware draws the same frames (grid_engine.h), checked against `tests/fixtures/weather_frames.json`.
 
 /// Live data some animations draw from.
 #[derive(Clone, Debug, Default)]
@@ -16,12 +19,56 @@ pub struct Extra {
     pub ram: f64,
     /// Frames for "custom", each 7 row bytes.
     pub custom: Vec<[u8; 7]>,
+    /// The weather scene for "weather": an index into [`SCENES`].
+    pub scene: usize,
 }
 
-pub const ANIMATIONS: [&str; 13] = [
+pub const ANIMATIONS: [&str; 14] = [
     "spin", "bounce", "rain", "wave", "pulse", "sparkle", "scan", "life", "audio", "cpu", "mouth",
-    "heart", "custom",
+    "heart", "custom", "weather",
 ];
+
+/// Weather scenes, in the firmware's order (grid_engine.h `Scene`); also the `weather_scene`
+/// setting's values besides "auto".
+pub const SCENES: [&str; 9] =
+    ["clear", "partly", "cloudy", "fog", "rain", "snow", "storm", "night", "night_partly"];
+const SC_CLEAR: usize = 0;
+const SC_PARTLY: usize = 1;
+const SC_CLOUDY: usize = 2;
+const SC_FOG: usize = 3;
+const SC_RAIN: usize = 4;
+const SC_SNOW: usize = 5;
+const SC_STORM: usize = 6;
+const SC_NIGHT: usize = 7;
+const SC_NIGHT_PARTLY: usize = 8;
+
+/// Open-Meteo WMO weather code + day/night -> scene (firmware `sceneFromWmo`). The moon shows on
+/// nights you'd see it.
+pub fn scene_from_wmo(code: i64, day: bool) -> usize {
+    match code {
+        ..=1 => if day { SC_CLEAR } else { SC_NIGHT },
+        2 => if day { SC_PARTLY } else { SC_NIGHT_PARTLY },
+        45 | 48 => SC_FOG,
+        51..=67 | 80..=82 => SC_RAIN,
+        71..=77 | 85 | 86 => SC_SNOW,
+        95.. => SC_STORM,
+        _ => SC_CLOUDY, // 3 overcast, and anything unknown
+    }
+}
+
+/// A scene by name, if it is one.
+pub fn scene_from_name(name: &str) -> Option<usize> {
+    SCENES.iter().position(|&s| s == name)
+}
+
+// Weather art: bit c = column c.
+const WX_CLOUD: [u8; 3] = [0x0C, 0x3E, 0x7F]; // ..XX... / .XXXXX. / XXXXXXX
+const WX_MOON: [u8; 7] = [0x1C, 0x06, 0x03, 0x03, 0x03, 0x06, 0x1C]; // a crescent opening right
+const WX_RAYS: [(i64, i64); 8] = [(0, 3), (1, 5), (3, 6), (5, 5), (6, 3), (5, 1), (3, 0), (1, 1)];
+const WX_DROPS: [(u64, i64); 5] = [(3, 0), (1, 2), (0, 4), (2, 6), (3, 3)]; // (phase, column)
+const WX_FLAKES: [(i64, i64); 6] = [(0, 1), (2, 4), (4, 0), (1, 6), (5, 3), (3, 2)];
+const WX_STARS: [(i64, i64); 5] = [(0, 5), (2, 6), (5, 5), (6, 3), (1, 3)]; // (row, column)
+const WX_BOLT: [(i64, i64); 5] = [(3, 4), (4, 3), (4, 4), (5, 3), (6, 2)];
 
 const CENTER: i32 = 3;
 
@@ -164,6 +211,7 @@ impl GridEngine {
             "mouth" => mouth(&mut g, extra),
             "heart" => self.heart(&mut g),
             "custom" => self.custom(&mut g, extra),
+            "weather" => self.weather(&mut g, extra.scene),
             _ => self.spin(&mut g),
         }
         g.map(|row| {
@@ -312,6 +360,126 @@ impl GridEngine {
             for (c, cell) in row.iter_mut().enumerate() {
                 *cell = rows[r] & (1 << c) != 0;
             }
+        }
+    }
+}
+
+impl GridEngine {
+    /// A weather scene (firmware `Engine::weather`): deterministic, from `t` and the scene only.
+    fn weather(&self, g: &mut Grid, scene: usize) {
+        let t = self.t;
+        let s = (t / 2) as i64; // slow movers step every other frame
+        match scene {
+            SC_PARTLY => {
+                // sun upper left, a cloud drifting past below
+                const RAYS: [(i64, i64); 4] = [(0, 2), (2, 0), (0, 0), (0, 4)];
+                sun_disc(g, 2, 2);
+                let (r, c) = RAYS[(s % 4) as usize];
+                dot(g, r, c);
+                stamp(g, &WX_CLOUD, 4, s % 14 - 3, 14);
+            }
+            SC_CLOUDY => {
+                // two layers of clouds scrolling left
+                let x = -(s % 14);
+                for (r0, c0) in [(0, x + 1), (0, x + 8), (3, x + 5), (3, x + 12)] {
+                    stamp(g, &WX_CLOUD, r0, c0, 14);
+                }
+            }
+            SC_FOG => {
+                // dashed bands sliding against each other
+                for i in 0..3i64 {
+                    for c in 0..7i64 {
+                        let p = if i % 2 == 1 { c + s } else { c - s };
+                        if p.rem_euclid(4) < 3 {
+                            dot(g, 1 + 2 * i, c);
+                        }
+                    }
+                }
+            }
+            SC_RAIN => {
+                stamp(g, &WX_CLOUD, 0, 0, 0);
+                rain_drops(g, t, 5);
+            }
+            SC_SNOW => {
+                // flakes falling slowly, drifting side to side
+                for (i, &(o, c)) in WX_FLAKES.iter().enumerate() {
+                    let r = (s + o) % 7;
+                    let drift = if (s + i as i64) % 4 < 2 { 0 } else { 1 };
+                    dot(g, r, (c + drift) % 7);
+                }
+            }
+            SC_STORM => {
+                // bolt, rain, and a flash of the whole grid
+                let p = t % 12;
+                if p == 0 || p == 2 {
+                    *g = [[true; 7]; 7];
+                    return;
+                }
+                stamp(g, &WX_CLOUD, 0, 0, 0);
+                if p < 6 {
+                    for &(r, c) in &WX_BOLT {
+                        dot(g, r, c);
+                    }
+                } else {
+                    rain_drops(g, t, 3);
+                }
+            }
+            SC_NIGHT => {
+                stamp(g, &WX_MOON, 0, 0, 0);
+                stars(g, t, 5);
+            }
+            SC_NIGHT_PARTLY => {
+                stamp(g, &WX_MOON, 0, 0, 0);
+                stars(g, t, 2);
+                stamp(g, &WX_CLOUD, 4, s % 14 - 3, 14);
+            }
+            _ => {
+                // SC_CLEAR: the sun, rays turning
+                sun_disc(g, 3, 3);
+                for k in (0..8).step_by(2) {
+                    let (r, c) = WX_RAYS[((k + t) % 8) as usize];
+                    dot(g, r, c);
+                }
+            }
+        }
+    }
+}
+
+fn dot(g: &mut Grid, r: i64, c: i64) {
+    if (0..7).contains(&r) && (0..7).contains(&c) {
+        g[r as usize][c as usize] = true;
+    }
+}
+
+/// Draw art rows at (r0, c0); with wrap > 0 the art scrolls around a strip `wrap` wide.
+fn stamp(g: &mut Grid, art: &[u8], r0: i64, c0: i64, wrap: i64) {
+    for (r, &bits) in art.iter().enumerate() {
+        for c in 0..7i64 {
+            if bits & (1 << c) == 0 {
+                continue;
+            }
+            let cc = if wrap > 0 { (c0 + c).rem_euclid(wrap) } else { c0 + c };
+            dot(g, r0 + r as i64, cc);
+        }
+    }
+}
+
+fn sun_disc(g: &mut Grid, r: i64, c: i64) {
+    for (dr, dc) in [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)] {
+        dot(g, r + dr, c + dc);
+    }
+}
+
+fn rain_drops(g: &mut Grid, t: u64, n: usize) {
+    for &(o, c) in &WX_DROPS[..n] {
+        dot(g, 3 + ((t + o) % 4) as i64, c);
+    }
+}
+
+fn stars(g: &mut Grid, t: u64, n: usize) {
+    for (i, &(r, c)) in WX_STARS[..n].iter().enumerate() {
+        if (t + i as u64 * 3) % 7 < 4 {
+            dot(g, r, c);
         }
     }
 }

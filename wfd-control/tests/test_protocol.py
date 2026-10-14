@@ -38,7 +38,7 @@ def test_app_expands_every_firmware_placeholder(app, sim):
 def test_app_builtin_grid_list_matches_firmware(app):
     header = (ROOT / "wfd-firmware" / "clock" / "src" / "grid_engine.h").read_text(encoding="utf-8")
     names = re.findall(r'"(\w+)"', re.search(r"NAMES\[N_ANIM\]\s*=\s*\{([^}]*)\}", header).group(1))
-    assert names == ["custom"] + app.BUILTIN_GRID
+    assert names == ["custom"] + app.BUILTIN_GRID + ["weather"]   # weather: the Rust app only
 
 
 WEB = ROOT / "wfd-firmware" / "clock" / "web"

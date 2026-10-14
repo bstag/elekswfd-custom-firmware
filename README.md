@@ -43,14 +43,15 @@ buttons, and an electret mic.
   when plugged in)
 - Listens through its own **microphone**: a bass/treble spectrum and sound‑reactive grid
   animations when the PC is off
-- Plays its own **grid animation** (eleven built‑ins, or one you drew), and runs its own **message line** (text with live
+- Plays its own **grid animation** (twelve built‑ins, including **weather scenes** that follow the
+  forecast — a turning sun, drifting clouds, rain, snow, storms, fog, the moon at night — or one you drew), and runs its own **message line** (text with live
   `{time}`/`{date}`/`{temp}`, date, temperature, or a rotation) when the PC app is off
 
 **With the PC companion app (`wfd-app`, one small Rust exe that starts at login):**
 - **Spectrum** visualizer — PC audio output + microphone, five styles
 - **CPU / GPU / RAM** bar meters
 - **Message line** — scrolling window title, custom text (with date/time placeholders), weather temp, date, or a rotation
-- **7×7 grid** — 13 animations incl. audio/CPU‑reactive, plus a **drawing tool**
+- **7×7 grid** — 14 animations incl. audio/CPU‑reactive and weather scenes, plus a **drawing tool**
 - **Top‑row icons** (audio meter / system status) and **logo** toggle
 - Sets time, weather location, brightness, and uploads animations/messages to flash
 - **Updates the clock's firmware** (it ships the matching build) and sets the clock's **web

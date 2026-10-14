@@ -35,7 +35,7 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `CLK24 0/1` | 24‑hour (1) or 12‑hour (0) clock display (persisted) |
 | `MSG b0..b11` | 6 message chars, raw glyph bytes (lo,hi ×6) |
 | `GRID r0..r6 frame` | 7×7 grid rows (bit c = column c) + border‑frame flag |
-| `GANIM <name> [fps] [frame]` | Play a built‑in animation when the app is off: `spin bounce rain wave pulse sparkle scan life heart`, or `custom` for the uploaded frames |
+| `GANIM <name> [fps] [frame]` | Play a built‑in animation when the app is off: `spin bounce rain wave pulse sparkle scan life heart audio mouth weather`, or `custom` for the uploaded frames |
 | `GCLR` / `GADD r0..r6` / `GCOMMIT fps frame` | Upload drawn frames (≤ 80) to flash and play them (`custom`) |
 | `GAUTO 0/1` | Play the grid animation when the app is off |
 | `GINFO` | Print the grid settings and the current frame's row bytes |
@@ -112,9 +112,10 @@ is set. Every key is checked first; if any is bad nothing changes, and you get a
 | `standalone_scroll_ms` | int 50–5000 | ms per scroll step |
 | `mic_standalone` | bool | spectrum columns from the clock's mic when the app is off |
 | `grid_standalone` | bool | play a grid animation when the app is off |
-| `standalone_anim` | name | `spin bounce rain wave pulse sparkle scan life heart audio mouth`, or `custom` (needs drawn frames) |
+| `standalone_anim` | name | `spin bounce rain wave pulse sparkle scan life heart audio mouth weather`, or `custom` (needs drawn frames) |
 | `standalone_fps` | int 1–30 | |
 | `standalone_frame` | bool | light the border |
+| `weather_scene` | `auto` or a scene | what `weather` draws: `auto` follows the weather; or `clear partly cloudy fog rain snow storm night night_partly` |
 
 ```bash
 curl http://<clock-ip>/api/status
@@ -184,6 +185,26 @@ need no live data. It's plain C++, so the test suite compiles it on the PC (MSVC
 clang++) and checks the deterministic ones frame by frame against the Python engine. Pick
 one on the phone page or with `GANIM`; the app's *Save to clock* sends `GANIM` for these, and
 uploads frames only for drawings (`custom`). Audio, CPU and mouth need the PC and stay app‑only.
+
+**`weather`** draws a scene for the current weather; the Rust app draws the same frames
+(`wfd-app/src/grid_anim.rs`; both are tested against `wfd-app/tests/fixtures/weather_frames.json`):
+
+| Scene | When | Picture |
+|---|---|---|
+| `clear` | WMO 0–1, day | sun, rays turning |
+| `partly` | WMO 2, day | sun upper left, a cloud drifting past |
+| `cloudy` | WMO 3 (day or night) | two layers of clouds scrolling |
+| `fog` | 45, 48 | dashed bands sliding against each other |
+| `rain` | drizzle, rain, showers (51–67, 80–82) | cloud and falling drops |
+| `snow` | 71–77, 85, 86 | flakes falling slowly, drifting |
+| `storm` | 95–99 | cloud, lightning bolt, rain, a full-grid flash |
+| `night` | WMO 0–1, night | crescent moon, twinkling stars |
+| `night_partly` | WMO 2, night | moon and a cloud drifting past |
+
+The clock asks Open‑Meteo for `weather_code` and `is_day` and picks the scene
+(`grid::sceneFromWmo`); `state.weather.scene` in `/api/status` says what it shows now. Without its
+own recent fetch it falls back to the 3‑way code (sunny/cloudy/rain) and the local hour (day
+06–20). The `weather_scene` setting pins one scene (the dashboard's *Grid scene*).
 
 ## Microphone (when the app is off)
 
@@ -274,3 +295,4 @@ A healthy upload of the ~1.1 MB image is ~790 pieces in ~16 s with pauses under 
 `main.cpp`); `CFG` reports them as `_fw` / `_protocol`, plus the clock's WiFi address as `_ip` (empty when it isn't on WiFi) and whether a web password is set as `_pw`, so the app sees them over USB too. Bump
 `WFD_PROTOCOL` together with `PROTOCOL` in `app.py` whenever commands, settings or the API
 change in a way the app depends on. A test fails if they, or `releases/version.json`, disagree.
+Protocol 4 added the `weather` animation and the `weather_scene` setting.

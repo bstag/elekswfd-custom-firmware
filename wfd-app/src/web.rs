@@ -26,8 +26,9 @@ pub const DASHBOARD_HTML: &[u8] = include_bytes!("../../wfd-firmware/clock/web/d
 pub const DRAW_HTML: &[u8] = include_bytes!("../../wfd-firmware/clock/web/draw.html");
 
 /// Built-in animations the clock can run on its own (app.py BUILTIN_GRID).
-pub const BUILTIN_GRID: [&str; 11] = [
+pub const BUILTIN_GRID: [&str; 12] = [
     "spin", "bounce", "rain", "wave", "pulse", "sparkle", "scan", "life", "heart", "audio", "mouth",
+    "weather",
 ];
 
 /// How long `/api/set` waits for the clock (app.py set_clock default).

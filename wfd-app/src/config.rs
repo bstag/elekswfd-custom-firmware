@@ -8,11 +8,11 @@ use serde_json::{Map, Number, Value, json};
 use std::path::Path;
 
 /// Firmware `WFD_PROTOCOL` this app speaks.
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 
 /// Settings owned by the clock (firmware configJson / applySettings). The clock validates them;
 /// the app never stores them in its own file.
-pub const CLOCK_KEYS: [&str; 17] = [
+pub const CLOCK_KEYS: [&str; 18] = [
     "brightness",
     "clock_24h",
     "style",
@@ -30,6 +30,7 @@ pub const CLOCK_KEYS: [&str; 17] = [
     "standalone_anim",
     "standalone_fps",
     "standalone_frame",
+    "weather_scene",
 ];
 
 /// app.py `DEFAULTS`, in its declaration order (the order `save` writes keys in).

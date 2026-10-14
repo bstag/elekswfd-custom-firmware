@@ -1,5 +1,5 @@
 // Host build of the firmware's grid engine, for tests/test_grid_engine.py.
-//   grid_dump <anim name> <frames>   ->  one line per frame: 7 row bytes
+//   grid_dump <anim name> <frames> [weather scene]   ->  one line per frame: 7 row bytes
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,10 +10,11 @@ static uint32_t lcg = 12345;
 static uint32_t testRand() { return lcg = lcg * 1664525u + 1013904223u; }
 
 int main(int argc, char **argv) {
-  if (argc != 3) return 2;
+  if (argc != 3 && argc != 4) return 2;
   int a = grid::animFromName(argv[1]);
   if (a <= grid::CUSTOM) return 3;
   grid::Engine eng(testRand);
+  if (argc == 4 && (eng.scene = grid::sceneFromName(argv[3])) < 0) return 4;
   uint8_t rows[7];
   double bands[7];
   eng.bands = bands;

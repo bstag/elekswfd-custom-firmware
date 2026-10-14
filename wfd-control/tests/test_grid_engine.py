@@ -1,7 +1,9 @@
-"""The firmware's C++ grid engine (grid_engine.h), built on the PC and checked against grid_anim.py.
+"""The firmware's C++ grid engine (grid_engine.h), built on the PC and checked against grid_anim.py
+(and, for "weather", which only the Rust app has, against the Rust app's frames).
 
 Needs a C++ compiler: MSVC (found with vswhere) or g++/clang++ on PATH. Skipped if there is none.
 """
+import json
 import math
 import re
 from pathlib import Path
@@ -13,6 +15,7 @@ from host import hostbuild
 
 FW_SRC = hostbuild.FW_SRC
 DRIVER = Path(__file__).parent / "host" / "grid_dump.cpp"
+WEATHER_FIXTURE = hostbuild.ROOT / "wfd-app" / "tests" / "fixtures" / "weather_frames.json"
 
 DETERMINISTIC = ["spin", "bounce", "wave", "pulse", "scan", "heart", "audio", "mouth"]
 RANDOM = ["rain", "sparkle", "life"]
@@ -73,10 +76,22 @@ def test_life_reseeds_instead_of_dying(grid_dump):
     assert blank_runs <= 3
 
 
+def test_weather_matches_the_rust_app_frame_for_frame(grid_dump):
+    """Every weather scene, against the frames the Rust app draws (wfd-app/tests/weather_anim.rs)."""
+    want = json.loads(WEATHER_FIXTURE.read_text(encoding="utf-8"))
+    header = (FW_SRC / "grid_engine.h").read_text(encoding="utf-8")
+    scenes = re.findall(r'"(\w+)"', re.search(r"SCENE_NAMES\[N_SCENE\]\s*=\s*\{([^}]*)\}", header).group(1))
+    assert scenes == list(want), "the scenes (and their order) differ between the firmware and the app"
+    for scene, frames in want.items():
+        got = hostbuild.run(grid_dump, "weather", len(frames), scene)
+        for i, (a, b) in enumerate(zip(got, frames)):
+            assert a == b, f"weather/{scene}: frame {i} differs (C++ {a} vs Rust {b})"
+
+
 def test_engine_names_match_python():
     header = (FW_SRC / "grid_engine.h").read_text(encoding="utf-8")
     names = re.search(r"NAMES\[N_ANIM\]\s*=\s*\{([^}]*)\}", header).group(1)
     fw = re.findall(r'"(\w+)"', names)
     assert fw[0] == "custom"
-    assert set(fw) <= set(grid_anim.ANIMATIONS)
-    assert set(DETERMINISTIC + RANDOM) == set(fw[1:])
+    assert set(fw) - {"weather"} <= set(grid_anim.ANIMATIONS)   # weather: Rust app only
+    assert set(DETERMINISTIC + RANDOM + ["weather"]) == set(fw[1:])
