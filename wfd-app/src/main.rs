@@ -12,6 +12,10 @@
 //! `wfd-app --config wfd-control\wfd_config.json` (or `..\wfd-control\wfd_config.json` from
 //! inside wfd-app\). Both apps read and write the same format.
 
+// Release builds are a windowed app: no console window pops up at login. When started from a
+// terminal, attach_parent_console() still shows --help and errors there.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -83,7 +87,22 @@ fn embedded_release() -> Option<Release> {
     Some(Release { fw, protocol })
 }
 
+/// A windowed (release) build has no console; if a terminal started us, write to that one.
+fn attach_parent_console() {
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn AttachConsole(process_id: u32) -> i32;
+        }
+        const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+        // SAFETY: plain Win32 call; failing (no parent console) is fine.
+        unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
+    }
+}
+
 fn main() {
+    attach_parent_console();
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {

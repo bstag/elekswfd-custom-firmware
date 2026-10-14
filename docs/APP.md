@@ -1,7 +1,15 @@
 # WFD Control (PC app)
 
-A local web app (`wfd-control/app.py`) that serves a dashboard **and** runs the
-background services that feed the clock the live, PC‑only data over USB serial.
+A local web app that serves a dashboard **and** runs the background services that feed the
+clock the live, PC‑only data over USB or WiFi.
+
+There are two implementations with the same behaviour, settings file and pages:
+
+- **`wfd-app/` (Rust): the one to use.** A single `wfd-app.exe`, installed and started at
+  login by `wfd-app\install.ps1`. See [wfd-app/README.md](../wfd-app/README.md).
+- **`wfd-control/app.py` (Python):** the original, kept as the reference the Rust port is
+  tested against. The rest of this page describes features both share; "Running" below is the
+  Python way.
 
 ## Running
 
