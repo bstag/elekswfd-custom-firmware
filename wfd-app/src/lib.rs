@@ -15,16 +15,24 @@
 //! - `release`   firmware the app ships, version check, OTA upload body
 //! - `link`      USB / WiFi transports to the clock          (wave 2)
 //! - `clocklink` the 30 Hz loop that drives the clock          (wave 2)
+//! - `ota`       "Update clock" over WiFi                 (wave 2)
 //! - `web`       local HTTP server + API, serves the shared pages (wave 2)
+//! - `state`/`ctx` shared state (JSON = /api/status state) and the context all threads share
 
 pub mod audio;
+pub mod clocklink;
 pub mod config;
+pub mod ctx;
 pub mod dsp;
 pub mod font14;
 pub mod grid_anim;
 pub mod icons;
+pub mod link;
 pub mod mdns;
 pub mod metrics;
+pub mod ota;
 pub mod release;
+pub mod state;
 pub mod weather;
+pub mod web;
 pub mod window;
