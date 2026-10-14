@@ -213,11 +213,24 @@
     </div>
     <p class="hint" id="iconHint"></p>
   </section>
+  <section>
+    <h2>Connection</h2>
+    <div class="row"><label for="link">Talk to the clock over</label>
+      <select id="link"><option value="auto">Auto (USB if plugged in, else WiFi)</option>
+        <option value="usb">USB only</option><option value="wifi">WiFi only</option></select></div>
+    <div class="row"><label for="clock_host">Clock</label>
+      <input type="text" id="clock_host" placeholder="wfd-clock.local or an IP" style="flex:1"></div>
+    <div class="row"><label for="clock_pass">Password</label>
+      <input type="password" id="clock_pass" autocomplete="off" style="flex:1">
+      <button class="primary" id="applyLink">Apply</button></div>
+    <p class="hint">Over WiFi the live display goes as UDP packets and settings through the clock's web
+      API. The password is the clock's web password (serial <code>WEBPASS</code>), if you set one.</p>
+  </section>
 </main>
 
 <script>
 const $ = s => document.querySelector(s);
-let cfg = {}, suppress = false;
+let cfg = {}, suppress = false, editingLink = false;
 
 // Settings about the clock itself live on the clock; the app passes them on and the clock checks
 // them, so errors (e.g. a bad ZIP, or the clock unplugged) come back here.
@@ -243,7 +256,13 @@ async function poll() {
   catch { $('#dot').classList.remove('on'); $('#conn').textContent = 'app offline'; return; }
   const { state, config } = d;
   $('#dot').classList.toggle('on', state.connected);
-  $('#conn').textContent = state.connected ? 'clock connected · ' + state.port : 'clock not found';
+  $('#conn').textContent = state.connected
+    ? (state.link === 'wifi' ? 'clock on WiFi · ' + state.port.slice(5) : 'clock on USB · ' + state.port)
+    : (config.link === 'usb' ? 'clock not found on USB' : 'looking for the clock (USB / WiFi)…');
+  if (!editingLink) {
+    $('#link').value = config.link; $('#clock_host').value = config.clock_host;
+    $('#clock_pass').placeholder = state.clock_pass_set ? '(saved, unchanged)' : 'only if the clock has one';
+  }
   $('#clock').textContent = state.time || '';
   // meters
   $('#mOut').style.width = (state.levels.out / 12 * 100) + '%'; $('#vOut').textContent = state.levels.out;
@@ -303,6 +322,14 @@ $('#syncNow').onclick = () => fetch('/api/sync', { method:'POST', headers:{'Cont
 $('#applyLoc').onclick = () => {             // ZIP and units are the clock's settings
   const zip = $('#location').value.trim();
   setCfg(zip ? { location: zip, units: $('#units').value } : { units: $('#units').value });
+};
+for (const id of ['#link', '#clock_host', '#clock_pass']) {
+  $(id).onfocus = () => editingLink = true; $(id).onblur = () => editingLink = false;
+}
+$('#applyLink').onclick = () => {             // blank password field = keep the saved one
+  const patch = { link: $('#link').value, clock_host: $('#clock_host').value.trim() };
+  if ($('#clock_pass').value) patch.clock_pass = $('#clock_pass').value;
+  setCfg(patch); $('#clock_pass').value = ''; editingLink = false;
 };
 $('#location').onfocus = () => suppress = true;
 $('#location').onblur = () => suppress = false;

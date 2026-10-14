@@ -12,10 +12,13 @@ and serves a local control UI at http://127.0.0.1:8737 (HTTP_ADDR).
 Settings live in wfd_config.json next to this file and persist across restarts.
 Pair with the wfd-clock firmware (serial: SET GET SPEC STYLE BARS WX BRIGHT).
 """
+import base64
 import ctypes
 import datetime
 import json
 import os
+import re
+import socket
 import shutil
 import subprocess
 import sys
@@ -37,6 +40,7 @@ from serial.tools import list_ports
 sys.path.insert(0, str(Path(__file__).parent))
 import font14  # noqa: E402
 import grid_anim  # noqa: E402
+import mdns  # noqa: E402
 
 HERE = Path(__file__).parent
 CONFIG = HERE / "wfd_config.json"
@@ -61,6 +65,9 @@ DEFAULTS = {
     "grid_enable": False, "grid_anim": "spin", "grid_frame": False, "grid_fps": 12,
     "grid_custom": [],                 # list of frames, each = [r0..r6] row bytes
     "icon_mode": "off",                # off | audio | system | all
+    "link": "auto",                    # auto (USB if plugged in, else WiFi) | usb | wifi
+    "clock_host": "",                  # WiFi: name or IP; blank = wfd-clock.local
+    "clock_pass": "",                  # the clock's web password (WEBPASS), if it has one
     "logo": False,                     # ELEKSMAKER logo on/off
 }
 
@@ -74,7 +81,8 @@ CLOCK_KEYS = {
 _RANGES = {"gain_out": (0.0, 10.0), "gain_mic": (0.0, 10.0),
            "scroll_ms": (50, 5000), "rotate_dwell": (2, 600), "grid_fps": (2, 30)}
 _CHOICES = {"message_mode": {"weather", "window", "text", "date", "rotate"},
-            "icon_mode": {"off", "audio", "system", "all"}}
+            "icon_mode": {"off", "audio", "system", "all"},
+            "link": {"auto", "usb", "wifi"}}
 
 
 def coerce(key, v):
@@ -190,6 +198,8 @@ state = {
     "battery": None,
     "geo": None,
     "clock": None,                     # the clock's own settings (CFG), None until read
+    "link": None,                      # "usb" | "wifi" while connected
+    "clock_ip": None,                  # last address the clock answered on over WiFi
 }
 state_lock = threading.Lock()           # writers replace whole values via set_state(); readers of a
                                         # single key need no lock, /api/status serializes under it
@@ -399,58 +409,27 @@ def _frame_cmd(cmd, values):
     return cmd + " " + " ".join(map(str, values))
 
 
-class ClockLink:
-    """Owns the serial port and pushes everything the clock shows, ~30 times a second."""
+class LinkLost(Exception):
+    """The clock stopped answering over WiFi."""
 
-    TICK = 1.0 / 30
 
-    def __init__(self):
-        self.s = None
-        self.sent = {}                     # command -> last value sent; cleared on (re)connect
-        self.last_err = None
-        self.last_sync = self.last_bars = self.last_wx = self.last_scroll = self.last_grid = 0.0
-        self.peak = {"out": 1e-5, "mic": 1e-5}     # audio level auto-gain
-        self.disp = {"out": 0.0, "mic": 0.0}       # displayed level (fast rise, slow fall)
-        self.cur_src = None                # message text currently scrolling
-        self.scroll_pos = 0
-        self.rot_idx = -1
-        self.rot_until = 0.0
-        self.last_cfg = 0.0
+class UsbLink:
+    """The clock on USB serial: commands go out as they're made; settings via CFG / CFGSET."""
+    kind = "usb"
 
-    def run(self):
-        while not stop.is_set():
-            if not self.connect():
-                time.sleep(2)
-                continue
-            with cfg_lock:
-                c = dict(cfg)
-            try:
-                self.tick(c)
-            except serial.SerialException:
-                self.s = None
-                set_state(connected=False)
-            except Exception as e:         # never let a transient error kill the link, but say what it was
-                if repr(e) != self.last_err:
-                    self.last_err = repr(e)
-                    traceback.print_exc()
-            time.sleep(self.TICK)
+    def __init__(self, s):
+        self.s, self.name = s, s.port
+        self.clock_ntp = False             # unknown over USB: keep sending the PC's time
 
-    # ---------------------------------------------------------------- plumbing
-    def connect(self):
-        """Ensure the port is open; on a fresh connection, sync time and forget what was sent."""
-        if self.s is not None and self.s.is_open:
-            return True
-        self.s = open_serial()
-        set_state(connected=bool(self.s), port=self.s.port if self.s else None)
-        if not self.s:
-            return False
-        with cfg_lock:
-            if cfg["time_sync"]:
-                self.set_time()
-        self.last_sync = time.time()
-        self.sent.clear()                  # a fresh (or power-cycled) clock needs everything again
-        self.read_clock_config()
-        return True
+    @property
+    def alive(self):
+        return self.s.is_open
+
+    def send(self, line):
+        self.s.write((line + "\n").encode())
+
+    def flush(self):
+        pass
 
     def request(self, line, prefixes, timeout=1.5):
         """Send a command and wait for a reply line starting with one of prefixes -> (prefix, json)."""
@@ -466,10 +445,238 @@ class ClockLink:
                     return pre, json.loads(text[len(pre) + 1:])
         return None, None
 
+    def get_config(self):
+        pre, c = self.request("CFG", ["CFG"])
+        return c if pre else None
+
+    def set_config(self, patch):
+        pre, body = self.request("CFGSET " + json.dumps(patch, separators=(",", ":")), ["CFGOK", "CFGERR"])
+        if pre == "CFGOK":
+            return True, body.pop("_warning", None)
+        if pre == "CFGERR":
+            err = body.get("error")
+            return False, err if isinstance(err, dict) else {k: str(err) for k in patch}
+        return False, {k: "clock didn't answer" for k in patch}
+
+    def store_anim(self, name, fps, frame):
+        self.send(f"GANIM {name} {fps} {1 if frame else 0}")
+
+    def store_frames(self, frames, fps, frame):
+        self.send("GCLR")
+        time.sleep(0.03)
+        for fr in frames[:80]:
+            self.send(_frame_cmd("GADD", fr))
+            time.sleep(0.015)
+        self.send(f"GCOMMIT {fps} {1 if frame else 0}")
+
+    def after_time(self):
+        time.sleep(0.15)
+        self.s.reset_input_buffer()
+
+    def close(self):
+        try:
+            self.s.close()
+        except Exception:
+            pass
+
+
+class WifiLink:
+    """The clock over WiFi: each frame's commands go out as one UDP packet; settings, uploads and
+    the health check use its HTTP API."""
+    kind = "wifi"
+    PORT = 4210
+
+    def __init__(self, ip, password="", sock=None, http=None):
+        self.ip, self.password, self.name = ip, password, f"WiFi {ip}"
+        self.sock = sock or socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.http = http or self._http
+        self.buf = []
+        self.clock_ntp = False
+        self.ok_at = time.time()
+
+    @property
+    def alive(self):
+        return time.time() - self.ok_at < 15        # no good HTTP answer for 15 s: gone
+
+    def _http(self, method, path, body=None):
+        headers = {"X-WFD": "1"}
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode()
+            headers["Content-Type"] = "application/json"
+        if self.password:
+            headers["Authorization"] = "Basic " + base64.b64encode(f"admin:{self.password}".encode()).decode()
+        req = urllib.request.Request(f"http://{self.ip}{path}", data, headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=3) as r:
+                return r.status, json.loads(r.read() or b"null")
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read() or b"null")
+            except ValueError:
+                return e.code, None
+        except (OSError, ValueError) as e:
+            raise LinkLost(str(e)) from e
+
+    def send(self, line):
+        self.buf.append(line)
+
+    def flush(self):
+        if not self.buf:
+            return
+        head = "WFD1 " + self.password if self.password else "WFD1"
+        self.sock.sendto("\n".join([head] + self.buf).encode(), (self.ip, self.PORT))
+        self.buf.clear()
+
+    def get_config(self):
+        code, body = self.http("GET", "/api/status")
+        if code != 200 or not body:
+            raise LinkLost(f"status: HTTP {code}")
+        self.ok_at = time.time()
+        self.clock_ntp = bool(body["state"].get("ntp"))
+        return body["config"]
+
+    def set_config(self, patch):
+        code, body = self.http("POST", "/api/set", patch)
+        if code == 200:
+            return True, (body or {}).get("warning")
+        err = "wrong clock password (clock_pass)" if code == 401 else (body or {}).get("error") or f"HTTP {code}"
+        return False, err if isinstance(err, dict) else {k: str(err) for k in patch}
+
+    def store_anim(self, name, fps, frame):
+        self.set_config({"standalone_anim": name, "standalone_fps": fps, "standalone_frame": bool(frame),
+                         "grid_standalone": True})
+
+    def store_frames(self, frames, fps, frame):
+        self.http("POST", "/api/frames", {"frames": frames[:80], "fps": fps, "frame": bool(frame)})
+
+    def after_time(self):
+        pass
+
+    def close(self):
+        try:
+            self.flush()
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def find_clock_ip():
+    """The clock's IP for WiFi: the configured host (name or IP), else wfd-clock.local via mDNS,
+    else the last address it answered on."""
+    with cfg_lock:
+        host = cfg.get("clock_host", "").strip() or "wfd-clock.local"
+    if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", host):
+        return host
+    try:
+        return socket.gethostbyname(host)       # normal DNS, or .local where Windows resolves it
+    except OSError:
+        pass
+    ip = mdns.resolve(host) if host.endswith(".local") else None
+    return ip or state["clock_ip"]
+
+
+def open_wifi():
+    ip = find_clock_ip()
+    if not ip:
+        return None
+    with cfg_lock:
+        pw = cfg.get("clock_pass", "")
+    link = WifiLink(ip, pw)
+    try:
+        link.get_config()
+    except LinkLost:
+        link.close()
+        return None
+    set_state(clock_ip=ip)
+    return link
+
+
+class ClockLink:
+    """Owns the connection to the clock (USB or WiFi) and pushes everything it shows, ~30 times a
+    second."""
+
+    TICK = 1.0 / 30
+
+    def __init__(self):
+        self.link = None
+        self.sent = {}                     # command -> last value sent; cleared on (re)connect
+        self.last_err = None
+        self.last_sync = self.last_bars = self.last_wx = self.last_scroll = self.last_grid = 0.0
+        self.peak = {"out": 1e-5, "mic": 1e-5}     # audio level auto-gain
+        self.disp = {"out": 0.0, "mic": 0.0}       # displayed level (fast rise, slow fall)
+        self.cur_src = None                # message text currently scrolling
+        self.scroll_pos = 0
+        self.rot_idx = -1
+        self.rot_until = 0.0
+        self.last_cfg = 0.0
+        self.last_usb_check = 0.0
+        self.link_cfg = None               # (link, clock_host, clock_pass) the link was made with
+
+    def run(self):
+        while not stop.is_set():
+            if not self.connect():
+                time.sleep(2)
+                continue
+            with cfg_lock:
+                c = dict(cfg)
+            try:
+                self.tick(c)
+                self.link.flush()
+            except (serial.SerialException, LinkLost, OSError):
+                self.drop()
+            except Exception as e:         # never let a transient error kill the link, but say what it was
+                if repr(e) != self.last_err:
+                    self.last_err = repr(e)
+                    traceback.print_exc()
+            time.sleep(self.TICK)
+        self.say_bye()
+
+    def say_bye(self):
+        """App quitting: tell the clock, so it takes over at once instead of after 2 s."""
+        if self.link and self.link.alive:
+            try:
+                self.link.send("BYE")
+                self.link.flush()
+            except (serial.SerialException, OSError):
+                pass
+
+    def drop(self):
+        if self.link:
+            self.link.close()
+        self.link = None
+        set_state(connected=False, link=None)
+
+    # ---------------------------------------------------------------- plumbing
+    def connect(self):
+        """Ensure a link (USB first unless set to WiFi); on a fresh one, sync time, forget what was
+        sent and read the clock's settings."""
+        if self.link is not None and self.link.alive:
+            return True
+        if self.link is not None:
+            self.drop()
+        with cfg_lock:
+            mode = cfg.get("link", "auto")
+        s = open_serial() if mode in ("auto", "usb") else None
+        self.link = UsbLink(s) if s else (open_wifi() if mode in ("auto", "wifi") else None)
+        set_state(connected=bool(self.link), port=self.link.name if self.link else None,
+                  link=self.link.kind if self.link else None)
+        if not self.link:
+            return False
+        with cfg_lock:
+            self.link_cfg = (cfg.get("link"), cfg.get("clock_host"), cfg.get("clock_pass"))
+        self.sent.clear()                  # a fresh (or power-cycled) clock needs everything again
+        self.read_clock_config()           # first: it also tells us whether the clock has NTP time
+        with cfg_lock:
+            if cfg["time_sync"] and not self.link.clock_ntp:
+                self.set_time()
+        self.last_sync = time.time()
+        return True
+
     def read_clock_config(self):
-        pre, cfg_ = self.request("CFG", ["CFG"])
-        if pre:
-            set_state(clock=cfg_)
+        c = self.link.get_config()
+        if c is not None:
+            set_state(clock=c)
         self.last_cfg = time.time()
 
     def run_clock_requests(self):
@@ -477,21 +684,18 @@ class ClockLink:
             reqs = clock_requests[:]
             clock_requests.clear()
         for req in reqs:
-            pre, body = self.request("CFGSET " + json.dumps(req[0], separators=(",", ":")),
-                                     ["CFGOK", "CFGERR"])
-            if pre == "CFGOK":
-                warning = body.pop("_warning", None)
-                set_state(clock=body)
-                req[2] = (True, warning)
-            elif pre == "CFGERR":
-                err = body.get("error")
-                req[2] = (False, err if isinstance(err, dict) else {k: str(err) for k in req[0]})
-            else:
+            try:
+                req[2] = self.link.set_config(req[0])
+                if req[2][0]:
+                    self.read_clock_config()
+            except LinkLost:
                 req[2] = (False, {k: "clock didn't answer" for k in req[0]})
-            req[1].set()
+                raise
+            finally:
+                req[1].set()
 
     def send(self, line):
-        self.s.write((line + "\n").encode())
+        self.link.send(line)
 
     def push(self, cmd, value):
         """Send 'CMD value' only when value differs from what the clock last got."""
@@ -503,16 +707,28 @@ class ClockLink:
         now = datetime.datetime.now()
         self.send(f"SET {now.year%100} {now.month} {now.day} {now.isoweekday()} "
                   f"{now.hour} {now.minute} {now.second}")
-        time.sleep(0.15)
-        self.s.reset_input_buffer()
+        self.link.after_time()
         set_state(time=now.strftime("%a %H:%M:%S"))
 
     # ---------------------------------------------------------------- one frame
     def tick(self, c):
-        if (c["time_sync"] and time.time() - self.last_sync > 600) or sync_now.is_set():
+        due = c["time_sync"] and time.time() - self.last_sync > 600 and not self.link.clock_ntp
+        if due or sync_now.is_set():               # a WiFi clock keeps its own time (NTP)
             self.set_time()
             self.last_sync = time.time()
             sync_now.clear()
+        want = (c.get("link"), c.get("clock_host"), c.get("clock_pass"))
+        if want != self.link_cfg:                  # connection settings changed: reconnect
+            wrong_kind = (want[0] == "usb" and self.link.kind == "wifi") or (want[0] == "wifi" and self.link.kind == "usb")
+            if wrong_kind or (self.link.kind == "wifi" and want[1:] != self.link_cfg[1:]):
+                self.drop()
+                return
+            self.link_cfg = want
+        if self.link.kind == "wifi" and c.get("link") == "auto" and time.time() - self.last_usb_check > 10:
+            self.last_usb_check = time.time()      # plugged in meanwhile? USB is the better link
+            if find_port():
+                self.drop()
+                return
         self.run_clock_requests()
         if time.time() - self.last_cfg > 5:            # pick up changes made on the clock itself
             self.read_clock_config()
@@ -532,7 +748,7 @@ class ClockLink:
     def push_location(self):
         """Give the clock our weather location only if it has none of its own (no ZIP set)."""
         g, clk = state["geo"], state["clock"]
-        if g and clk is not None and not clk.get("location"):
+        if self.link.kind == "usb" and g and clk is not None and not clk.get("location"):
             self.push("GEO", f"{g['lat']} {g['lon']} {g['unit']}")
 
     def run_upload(self):
@@ -542,16 +758,11 @@ class ClockLink:
         if not job:
             return
         if job["type"] == "ganim":         # the clock runs the animation itself
-            self.send(f"GANIM {job['name']} {job['fps']} {1 if job['frame'] else 0}")
+            self.link.store_anim(job["name"], job["fps"], job["frame"])
             set_state(saved=f"grid: {job['name']}")
-            self.last_cfg = 0              # GANIM changes the clock's settings: re-read them
+            self.last_cfg = 0              # changes the clock's settings: re-read them
             return
-        self.send("GCLR")
-        time.sleep(0.03)
-        for fr in job["frames"][:80]:
-            self.send(_frame_cmd("GADD", fr))
-            time.sleep(0.015)
-        self.send(f"GCOMMIT {job['fps']} {1 if job['frame'] else 0}")
+        self.link.store_frames(job["frames"], job["fps"], job["frame"])
         set_state(saved=f"grid: {len(job['frames'])} frames")
         self.last_cfg = 0                  # GCOMMIT changes the clock's settings: re-read them
 
@@ -669,7 +880,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, (HERE / "draw.html").read_bytes(), "text/html; charset=utf-8")
         if self.path == "/api/status":            # config = app settings + the clock's own
             with cfg_lock, state_lock:
-                body = json.dumps({"state": state, "config": {**cfg, **(state["clock"] or {})}}).encode()
+                shown = {**cfg, **(state["clock"] or {}), "clock_pass": ""}
+                body = json.dumps({"state": {**state, "clock_pass_set": bool(cfg.get("clock_pass"))},
+                                   "config": shown}).encode()
             return self._send(200, body)
         self._send(404, {"error": "not found"})
 

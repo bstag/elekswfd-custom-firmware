@@ -42,6 +42,7 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `OMTEXT <text>` | Message text for the on-device message line (≤ 96 chars, placeholders allowed) |
 | `MSGCFG mode rot dwell scroll` | Message line: mode `0`=temp `1`=text `2`=date `3`=rotate; `rot` bitmask (1 temp, 2 text, 4 date); seconds per item; ms per scroll step |
 | `MSGINFO` | Print the message line's settings and what it's showing now |
+| `BYE` | The app is quitting: the clock takes over at once instead of after 2 s (USB or WiFi) |
 | `CFG` | Print every setting as JSON: `CFG {...}` (the same keys as `/api/status` config) |
 | `CFGSET {json}` | Change settings with the same checks as `POST /api/set`: replies `CFGOK {settings}` or `CFGERR {"error": {...}}` |
 | `MIC [0-3]` | Mic diagnostics: one 2048‑sample capture at 10 kHz with stats (optional ADC attenuation 0/2.5/6/11 dB for this capture) |
@@ -69,6 +70,7 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `GET /rescan` | Re‑scan WiFi networks |
 | `GET /api/status` | JSON: live state + every setting (see below) |
 | `POST /api/set` | JSON: change settings |
+| `POST /api/frames` | JSON: store drawn grid frames `{"frames": [[r0..r6], ...], "fps": 8, "frame": false}` (≤ 80) and play them when the app is off |
 
 Anyone on your LAN can reach these pages. Set `WEBPASS` over USB to put `/control`,
 `/update` and `/wifi` behind HTTP basic auth. The first-run setup AP is always open.
@@ -83,7 +85,8 @@ Same shape as the PC app's API, so one dashboard can talk to either.
 `GET /api/status` returns `{"state": {...}, "config": {...}}`. `state` has `fw`, `uptime_s`,
 `heap_free`, `time`, `ntp`, `wifi {ssid, ip, rssi}`, `weather {fresh, temp, unit, cond}`,
 `app_connected`, `message` (what the message line shows), `stored_frames`, `grid_rows`
-(the current grid frame, 7 row bytes) and `mic {active, level, bass, treble}`.
+(the current grid frame, 7 row bytes), `mic {active, level, bass, treble}` and
+`net {host, udp_port, udp_packets, udp_rejected, key_required}`.
 
 `POST /api/set` takes a JSON object of settings. It needs the header `X-WFD: 1`, which stops
 other web pages posting to the clock from your browser, plus the web password if `WEBPASS`
@@ -117,6 +120,28 @@ curl -X POST -H "X-WFD: 1" -H "Content-Type: application/json" -d '{"standalone_
 
 Send `Content-Type: application/json`. Without it the clock's web server treats the body as
 form fields and you get a 400. The phone page's form goes through the same checks, so both always agree.
+
+## The app over WiFi
+
+The PC app can drive the clock over WiFi instead of USB (see [APP.md](APP.md#connection)).
+
+- **Finding the clock:** it announces itself over mDNS as **`wfd-clock.local`**, with services
+  `_http._tcp` (80) and `_wfd._udp` (4210). Windows doesn't always resolve `.local` names, so the
+  app also asks over mDNS itself.
+- **Live display:** UDP port **4210**, one packet per frame (~30 a second). The first line is
+  `WFD1`, followed by the web password if one is set (`WFD1 <password>`). Each further line is
+  one command. Only display commands are accepted: `SPEC BARS MSG GRID ICON LOGO WX SET BYE`.
+  Packets with a wrong header or password are dropped and counted (`net.udp_rejected` in
+  `/api/status`).
+
+  ```
+  WFD1
+  SPEC 4 2
+  ICON 4096
+  GRID 0 0 28 20 28 0 0 1
+  ```
+- **Everything else** (settings, uploads, health) goes through the HTTP API: `/api/status`,
+  `/api/set`, `/api/frames`.
 
 ## Dashboard
 

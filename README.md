@@ -36,6 +36,8 @@ buttons, and an electret mic.
 - A **web dashboard** on the clock (live preview, every setting) plus a basic **phone control panel** (brightness, weather location/units, timezone, message
   line, standalone toggles) and a tap‑to‑pick **WiFi setup** page
 - **OTA firmware updates** from the browser — no USB after the first flash
+- The PC app drives it over **USB or WiFi** (finds `wfd-clock.local` by itself; switches to USB
+  when plugged in)
 - Listens through its own **microphone**: a bass/treble spectrum and sound‑reactive grid
   animations when the PC is off
 - Plays its own **grid animation** (eleven built‑ins, or one you drew), and runs its own **message line** (text with live

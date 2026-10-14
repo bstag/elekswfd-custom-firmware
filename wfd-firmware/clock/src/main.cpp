@@ -6,6 +6,8 @@
 #include <Wire.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
+#include <ESPmDNS.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <HTTPClient.h>
@@ -135,6 +137,15 @@ static volatile uint32_t micTraceUntil = 0;                     // MICTRACE: pri
 static void micCapture(int n, int rate);
 static void micLog(int secs);
 static void serialCfg(const String &json);   // CFG / CFGSET: the settings layer over USB
+static void storeFrames(const uint8_t *rows, int n, int fps, int flag);
+// The PC app over WiFi: UDP packets "WFD1 <key>\n<command>\n<command>..." (key = web password,
+// if set). Only live-display commands are accepted; settings go through the HTTP API.
+static const uint16_t UDP_PORT = 4210;
+static const char *HOSTNAME = "wfd-clock";      // -> wfd-clock.local (mDNS)
+static WiFiUDP udp;
+static bool netUp = false;
+static uint32_t udpPackets = 0, udpRejected = 0;
+static String webPass;                          // cached "webpass" (checked 30x a second)
 
 static void drawGrid(const uint8_t *rows, bool frame) {   // rows[r] bit c = cell (r,c)
   for (int r = 0; r < 7; r++)
@@ -321,11 +332,7 @@ static void handle(const String &s) {
   } else if (cmd == "GCOMMIT") {
     int v[2] = {8, 0};
     parseInts(arg, v, 2);
-    gaN = upN; gaIdx = 0;
-    memcpy(gaFrames, upBuf, gaN * 7);
-    prefs.putBytes("ganim", gaFrames, gaN * 7);
-    prefs.putInt("gn", gaN);
-    setGridAnim(grid::CUSTOM, v[0], v[1]);
+    storeFrames(upBuf, upN, v[0], v[1]);
     Serial.printf("OK stored %d frames\n", gaN);
   } else if (cmd == "GANIM") {                  // "GANIM <name> [fps] [frame]"  built-in animation
     int sp2 = arg.indexOf(' ');
@@ -415,8 +422,13 @@ static void handle(const String &s) {
     prefs.putString("ssid", arg);
     Serial.println("OK ssid updated, restarting");
     delay(300); ESP.restart();
+  } else if (cmd == "BYE") {                    // the app is quitting: take over now, not in 2 s
+    appTime = millis() - 10000;
+    specTime = barsTime = msgTime = gridTime = iconTime = logoTime = 0;
+    Serial.println("OK bye");
   } else if (cmd == "WEBPASS") {                // web password for /control /update /wifi ("" = open)
     prefs.putString("webpass", arg);
+    webPass = arg;
     Serial.println(arg.length() ? "OK webpass set (user: admin)" : "OK webpass cleared");
   } else if (cmd == "WIFIRESET") {
     prefs.remove("ssid"); prefs.remove("pass");
@@ -486,8 +498,7 @@ static String esc(const String &s) {   // HTML-escape text going into a page or 
 // settings or flash firmware once the clock is on your LAN; the first-run setup AP stays open.
 static bool webAuthed() {
   if (apMode) return true;
-  String pw = prefs.getString("webpass", "");
-  if (pw.length() == 0 || web.authenticate("admin", pw.c_str())) return true;
+  if (webPass.length() == 0 || web.authenticate("admin", webPass.c_str())) return true;
   web.requestAuthentication();
   return false;
 }
@@ -1057,6 +1068,12 @@ static void stateJson(JsonObject s) {
   s["app_connected"] = millis() - appTime < 2000;
   s["message"] = msgShown;
   s["stored_frames"] = gaN;
+  JsonObject net = s["net"].to<JsonObject>();
+  net["host"] = String(HOSTNAME) + ".local";
+  net["udp_port"] = UDP_PORT;
+  net["udp_packets"] = udpPackets;
+  net["udp_rejected"] = udpRejected;
+  net["key_required"] = webPass.length() > 0;
   JsonObject m = s["mic"].to<JsonObject>();
   m["active"] = millis() - micFrameAt < 500;
   m["level"] = micLevel;
@@ -1079,6 +1096,72 @@ static void handleApiStatus() {
   stateJson(doc["state"].to<JsonObject>());
   configJson(doc["config"].to<JsonObject>());
   sendJson(200, doc);
+}
+
+// Store drawn grid frames (rows: n x 7 bytes) and play them when the app is off.
+static void storeFrames(const uint8_t *rows, int n, int fps, int flag) {
+  gaN = constrain(n, 0, GA_MAX);
+  gaIdx = 0;
+  for (int i = 0; i < gaN * 7; i++) gaFrames[i] = rows[i] & 0x7F;
+  prefs.putBytes("ganim", gaFrames, gaN * 7);
+  prefs.putInt("gn", gaN);
+  setGridAnim(grid::CUSTOM, fps, flag);
+}
+
+// POST /api/frames {"frames": [[r0..r6], ...], "fps": 8, "frame": false}: the app's drawing,
+// over WiFi (the USB equivalent is GCLR / GADD / GCOMMIT).
+static void handleApiFrames() {
+  JsonDocument out;
+  if (web.header("X-WFD") != "1") { out["error"] = "missing X-WFD header"; return sendJson(403, out); }
+  if (!webAuthed()) return;
+  JsonDocument in;
+  if (deserializeJson(in, web.arg("plain")) || !in["frames"].is<JsonArrayConst>()) {
+    out["error"] = "expected {\"frames\": [[7 row bytes], ...]}";
+    return sendJson(400, out);
+  }
+  JsonArrayConst frames = in["frames"].as<JsonArrayConst>();
+  int n = frames.size();
+  if (n < 1 || n > GA_MAX) { out["error"] = "1.." + String(GA_MAX) + " frames"; return sendJson(400, out); }
+  static uint8_t rows[GA_MAX * 7];
+  int i = 0;
+  for (JsonVariantConst f : frames) {
+    if (!f.is<JsonArrayConst>() || f.size() > 7) { out["error"] = "each frame: up to 7 row bytes"; return sendJson(400, out); }
+    for (int r = 0; r < 7; r++) rows[i * 7 + r] = r < (int)f.size() ? (uint8_t)f[r].as<int>() : 0;
+    i++;
+  }
+  storeFrames(rows, n, in["fps"] | gaFps, (in["frame"] | false) ? 1 : 0);
+  out["ok"] = true;
+  out["frames"] = gaN;
+  sendJson(200, out);
+}
+
+// Live display commands from the app over WiFi. One packet per frame, e.g.
+//   "WFD1 <key>\nSPEC 3 5\nICON 0\nGRID 0 0 0 8 0 0 0 1"
+static void netPoll() {
+  static char buf[1400];
+  int size;
+  while ((size = udp.parsePacket()) > 0) {
+    int len = udp.read(buf, sizeof buf - 1);
+    if (len <= 0) continue;
+    buf[len] = 0;
+    char *save = nullptr, *ln = strtok_r(buf, "\n", &save);
+    String head = ln ? String(ln) : String();
+    head.trim();
+    bool magic = head.startsWith("WFD1");
+    String key = magic ? head.substring(4) : String();
+    key.trim();
+    if (!magic || (webPass.length() && key != webPass)) { udpRejected++; continue; }
+    udpPackets++;
+    while ((ln = strtok_r(nullptr, "\n", &save))) {
+      String line = ln;
+      line.trim();
+      int sp = line.indexOf(' ');
+      String cmd = sp < 0 ? line : line.substring(0, sp);
+      static const char *ALLOWED[] = {"SPEC", "BARS", "MSG", "GRID", "ICON", "LOGO", "WX", "SET", "BYE"};
+      for (const char *a : ALLOWED)
+        if (cmd == a) { handle(line); break; }
+    }
+  }
 }
 
 static void handleApiSet() {
@@ -1136,8 +1219,7 @@ static void handleUpdateUpload() {
   HTTPUpload &up = web.upload();
   if (up.status == UPLOAD_FILE_START) {
     otaOk = false;
-    String pw = prefs.getString("webpass", "");
-    if (pw.length() && !web.authenticate("admin", pw.c_str())) return;   // POST handler sends the 401
+    if (webPass.length() && !web.authenticate("admin", webPass.c_str())) return;   // POST handler sends the 401
     otaOk = Update.begin(UPDATE_SIZE_UNKNOWN);
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (otaOk && Update.write(up.buf, up.currentSize) != up.currentSize) otaOk = false;
@@ -1176,6 +1258,7 @@ static void startWebRoutes() {
   web.on("/control", HTTP_POST, handleControlPost);
   web.on("/api/status", HTTP_GET, handleApiStatus);
   web.on("/api/set", HTTP_POST, handleApiSet);
+  web.on("/api/frames", HTTP_POST, handleApiFrames);
   const char *hdrs[] = {"X-WFD"};
   web.collectHeaders(hdrs, 1);
   web.on("/update", HTTP_GET, []() { if (webAuthed()) web.send(200, "text/html", page("WFD Update", UPDATE_FORM)); });
@@ -1269,6 +1352,11 @@ static void wifiLoop() {
       configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov", "time.google.com");
       startWebRoutes();
       ntpInit = true;
+      if (MDNS.begin(HOSTNAME)) {
+        MDNS.addService("http", "tcp", 80);
+        MDNS.addService("wfd", "udp", UDP_PORT);
+      }
+      netUp = udp.begin(UDP_PORT);
     }
     web.handleClient();
     if (millis() - lastNtp > (ntpSynced ? 3600000UL : 4000UL)) {   // re-sync hourly once locked
@@ -1328,6 +1416,7 @@ void setup() {
   if (gaN > 0 && prefs.getBytes("ganim", gaFrames, gaN * 7) != (size_t)gaN * 7) gaN = 0;
   // stored frames keep playing after the upgrade; otherwise default to a built-in animation
   gaAnim = constrain(prefs.getInt("gaid", gaN > 0 ? grid::CUSTOM : grid::SPIN), 0, grid::N_ANIM - 1);
+  webPass = prefs.getString("webpass", "");
   micAuto = prefs.getInt("micauto", 1);
   analogSetPinAttenuation(MIC_PIN, ADC_11db);   // dead zone hides the room's hum (see mic_dsp.h)
   gEng.bands = micBands;
@@ -1369,6 +1458,7 @@ void loop() {
     else if (line.length() < 1024) line += c;   // room for CFGSET {json}
   }
   wifiLoop();
+  if (netUp) netPoll();
   checkButtons();
   // advance stored animations only when the app is off
   bool redraw = false;

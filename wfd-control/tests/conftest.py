@@ -88,11 +88,57 @@ class FakeSerial:
         self.replies.clear()
 
 
-class Sim:
-    """Drives ClockLink on simulated time. `events` maps a simulated second to a callable."""
+class FakeUdp:
+    """The clock's UDP port: logs each command of each packet like FakeSerial logs lines."""
 
-    def __init__(self, app, seconds, unplug_after=None, events=None):
+    def __init__(self, sim):
+        self.sim = sim
+
+    def sendto(self, data, addr):
+        head, *lines = data.decode().split("\n")
+        self.sim.packets.append((head, lines))
+        for line in lines:
+            self.sim.lines.append(f"{self.sim.now():8.3f} WIFI {line}")
+
+    def close(self):
+        pass
+
+
+class FakeHttp:
+    """The clock's HTTP API over the same simulated settings as FakeSerial."""
+
+    def __init__(self, sim):
+        self.sim = sim
+
+    def __call__(self, method, path, body=None):
+        sim = self.sim
+        sim.http_calls.append((round(sim.now(), 3), method, path, body))
+        if sim.wifi_down:
+            raise sim.app.LinkLost("timed out")
+        if (method, path) == ("GET", "/api/status"):
+            return 200, {"state": {"ntp": sim.clock_ntp}, "config": json.loads(json.dumps(sim.clock_cfg))}
+        if (method, path) == ("POST", "/api/set"):
+            bad = {k: "unknown setting" for k in body if k not in sim.clock_cfg}
+            if "brightness" in body and not (isinstance(body["brightness"], int) and 1 <= body["brightness"] <= 16):
+                bad["brightness"] = "expected an integer 1..16"
+            if bad:
+                return 400, {"error": bad}
+            sim.clock_cfg.update(body)
+            return 200, {"ok": True}
+        if (method, path) == ("POST", "/api/frames"):
+            return 200, {"ok": True, "frames": len(body["frames"])}
+        return 404, {"error": "not found"}
+
+
+class Sim:
+    """Drives ClockLink on simulated time. `events` maps a simulated second to a callable.
+    wifi=True: no USB (until usb_present), the clock answers over FakeUdp / FakeHttp."""
+
+    def __init__(self, app, seconds, unplug_after=None, events=None, wifi=False, password=""):
         self.app, self.seconds, self.unplug_after = app, seconds, unplug_after
+        self.packets, self.http_calls = [], []
+        self.wifi_down, self.clock_ntp, self.usb_present = False, True, not wifi
+        self.wifi_opens = 0
         self.events = sorted((events or {}).items())
         self.t = T0
         self.lines = []
@@ -109,11 +155,23 @@ class Sim:
         app.datetime = types.SimpleNamespace(datetime=FakeDT)
         app.foreground_title = lambda: "Visual Studio Code - app.py"
         app.open_serial = self.open_serial
+        app.find_port = lambda: "COM9" if self.usb_present else None
+        if wifi:
+            def open_wifi():
+                if self.wifi_down:
+                    return None
+                self.wifi_opens += 1
+                return app.WifiLink("10.0.0.9", password, sock=FakeUdp(self), http=FakeHttp(self))
+            app.open_wifi = open_wifi
+        else:
+            app.open_wifi = lambda: None           # tests never touch the real network
 
     def now(self):
         return self.t - T0
 
     def open_serial(self):
+        if not self.usb_present:
+            return None
         self.opens += 1
         return FakeSerial(self, self.opens)
 

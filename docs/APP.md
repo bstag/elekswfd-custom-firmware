@@ -67,6 +67,26 @@ as they are. The app's weather uses the clock's ZIP and units. It sends a locati
 your Startup folder (`shell:startup`) — e.g. named "WFD Clock Helper.vbs". To disable,
 delete it from Startup. Point its paths at a **persistent** Python env (not a temp venv).
 
+## Connection
+
+The app talks to the clock over **USB** or **WiFi** (setting `link`, in the *Connection* section):
+
+- **Auto** (default): USB when the clock is plugged in, otherwise WiFi. While on WiFi it checks
+  for USB every 10 s and switches over.
+- **USB only** / **WiFi only**.
+
+Over WiFi, each frame's display commands go to the clock as one UDP packet, and settings and
+uploads use the clock's web API. The clock is found as `wfd-clock.local`: the app asks over mDNS
+itself, because Windows doesn't always resolve `.local` names. You can also enter an IP
+(`clock_host`). The app remembers the last address that worked. If the clock has a web password
+(serial `WEBPASS`), enter it as the clock password (`clock_pass`). The app never shows it back.
+A clock with internet time (NTP) keeps its own time over WiFi; the app sends the PC's time only
+if the clock hasn't synced.
+
+The clock still needs power, so a USB charger is enough once the app uses WiFi.
+
+When the app quits normally it sends `BYE`, so the clock takes over at once instead of after 2 s.
+
 ## App and clock together
 
 While the app is connected it drives the live display (spectrum, bars, message line, grid).
@@ -100,7 +120,9 @@ written. The suite covers:
   against `grid_anim.py` (skipped if there's no C++ compiler).
 - **`test_mic_dsp.py`** compiles the firmware's `mic_dsp.h` and checks it on simulated tones and
   on a real recording from the clock (`tests/host/mictrace_room.txt`).
-- **`test_device_api.py`** (opt‑in) tests the clock's JSON API on a real clock and restores
+- **`test_wifi_link.py`** drives the app's WiFi link against a simulated clock (UDP packets, HTTP
+  settings and uploads, reconnects, switching to USB); **`test_mdns.py`** checks the lookup.
+- **`test_device_api.py`** / **`test_device_net.py`** (opt‑in) tests the clock's JSON API on a real clock and restores
   everything it changes: `set WFD_CLOCK=<clock ip> && test.bat -m device`.
 
 If you change what the app sends on purpose, the golden test fails with a diff. Regenerate
