@@ -1027,6 +1027,7 @@ static void serialCfg(const String &json) {
   if (out["warning"].is<JsonObject>()) cfg["_warning"] = out["warning"];
   cfg["_fw"] = FW_BUILD;                         // so the app sees the version over USB too
   cfg["_protocol"] = WFD_PROTOCOL;
+  cfg["_ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String();   // "" off WiFi
   Serial.print(json.length() ? "CFGOK " : "CFG ");
   serializeJson(cfg, Serial);
   Serial.println();

@@ -97,7 +97,7 @@ The app talks to the clock over **USB** or **WiFi** (setting `link`, in the *Con
 Over WiFi, each frame's display commands go to the clock as one UDP packet, and settings and
 uploads use the clock's web API. The clock is found as `wfd-clock.local`: the app asks over mDNS
 itself, because Windows doesn't always resolve `.local` names. You can also enter an IP
-(`clock_host`). The app remembers the last address that worked. If the clock has a web password
+(`clock_host`). Over USB the clock tells the app its WiFi address (`_ip` in `CFG`), so "Update clock" and a switch to WiFi go straight there; otherwise the app remembers the last address that worked, and forgets it if it stops answering. If the clock has a web password
 (serial `WEBPASS`), enter it as the clock password (`clock_pass`). The app never shows it back.
 A clock with internet time (NTP) keeps its own time over WiFi; the app sends the PC's time only
 if the clock hasn't synced.

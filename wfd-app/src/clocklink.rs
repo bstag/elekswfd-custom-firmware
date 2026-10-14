@@ -267,11 +267,15 @@ impl ClockLink {
         let link = self.link();
         let config = link.get_config()?;
         let (fw, protocol) = link.version();
+        let ip = link.clock_ip();
         if let Some(c) = config {
             let mut st = self.ctx.state();
             st.clock = Some(c);
             st.clock_fw = fw;
             st.clock_protocol = protocol;
+            if ip.is_some() {
+                st.clock_ip = ip;
+            }
         }
         self.last_cfg = self.clock.now();
         Ok(())

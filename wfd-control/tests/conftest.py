@@ -144,7 +144,7 @@ class Sim:
         self.lines = []
         self.opens = 0
         self.clock_cfg = json.loads(json.dumps(CLOCK_DEFAULTS))
-        self.version = {"_fw": "wfd-clock Oct 13 2026 19:57:32", "_protocol": 3}   # what CFG reports
+        self.version = {"_fw": "wfd-clock Oct 13 2026 19:57:32", "_protocol": 3, "_ip": "10.0.0.9"}   # what CFG reports
         sim = self
 
         class FakeDT(_dt.datetime):

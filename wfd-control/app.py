@@ -427,7 +427,7 @@ class UsbLink:
     def __init__(self, s):
         self.s, self.name = s, s.port
         self.clock_ntp = False             # unknown over USB: keep sending the PC's time
-        self.fw = self.protocol = None
+        self.fw = self.protocol = self.ip = None
 
     @property
     def alive(self):
@@ -458,6 +458,7 @@ class UsbLink:
         if not pre:
             return None
         self.fw, self.protocol = c.pop("_fw", None), c.pop("_protocol", None)
+        self.ip = c.pop("_ip", None) or None   # the clock's WiFi address ("" = not on WiFi)
         return c
 
     def set_config(self, patch):
@@ -670,12 +671,14 @@ def update_clock():
 
 
 def find_clock_ip():
-    """The clock's IP for WiFi: the configured host (name or IP), else wfd-clock.local via mDNS,
-    else the last address it answered on."""
+    """The clock's IP for WiFi: a configured IP; else the address the clock reported (over USB,
+    _ip) or last answered on; else the configured name / wfd-clock.local via DNS or mDNS."""
     with cfg_lock:
         host = cfg.get("clock_host", "").strip() or "wfd-clock.local"
     if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", host):
         return host
+    if state["clock_ip"]:
+        return state["clock_ip"]           # open_wifi forgets it if it stops answering
     try:
         return socket.gethostbyname(host)       # normal DNS, or .local where Windows resolves it
     except OSError:
@@ -695,6 +698,8 @@ def open_wifi():
         link.get_config()
     except LinkLost:
         link.close()
+        if state["clock_ip"] == ip:
+            set_state(clock_ip=None)       # stale: look it up by name next time
         return None
     set_state(clock_ip=ip)
     return link
@@ -785,6 +790,8 @@ class ClockLink:
         c = self.link.get_config()
         if c is not None:
             set_state(clock=c, clock_fw=self.link.fw, clock_protocol=self.link.protocol)
+            if self.link.ip:
+                set_state(clock_ip=self.link.ip)
         self.last_cfg = time.time()
 
     def run_clock_requests(self):

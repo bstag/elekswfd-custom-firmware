@@ -255,6 +255,6 @@ that, esptool rewrites the bootloader header to 40 MHz.
 ## Versions
 
 `/api/status` reports `state.fw` (the build stamp) and `state.protocol` (`WFD_PROTOCOL` in
-`main.cpp`); `CFG` reports them as `_fw` / `_protocol`, so the app sees them over USB too. Bump
+`main.cpp`); `CFG` reports them as `_fw` / `_protocol`, plus the clock's WiFi address as `_ip` (empty when it isn't on WiFi), so the app sees them over USB too. Bump
 `WFD_PROTOCOL` together with `PROTOCOL` in `app.py` whenever commands, settings or the API
 change in a way the app depends on. A test fails if they, or `releases/version.json`, disagree.

@@ -136,6 +136,9 @@ pub trait Link {
     fn clock_ntp(&self) -> bool;
     /// Firmware build and protocol the clock reported on the last config read.
     fn version(&self) -> (Option<String>, Option<u32>);
+    /// The clock's WiFi address, if known: reported over USB in CFG (`_ip`), the address in use
+    /// over WiFi. Lets "Update clock" and a switch to WiFi skip the mDNS lookup.
+    fn clock_ip(&self) -> Option<String>;
     fn send(&mut self, line: &str) -> Result<(), LinkLost>;
     /// End of a frame (WiFi sends its packet here).
     fn flush(&mut self) -> Result<(), LinkLost>;
@@ -290,6 +293,7 @@ pub struct UsbLink {
     name: String,
     fw: Option<String>,
     protocol: Option<u32>,
+    ip: Option<String>,
 }
 
 impl UsbLink {
@@ -301,6 +305,7 @@ impl UsbLink {
             name,
             fw: None,
             protocol: None,
+            ip: None,
         }
     }
 
@@ -355,6 +360,10 @@ impl Link for UsbLink {
         (self.fw.clone(), self.protocol)
     }
 
+    fn clock_ip(&self) -> Option<String> {
+        self.ip.clone()
+    }
+
     fn send(&mut self, line: &str) -> Result<(), LinkLost> {
         self.s.write(format!("{line}\n").as_bytes())?;
         Ok(())
@@ -374,6 +383,10 @@ impl Link for UsbLink {
             .remove("_protocol")
             .and_then(|v| v.as_u64())
             .and_then(|p| u32::try_from(p).ok());
+        self.ip = c
+            .remove("_ip")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .filter(|ip| !ip.is_empty()); // "" = the clock isn't on WiFi
         Ok(Some(c))
     }
 
@@ -495,6 +508,10 @@ impl Link for WifiLink {
 
     fn version(&self) -> (Option<String>, Option<u32>) {
         (self.fw.clone(), self.protocol)
+    }
+
+    fn clock_ip(&self) -> Option<String> {
+        Some(self.ip.clone())
     }
 
     fn send(&mut self, line: &str) -> Result<(), LinkLost> {
@@ -777,8 +794,8 @@ fn is_dotted_quad(host: &str) -> bool {
             .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// The clock's IP for WiFi: the configured host (name or IP), else wfd-clock.local via DNS or
-/// mDNS, else the last address it answered on.
+/// The clock's IP for WiFi: a configured IP; else the address the clock itself reported (over
+/// USB, `_ip`) or last answered on; else the configured name / wfd-clock.local via DNS or mDNS.
 pub fn find_clock_ip(ctx: &Ctx) -> Option<String> {
     let host = {
         let cfg = ctx.cfg.lock().unwrap();
@@ -795,6 +812,9 @@ pub fn find_clock_ip(ctx: &Ctx) -> Option<String> {
     };
     if is_dotted_quad(&host) {
         return Some(host);
+    }
+    if let Some(ip) = ctx.state().clock_ip.clone() {
+        return Some(ip); // open_wifi forgets it if it stops answering, then we look it up again
     }
     // normal DNS, or .local where Windows resolves it
     if let Ok(addrs) = (host.as_str(), 0).to_socket_addrs()
@@ -823,6 +843,10 @@ pub fn open_wifi(ctx: &Ctx, clock: Rc<dyn Clock>) -> Option<Box<dyn Link>> {
     let mut link = WifiLink::new(&ip, &pw, clock).ok()?;
     if link.get_config().is_err() {
         link.close();
+        let mut st = ctx.state();
+        if st.clock_ip.as_deref() == Some(ip.as_str()) {
+            st.clock_ip = None; // stale: look it up by name next time
+        }
         return None;
     }
     ctx.state().clock_ip = Some(ip);

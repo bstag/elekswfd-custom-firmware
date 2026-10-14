@@ -125,7 +125,7 @@ pub struct Sim {
 
 impl Sim {
     pub fn new(ctx: &Arc<Ctx>, seconds: f64) -> Sim {
-        let version = json!({"_fw": "wfd-clock Oct 13 2026 19:57:32", "_protocol": 3});
+        let version = json!({"_fw": "wfd-clock Oct 13 2026 19:57:32", "_protocol": 3, "_ip": "10.0.0.9"});
         let st = SimState {
             t: T0,
             seconds,
