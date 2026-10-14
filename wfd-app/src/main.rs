@@ -169,14 +169,18 @@ fn copy_readers(ctx: &Ctx) {
     }
 }
 
-/// app.py weather_reader: every 15 min, the weather for the clock's location and units.
+/// app.py weather_reader: every 15 min, the weather for the clock's location and units — and
+/// again within 30 s when those change (the clock's settings arrive after startup, and the user
+/// can change the ZIP on the dashboard), which Python only noticed at the next 15-minute fetch.
 fn weather_loop(ctx: &Ctx) {
     let mut reader = weather::WeatherReader::new();
-    while !ctx.stopping() {
+    let wanted = |ctx: &Ctx| {
         let loc = ctx.clock_setting("location", Value::from(""));
         let units = ctx.clock_setting("units", Value::from("fahrenheit"));
-        let loc = loc.as_str().unwrap_or("").to_string();
-        let units = units.as_str().unwrap_or("fahrenheit").to_string();
+        (loc.as_str().unwrap_or("").to_string(), units.as_str().unwrap_or("fahrenheit").to_string())
+    };
+    while !ctx.stopping() {
+        let (loc, units) = wanted(ctx);
         match reader.run_once(&loc, &units) {
             Ok((geo, w)) => {
                 let mut st = ctx.state();
@@ -186,7 +190,10 @@ fn weather_loop(ctx: &Ctx) {
             }
             Err(_) => ctx.state().online = false,
         }
-        sleep_unless_stopped(ctx, WEATHER_EVERY);
+        let next = Instant::now() + WEATHER_EVERY;
+        while !ctx.stopping() && Instant::now() < next && wanted(ctx) == (loc.clone(), units.clone()) {
+            sleep_unless_stopped(ctx, Duration::from_secs(30));
+        }
     }
 }
 

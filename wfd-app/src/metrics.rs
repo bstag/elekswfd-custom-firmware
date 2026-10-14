@@ -15,6 +15,8 @@ pub struct Metrics {
     pub cpu: u8,
     pub gpu: u8,
     pub ram: u8,
+    /// Not part of `state.metrics` (app.py keeps battery at the top of `state`): main copies it there.
+    #[serde(skip_serializing)]
     pub battery: Option<u8>,
 }
 
