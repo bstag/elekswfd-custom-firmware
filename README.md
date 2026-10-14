@@ -68,8 +68,9 @@ pip install esptool pyserial
 python wfd-firmware/flash_usb.py
 ```
 (The firmware files are also attached to each [release](https://github.com/bstag/elekswfd-custom-firmware/releases/latest).)
-Use a **USB 2.0 port** — the CH340 bridge won't enter flashing mode on USB 3. See
-[docs/FLASHING.md](docs/FLASHING.md) if it won't connect. (Developers can instead
+Use a **USB 2.0 port** — the CH340 bridge won't enter flashing mode on USB 3. Windows
+installs the CH340 USB driver by itself; if the clock gets no COM port, the script tells you
+where to get it. See [docs/FLASHING.md](docs/FLASHING.md) if it won't connect. (Developers can instead
 `cd wfd-firmware/clock && pio run -t upload`.)
 
 ### 2. Connect it to WiFi (phone, one time)

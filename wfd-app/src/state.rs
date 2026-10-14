@@ -48,6 +48,7 @@ pub struct State {
     pub release: Option<Release>,
     pub update: Update,
     pub grid_rows: Option<[u8; 7]>,
+    pub usb_problem: Option<String>,        // the clock is plugged in but its USB driver isn't working (usbdriver.rs)
 }
 
 pub type Shared = Arc<Mutex<State>>;

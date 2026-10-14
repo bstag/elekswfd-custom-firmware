@@ -13,6 +13,23 @@ header"* or *"Wrong boot mode detected (0x13)"*.
 
 (The stock vendor tool has the exact same limitation; it just doesn't tell you.)
 
+## The USB driver (CH340)
+
+The clock needs Windows' driver for its CH340 chip to get a COM port. **Windows 10/11 normally
+installs it by itself** (through Windows Update) the first time you plug the clock in; it then
+shows in Device Manager under *Ports (COM & LPT)* as **USB-SERIAL CH340 (COMx)**.
+
+If it hasn't (offline PC, Windows Update drivers turned off), the clock appears under *Other
+devices* as **USB2.0-Serial** with a warning sign, and nothing finds a port. The app's dashboard
+and `flash_usb.py` / `backup_usb.py` notice this and say so. Then:
+
+1. Download **CH341SER.EXE** from WCH, the chip's maker: <https://www.wch-ic.com/downloads/CH341SER_EXE.html>
+2. Run it and press *INSTALL*.
+3. Unplug and replug the clock.
+
+This repo doesn't include the driver: it's WCH's, and their page has the current signed version.
+macOS and Linux have CH340 support built in.
+
 ## Back up first (so you can revert)
 
 **Do this before your first flash.** A backup lets you return to the original stock

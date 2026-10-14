@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
-use wfd_app::{audio, clocklink, config, ctx::Ctx, metrics, release::Release, weather, web};
+use wfd_app::{audio, clocklink, config, ctx::Ctx, link, metrics, release::Release, usbdriver, weather, web};
 
 /// The firmware this app ships (wfd-firmware/releases, made by make_release.py).
 const VERSION_JSON: &str = include_str!("../../wfd-firmware/releases/version.json");
@@ -177,7 +177,14 @@ fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
 /// Once a second: metrics and audio device names into the shared state (what app.py's
 /// metrics_reader / audio_reader write with set_state).
 fn copy_readers(ctx: &Ctx) {
+    let mut tick = 0u32;
     while !ctx.stopping() {
+        if tick.is_multiple_of(5) {
+            // no COM port for the clock: is it plugged in without a working driver?
+            let problem = if link::find_port().is_some() { None } else { usbdriver::check() };
+            ctx.state().usb_problem = problem;
+        }
+        tick = tick.wrapping_add(1);
         let m = ctx.metrics.lock().unwrap().clone();
         let (out, mic) = {
             let a = ctx.audio.lock().unwrap();

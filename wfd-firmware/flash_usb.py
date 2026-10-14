@@ -25,7 +25,7 @@ def main():
         sys.exit(f"missing {MERGED} — build it with PlatformIO or get it from releases/")
     port = backup_usb.find_port()
     if not port:
-        sys.exit("CH340 clock not found. Plug it into a USB 2.0 port and install the CH340 driver.")
+        sys.exit(backup_usb.not_found_message())
     if "--no-backup" not in sys.argv:
         print("Backing up your current firmware first (so you can revert)...")
         backup_usb.backup(port)        # read full flash before we overwrite it

@@ -76,6 +76,8 @@
   .facts { color:var(--muted); font-size:13px; display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; }
   .facts b { color:var(--text); font-weight:600; }
   .banner { background:var(--accent-dim); color:var(--text); border-radius:7px; padding:8px 10px; font-size:13px; margin-top:10px; }
+  .banner.warn { background:#4a2c14; border:1px solid #a8642a; }
+  .banner a { color:var(--accent); }
 
   footer { max-width:900px; margin:0 auto; padding:4px 16px 24px; display:flex; gap:16px; flex-wrap:wrap; font-size:13px; }
   footer a { color:var(--accent); }
@@ -108,6 +110,10 @@
     </div>
     <div class="banner clock-only" id="appBanner" hidden>The PC app is connected and driving the display. The settings
       marked “when the app is off” take over when it stops.</div>
+    <div class="banner warn app-only" id="usbBanner" hidden><span id="usbProblem"></span>. Windows normally installs the
+      driver by itself; if it hasn't, get <b>CH341SER.EXE</b> from
+      <a href="https://www.wch-ic.com/downloads/CH341SER_EXE.html" target="_blank" rel="noopener">WCH, the chip's maker</a>,
+      run it, then unplug and replug the clock.</div>
   </section>
 
   <section>
@@ -326,7 +332,9 @@ function view(s) {
   return {
     online: s.connected, appDriving: false, s,
     conn: s.connected ? (s.link === 'wifi' ? 'clock on WiFi · ' + s.port.slice(5) : 'clock on USB · ' + s.port)
+                      : s.usb_problem ? 'clock on USB needs a driver'
                       : (cfg.link === 'usb' ? 'clock not found on USB' : 'looking for the clock (USB / WiFi)…'),
+    usbProblem: s.usb_problem || '',
     time: (s.time || '').split(' ').pop() || '--:--:--', message: (s.message || '').replace(/^temp /, ''),
     rows: s.grid_rows || null, border: !!(s.grid_rows && cfg.grid_frame),
     cols: cfg.spectrum ? [s.levels.out, s.levels.mic] : [0, 0],
@@ -358,6 +366,8 @@ function show(v) {
   $('#wx').textContent = v.wx; $('#linkFact').innerHTML = v.link;
   if (v.ntp) $('#ntp').textContent = v.ntp;
   $('#appBanner').hidden = !v.appDriving;
+  $('#usbBanner').hidden = !v.usbProblem;
+  if (v.usbProblem) $('#usbProblem').textContent = v.usbProblem[0].toUpperCase() + v.usbProblem.slice(1);
   $('#fw').textContent = v.fw || '';
   const custom = $('#anim [data-v=custom]');
   if (!isApp) { custom.textContent = `Drawn (${v.s.stored_frames})`; custom.disabled = !v.s.stored_frames; }

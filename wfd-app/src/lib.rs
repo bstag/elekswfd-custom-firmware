@@ -33,6 +33,7 @@ pub mod metrics;
 pub mod ota;
 pub mod release;
 pub mod state;
+pub mod usbdriver;
 pub mod weather;
 pub mod web;
 pub mod window;

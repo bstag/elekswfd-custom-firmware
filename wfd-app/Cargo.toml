@@ -13,4 +13,4 @@ serialport = "4.10.1"
 sysinfo = "0.39.6"
 tiny_http = "0.12.0"
 ureq = { version = "3.4.2", features = ["json"] }
-windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Power", "Win32_Foundation"] }
+windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Power", "Win32_Foundation", "Win32_Devices_DeviceAndDriverInstallation"] }

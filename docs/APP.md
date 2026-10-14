@@ -113,6 +113,11 @@ The app talks to the clock over **USB** or **WiFi** (setting `link`, in the *Con
   for USB every 10 s and switches over.
 - **USB only** / **WiFi only**.
 
+If the clock is plugged in but Windows has no driver for its USB chip (no COM port), the
+dashboard says so and links to the driver (Rust app; see
+[FLASHING.md](FLASHING.md#the-usb-driver-ch340)). `cargo run --example usb_probe` in `wfd-app/`
+lists the USB devices the app sees.
+
 Over WiFi, each frame's display commands go to the clock as one UDP packet, and settings and
 uploads use the clock's web API. The clock is found as `wfd-clock.local`: the app asks over mDNS
 itself, because Windows doesn't always resolve `.local` names. You can also enter an IP
