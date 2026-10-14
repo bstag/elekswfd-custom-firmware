@@ -28,6 +28,11 @@ I²C addresses: **DS3231 = 0x68**, **TM1680 = 0x73**.
 To flash manually you hold GPIO0 low at reset; on this board the CH340 auto‑reset only
 works on USB 2.0 (see [FLASHING.md](FLASHING.md)).
 
+If it won't enter download mode, short the GPIO0 pad (the last pad at the corner of the module,
+next to the ribbon connector) to the module's metal can (ground) while it resets:
+
+![GPIO0 pad](assets/gpio0.jpg)
+
 ## Display
 
 The TM1680 exposes **42 bytes of display RAM** (write address `0x00`, then the data

@@ -11,7 +11,7 @@ clock (the LED‑matrix "word/weather/spectrum" clock). The stock firmware and i
 unmaintained Windows tool are replaced entirely, turning the clock into a fully
 controllable, WiFi‑connected device.
 
-| PC dashboard | Phone control (on the clock) | Grid animator |
+| PC app dashboard | The clock's own page (phone) | Grid animator |
 |---|---|---|
 | ![dashboard](docs/assets/dashboard.jpg) | ![phone](docs/assets/phone-control.jpg) | ![animator](docs/assets/grid-animator.jpg) |
 
@@ -21,7 +21,7 @@ or just flash the result and use it.
 
 > The original vendor tool (`EleksWFD_EN.exe`, `translations/`, `esptool/`, etc.) is
 > still in this folder for reference. Everything **we** built lives in `wfd-firmware/`,
-> `wfd-control/`, and the `docs/` + `*.md` files.
+> `wfd-app/`, `wfd-control/`, and the `docs/` + `*.md` files.
 
 ---
 
@@ -35,7 +35,8 @@ buttons, and an electret mic.
 - **Weather** (word + temperature) fetched directly from Open‑Meteo
 - A **web dashboard** on the clock (live preview, every setting) plus a basic **phone control panel** (brightness, weather location/units, timezone, message
   line, standalone toggles) and a tap‑to‑pick **WiFi setup** page
-- **OTA firmware updates** from the browser — no USB after the first flash
+- **OTA firmware updates** with one click in the PC app, or from the browser — no USB after the
+  first flash
 - The PC app drives it over **USB or WiFi** (finds `wfd-clock.local` by itself; switches to USB
   when plugged in)
 - Listens through its own **microphone**: a bass/treble spectrum and sound‑reactive grid
@@ -43,13 +44,15 @@ buttons, and an electret mic.
 - Plays its own **grid animation** (eleven built‑ins, or one you drew), and runs its own **message line** (text with live
   `{time}`/`{date}`/`{temp}`, date, temperature, or a rotation) when the PC app is off
 
-**With the PC companion app (`wfd-control`):**
+**With the PC companion app (`wfd-app`, one small Rust exe that starts at login):**
 - **Spectrum** visualizer — PC audio output + microphone, five styles
 - **CPU / GPU / RAM** bar meters
 - **Message line** — scrolling window title, custom text (with date/time placeholders), weather temp, date, or a rotation
 - **7×7 grid** — 13 animations incl. audio/CPU‑reactive, plus a **drawing tool**
 - **Top‑row icons** (audio meter / system status) and **logo** toggle
 - Sets time, weather location, brightness, and uploads animations/messages to flash
+- **Updates the clock's firmware** (it ships the matching build) and sets the clock's **web
+  password over USB only**
 
 Full teardown of how the panel is wired is in [docs/HARDWARE.md](docs/HARDWARE.md).
 
@@ -72,16 +75,18 @@ opens (or browse to `http://192.168.4.1`), pick your **2.4 GHz** network (the ES
 can't see 5 GHz), enter the password, Save. It restarts and joins your WiFi, then
 syncs time and weather on its own.
 
-### 3. (Optional) Run the PC app for the live features
-```bash
-cd wfd-control
-uv run app.py          # or: pip install -r requirements, then python app.py
+### 3. (Optional) Install the PC app for the live features
+```powershell
+powershell -ExecutionPolicy Bypass -File wfd-app\install.ps1
 ```
-Opens the dashboard at `http://127.0.0.1:8737`. To start it automatically at login,
-see [docs/APP.md](docs/APP.md).
+Builds the app (needs Rust from [rustup.rs](https://rustup.rs)), installs it for your user,
+starts it at login and opens the dashboard at `http://127.0.0.1:8737`. See
+[docs/APP.md](docs/APP.md). (The original Python app still runs too: `cd wfd-control`,
+`uv run app.py`.)
 
-After step 1, **every future firmware update is wireless**: open the clock's web page,
-go to *Firmware update*, and upload a new `wfd-clock-firmware.bin`.
+After step 1, **every future firmware update is wireless**: press **Update clock** in the
+app (Connection & firmware), or open the clock's web page, go to *Firmware update*, and
+upload a new `wfd-clock-firmware.bin`.
 
 ---
 
@@ -105,7 +110,7 @@ go to *Firmware update*, and upload a new `wfd-clock-firmware.bin`.
 - **[docs/FLASHING.md](docs/FLASHING.md)** — USB first‑flash, WiFi setup, OTA updates, toolchain
 - **[docs/HARDWARE.md](docs/HARDWARE.md)** — chips, pinout, the LED/segment map and how it was found
 - **[docs/FIRMWARE.md](docs/FIRMWARE.md)** — firmware architecture, serial commands, web endpoints, NVS
-- **[docs/APP.md](docs/APP.md)** — the PC app, its config, the login helper
+- **[docs/APP.md](docs/APP.md)** — the PC app: install, settings, USB/WiFi link, firmware updates, tests
 - **[PROTOCOL.md](PROTOCOL.md)** — serial protocol reference (also covers the stock firmware)
 
 ## Restoring the stock firmware

@@ -69,6 +69,10 @@ fallbacks (see [FIRMWARE.md](FIRMWARE.md)): `WIFISCAN`, `WIFIINFO`, `WIFIRESET`.
 
 ## OTA updates (after the first flash — no USB ever again)
 
+Easiest: the PC app's **Update clock** button (Connection & firmware). The app ships the
+matching build, uploads it and waits for the clock to come back on it; see
+[APP.md](APP.md#connection). By hand:
+
 1. Build/obtain `wfd-clock-firmware.bin` (`pio run` puts it in
    `wfd-firmware/clock/.pio/build/wfd/firmware.bin`; a copy is in `releases/`).
 2. Open the clock's web page `http://<clock-ip>/` → **Firmware update**, choose the

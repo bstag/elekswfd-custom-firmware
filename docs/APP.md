@@ -8,10 +8,23 @@ There are two implementations with the same behaviour, settings file and pages:
 - **`wfd-app/` (Rust): the one to use.** A single `wfd-app.exe`, installed and started at
   login by `wfd-app\install.ps1`. See [wfd-app/README.md](../wfd-app/README.md).
 - **`wfd-control/app.py` (Python):** the original, kept as the reference the Rust port is
-  tested against. The rest of this page describes features both share; "Running" below is the
-  Python way.
+  tested against. New features go into the Rust app only. The rest of this page describes
+  features both share, and says where one is Rust-only.
+
+![dashboard](assets/dashboard.jpg)
 
 ## Running
+
+The Rust app (needs Rust from [rustup.rs](https://rustup.rs)):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File wfd-app\install.ps1   # build, install, start at login
+cd wfd-app; cargo run --release -- --no-browser                 # or run it by hand
+```
+It installs to `%LOCALAPPDATA%\WFD Clock\` (settings: `wfd_config.json` there). Run the
+installer again after pulling changes.
+
+The Python app:
 
 ```bash
 cd wfd-control
@@ -47,7 +60,8 @@ A worker thread connects to the CH340 port (auto‑found by VID/PID `1A86:7523`)
 (offline message text). It reconnects automatically if the clock
 is unplugged.
 
-**It holds the serial port.** Stop the app (end `pythonw.exe` / `app.py`) before flashing
+**It holds the serial port.** Stop the app (`Stop-Process -Name wfd-app`, or end `pythonw.exe`
+for the Python app) before flashing
 over USB or running the old vendor tool. (OTA over WiFi does **not** need the port free.)
 
 ## One dashboard
@@ -82,9 +96,12 @@ as they are. The app's weather uses the clock's ZIP and units. It sends a locati
 
 ## Auto‑start at login (Windows)
 
-`wfd-control/wfd_control.vbs` launches the app hidden with `pythonw.exe`. Put a copy in
-your Startup folder (`shell:startup`) — e.g. named "WFD Clock Helper.vbs". To disable,
-delete it from Startup. Point its paths at a **persistent** Python env (not a temp venv).
+`wfd-app\install.ps1` adds a **WFD Clock** shortcut to your Startup folder (`shell:startup`)
+that runs `wfd-app.exe --no-browser`. To disable, delete the shortcut.
+
+For the Python app, `wfd-control/wfd_control.vbs` launches it hidden with `pythonw.exe`: put a
+copy in Startup (e.g. "WFD Clock Helper.vbs") and point its paths at a **persistent** Python
+env. The Rust installer renames that copy to `.vbs.disabled` so only one app runs.
 
 ## Connection
 
@@ -108,6 +125,9 @@ The clock still needs power, so a USB charger is enough once the app uses WiFi.
 ships (`wfd-firmware/releases/`). It warns if the clock is older than the app expects (protocol),
 and **Update clock** uploads the shipped build over WiFi (this works while the display runs over
 USB too). The app then watches the clock until it reports the new build. That takes about 20 s.
+
+![connection and firmware](assets/dashboard-firmware.jpg)
+
 If an upload stalls, the app tries once more.
 
 Every attempt is logged (Rust app) as one JSON line in `ota-log.jsonl` next to the settings file:
@@ -126,9 +146,12 @@ see *Settings* above.
 ## Note on the older headless helper
 
 `legacy/daemon/wfd_daemon.py` is a superseded headless version (time + mic spectrum only).
-`wfd-control/app.py` replaces it with the full UI and feature set.
+The PC app replaces it with the full UI and feature set.
 
 ## Tests
+
+The Rust app: `cd wfd-app && cargo test` (see [wfd-app/README.md](../wfd-app/README.md)).
+The Python suite below also covers the firmware's C++ engines and the device tests.
 
 ```bash
 wfd-control/test.bat            # or: cd wfd-control && uv run --with-requirements requirements.txt --with pytest pytest
