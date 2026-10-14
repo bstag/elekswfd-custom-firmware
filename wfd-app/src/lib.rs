@@ -12,6 +12,7 @@
 //! - `grid_anim` 7x7 grid animations
 //! - `icons`     top-row icon bitmask
 //! - `mdns`      find wfd-clock.local
+//! - `release`   firmware the app ships, version check, OTA upload body
 //! - `link`      USB / WiFi transports to the clock          (wave 2)
 //! - `clocklink` the 30 Hz loop that drives the clock          (wave 2)
 //! - `web`       local HTTP server + API, serves the shared pages (wave 2)
@@ -24,5 +25,6 @@ pub mod grid_anim;
 pub mod icons;
 pub mod mdns;
 pub mod metrics;
+pub mod release;
 pub mod weather;
 pub mod window;
