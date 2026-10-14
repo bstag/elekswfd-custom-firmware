@@ -432,10 +432,18 @@ static void handle(const String &s) {
     appTime = millis() - 10000;
     specTime = barsTime = msgTime = gridTime = iconTime = logoTime = 0;
     Serial.println("OK bye");
-  } else if (cmd == "WEBPASS") {                // web password for /control /update /wifi ("" = open)
-    prefs.putString("webpass", arg);
-    webPass = arg;
-    Serial.println(arg.length() ? "OK webpass set (user: admin)" : "OK webpass cleared");
+  } else if (cmd == "WEBPASS") {                // web password for the pages + WiFi stream ("" = open)
+    // USB only on purpose: not a setting (/api/set), not in the UDP whitelist. Physical access
+    // is what lets you change it. Replies "PWOK {...}" / "PWERR {...}" for the PC app.
+    bool ok = arg.length() <= 64;
+    for (char c : arg) ok = ok && c > 32 && c < 127;   // printable, no spaces (UDP/basic auth trim)
+    if (!ok) {
+      Serial.println("PWERR {\"error\":\"up to 64 printable characters, no spaces\"}");
+    } else {
+      prefs.putString("webpass", arg);
+      webPass = arg;
+      Serial.printf("PWOK {\"set\":%s}\n", arg.length() ? "true" : "false");   // user: admin
+    }
   } else if (cmd == "WIFIRESET") {
     prefs.remove("ssid"); prefs.remove("pass");
     Serial.println("OK cleared, restarting");
@@ -1028,6 +1036,7 @@ static void serialCfg(const String &json) {
   cfg["_fw"] = FW_BUILD;                         // so the app sees the version over USB too
   cfg["_protocol"] = WFD_PROTOCOL;
   cfg["_ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String();   // "" off WiFi
+  cfg["_pw"] = webPass.length() > 0;                // a web password is set (WEBPASS)
   Serial.print(json.length() ? "CFGOK " : "CFG ");
   serializeJson(cfg, Serial);
   Serial.println();

@@ -251,6 +251,7 @@ fn status_returns_state_and_config() {
         "clock_ip",
         "clock_fw",
         "clock_protocol",
+        "clock_pw_set",
         "release",
         "update",
         "grid_rows",
@@ -648,4 +649,31 @@ fn stops_when_asked() {
         "serve didn't stop"
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn clock_password_checks_its_input() {
+    let app = start();
+    for bad in [json!({"password": 5}), json!({}), json!({"password": "has space"}),
+                json!({"password": "x".repeat(65)}), json!({"password": "caf\u{e9}"})] {
+        let (code, body) = post(&app, "/api/clock_password", bad.clone());
+        assert_eq!(code, 400, "{bad}");
+        assert!(body["error"]["password"].is_string(), "{body}");
+    }
+    assert!(app.ctx.clock_requests.lock().unwrap().is_empty(), "nothing reached the clock");
+}
+
+#[test]
+fn clock_password_needs_the_clock_on_usb() {
+    let app = start();
+    let (code, body) = post(&app, "/api/clock_password", json!({"password": "hunter2"}));
+    assert_eq!((code, body["error"]["password"].as_str()), (400, Some("clock not connected")));
+    {
+        let mut st = app.ctx.state();
+        st.connected = true;
+        st.link = Some("wifi".into());
+    }
+    let (code, body) = post(&app, "/api/clock_password", json!({"password": "hunter2"}));
+    assert_eq!(code, 400);
+    assert!(body["error"]["password"].as_str().unwrap().contains("USB"));
 }

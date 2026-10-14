@@ -268,11 +268,13 @@ impl ClockLink {
         let config = link.get_config()?;
         let (fw, protocol) = link.version();
         let ip = link.clock_ip();
+        let pw_set = link.web_password_set();
         if let Some(c) = config {
             let mut st = self.ctx.state();
             st.clock = Some(c);
             st.clock_fw = fw;
             st.clock_protocol = protocol;
+            st.clock_pw_set = pw_set;
             if ip.is_some() {
                 st.clock_ip = ip;
             }
@@ -287,6 +289,24 @@ impl ClockLink {
         // On a lost link the rest are dropped unanswered: their senders go away, so
         // Ctx::set_clock reports "clock didn't answer" (app.py: after its 3 s timeout).
         for req in reqs {
+            if let Some(pw) = &req.web_password {
+                let res = self.link().set_web_password(pw);
+                match res {
+                    Ok(Ok(set)) => {
+                        self.remember_clock_password(pw);
+                        self.ctx.state().clock_pw_set = Some(set);
+                        let _ = req.reply.send(Ok(None));
+                    }
+                    Ok(Err(why)) => {
+                        let _ = req.reply.send(Err(serde_json::json!({ "password": why })));
+                    }
+                    Err(e) => {
+                        let _ = req.reply.send(Err(serde_json::json!({ "password": "clock didn't answer" })));
+                        return Err(e);
+                    }
+                }
+                continue;
+            }
             let res = self.link().set_config(&req.patch).and_then(|r| {
                 if r.is_ok() {
                     self.read_clock_config()?;
@@ -306,6 +326,19 @@ impl ClockLink {
             }
         }
         Ok(())
+    }
+
+    /// After setting the clock's web password, keep the app's `clock_pass` in step, so the WiFi
+    /// link and "Update clock" authenticate without the user typing it twice. The link reconnect
+    /// that a clock_pass change normally triggers isn't needed here (it's the same clock).
+    fn remember_clock_password(&mut self, pw: &str) {
+        let cfg = {
+            let mut cfg = self.ctx.cfg.lock().unwrap();
+            cfg.insert("clock_pass".into(), Value::String(pw.to_string()));
+            cfg.clone()
+        };
+        let _ = crate::config::save(&self.ctx.cfg_path, &cfg);
+        self.link_cfg[2] = Value::String(pw.to_string()); // [link, clock_host, clock_pass]
     }
 
     fn send(&mut self, line: &str) -> Result<(), LinkLost> {

@@ -89,7 +89,7 @@ pub fn clock_request(ctx: &Ctx, patch: Value) -> mpsc::Receiver<ClockReply> {
     ctx.clock_requests
         .lock()
         .unwrap()
-        .push(ClockRequest { patch, reply: tx });
+        .push(ClockRequest { patch, web_password: None, reply: tx });
     rx
 }
 
@@ -378,6 +378,17 @@ impl SerialIo for FakeSerial {
                 } else {
                     self.replies
                         .push_back(format!("CFGERR {}", json!({"error": bad})));
+                }
+            }
+            "WEBPASS" => {
+                // same rule as the firmware: up to 64 printable chars, no spaces; "" removes it
+                if arg.len() <= 64 && arg.bytes().all(|b| b > 32 && b < 127) {
+                    s.version.insert("_pw".into(), json!(!arg.is_empty()));
+                    self.replies.push_back(format!("PWOK {}", json!({"set": !arg.is_empty()})));
+                } else {
+                    self.replies.push_back(
+                        r#"PWERR {"error":"up to 64 printable characters, no spaces"}"#.into(),
+                    );
                 }
             }
             "GANIM" | "GCOMMIT" => self.replies.push_back("OK".into()), // unrelated replies to skip

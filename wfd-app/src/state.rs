@@ -40,6 +40,7 @@ pub struct State {
     pub clock_ip: Option<String>,
     pub clock_fw: Option<String>,
     pub clock_protocol: Option<u32>,
+    pub clock_pw_set: Option<bool>,         // the clock has a web password (None = unknown)
     pub release: Option<Release>,
     pub update: Update,
     pub grid_rows: Option<[u8; 7]>,

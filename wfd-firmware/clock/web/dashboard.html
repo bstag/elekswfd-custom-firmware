@@ -247,9 +247,16 @@
         <option value="usb">USB only</option><option value="wifi">WiFi only</option></select></div>
     <div class="row"><label for="clock_host">Clock</label>
       <input type="text" id="clock_host" placeholder="wfd-clock.local or an IP"></div>
-    <div class="row"><label for="clock_pass">Password</label>
+    <div class="row"><label for="clock_pass">App uses password</label>
       <input type="password" id="clock_pass" autocomplete="off">
       <button class="primary" id="applyLink">Apply</button></div>
+    <div id="pwBox" hidden>
+      <div class="row sub"><label>Clock web password</label><span id="pwState">–</span></div>
+      <div class="row"><label for="newClockPass">New password</label>
+        <input type="password" id="newClockPass" autocomplete="new-password" placeholder="no spaces, up to 64">
+        <button class="primary" id="setClockPass">Set over USB</button><button id="clearClockPass">Remove</button></div>
+      <p class="hint" id="pwHint"></p>
+    </div>
     <div class="row sub"><label>Clock firmware</label><span id="fwClock">–</span></div>
     <div class="row"><label>This app ships</label><span id="fwRelease">–</span>
       <button class="primary" id="updateClock" disabled>Update clock</button></div>
@@ -372,6 +379,15 @@ function showApp(s) {
     : s.update_available ? 'A newer build is available. Updating takes about 20 s; the clock restarts.' : '';
   $('#fwNote').style.color = s.compat === 'older' || up.state === 'failed' ? 'var(--bad)' : '';
   if (s.clock_ip) $('#clockPage').href = `http://${s.clock_ip}/`;
+  // the clock's web password: changed over USB only (physical access); the app then uses it too
+  $('#pwBox').hidden = !('clock_pw_set' in s);
+  $('#pwState').textContent = s.clock_pw_set === true ? 'set (user: admin)' : s.clock_pw_set === false ? 'none: anyone on your network can change settings' : 'unknown';
+  const usb = s.connected && s.link === 'usb';
+  $('#setClockPass').disabled = $('#clearClockPass').disabled = !usb;
+  $('#clearClockPass').disabled ||= s.clock_pw_set !== true;
+  $('#pwHint').textContent = usb
+    ? 'Protects the clock’s pages, its settings API, firmware updates and the WiFi display stream. This app saves it and keeps working.'
+    : 'Plug the clock in by USB to change it: only someone with the clock in hand can.';
   if (editing !== $('#clock_pass')) $('#clock_pass').placeholder = s.clock_pass_set ? '(saved, unchanged)' : 'only if the clock has one';
 }
 
@@ -464,12 +480,23 @@ $('#updateClock').onclick = async () => {
   if (!confirm('Upload the firmware this app ships to the clock? It restarts when done.')) return;
   await call('/api/update_clock'); poll();
 };
+$('#setClockPass').onclick = async () => {
+  const pw = $('#newClockPass').value;
+  if (!pw) return toast('type a new password first', true);
+  if (await call('/api/clock_password', { password: pw })) { $('#newClockPass').value = ''; toast('Clock password set; this app uses it too'); }
+  poll();
+};
+$('#clearClockPass').onclick = async () => {
+  if (!confirm('Remove the clock’s web password? Anyone on your network could then change its settings and firmware.')) return;
+  if (await call('/api/clock_password', { password: '' })) toast('Password removed');
+  poll();
+};
 $('#applyLink').onclick = () => {             // blank password field = keep the saved one
   const patch = { link: $('#link').value, clock_host: $('#clock_host').value.trim() };
   if ($('#clock_pass').value) patch.clock_pass = $('#clock_pass').value;
   set(patch); $('#clock_pass').value = '';
 };
-for (const id of ['#offline_text', '#zip', '#dwell', '#custom_text', '#rotate_dwell', '#clock_host', '#clock_pass', '#link']) {
+for (const id of ['#offline_text', '#zip', '#dwell', '#custom_text', '#rotate_dwell', '#clock_host', '#clock_pass', '#link', '#newClockPass']) {
   $(id).onfocus = e => editing = e.target; $(id).onblur = () => editing = null;   // don't overwrite what's being typed
 }
 

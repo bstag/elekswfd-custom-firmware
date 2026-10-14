@@ -189,6 +189,7 @@ fn post(ctx: &Arc<Ctx>, req: &mut Request) -> Reply {
         "/api/grid_preview" => grid_preview(ctx, &body),
         "/api/grid_save" => grid_save(ctx, &body),
         "/api/om_save" => om_save(ctx, &body),
+        "/api/clock_password" => clock_password(ctx, &body),
         _ => not_found(),
     }
 }
@@ -355,6 +356,21 @@ fn om_save(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
     patch.insert("offline_text".into(), json!(text));
     match ctx.set_clock(patch, CLOCK_TIMEOUT) {
         Ok(_) => json_reply(200, json!({"queued": 1, "text": text})),
+        Err(info) => json_reply(400, json!({"error": info})),
+    }
+}
+
+/// POST /api/clock_password {"password": "..."}: set ("" = remove) the clock's web password.
+/// USB only — physical access is what allows it; the clock checks it again (WEBPASS).
+fn clock_password(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
+    let Some(Value::String(pw)) = body.get("password") else {
+        return json_reply(400, json!({"error": {"password": "expected a string"}}));
+    };
+    if pw.len() > 64 || !pw.bytes().all(|b| b > 32 && b < 127) {
+        return json_reply(400, json!({"error": {"password": "up to 64 printable characters, no spaces"}}));
+    }
+    match ctx.set_web_password(pw, CLOCK_TIMEOUT) {
+        Ok(_) => json_reply(200, json!({"ok": true, "set": !pw.is_empty()})),
         Err(info) => json_reply(400, json!({"error": info})),
     }
 }

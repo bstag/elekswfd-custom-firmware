@@ -24,9 +24,11 @@ pub enum UploadJob {
 /// Result of changing clock-owned settings: Ok(warning map, if any) or Err(per-key errors).
 pub type ClockReply = Result<Option<Value>, Value>;
 
-/// One CFGSET / POST /api/set for the link thread; it answers on `reply`.
+/// One CFGSET / POST /api/set for the link thread; it answers on `reply`. With `web_password`
+/// set it's a WEBPASS instead (USB only; `patch` is empty).
 pub struct ClockRequest {
     pub patch: Map<String, Value>,
+    pub web_password: Option<String>,
     pub reply: mpsc::Sender<ClockReply>,
 }
 
@@ -98,8 +100,29 @@ impl Ctx {
         }
         let (tx, rx) = mpsc::channel();
         let keys = per_key("clock didn't answer");
-        self.clock_requests.lock().unwrap().push(ClockRequest { patch, reply: tx });
+        self.clock_requests.lock().unwrap().push(ClockRequest { patch, web_password: None, reply: tx });
         rx.recv_timeout(timeout).unwrap_or(Err(keys))
+    }
+
+    /// Set ("" = remove) the clock's web password over USB; errors are {"password": reason}.
+    /// The link thread also saves it as the app's `clock_pass` so WiFi and updates keep working.
+    pub fn set_web_password(&self, password: &str, timeout: Duration) -> ClockReply {
+        let err = |m: &str| Err(serde_json::json!({ "password": m }));
+        let st = self.state();
+        if !st.connected {
+            return err("clock not connected");
+        }
+        if st.link.as_deref() != Some("usb") {
+            return err("connect the clock by USB to change its password");
+        }
+        drop(st);
+        let (tx, rx) = mpsc::channel();
+        self.clock_requests.lock().unwrap().push(ClockRequest {
+            patch: Map::new(),
+            web_password: Some(password.to_string()),
+            reply: tx,
+        });
+        rx.recv_timeout(timeout).unwrap_or_else(|_| err("clock didn't answer"))
     }
 
     /// The setting the clock reports for `key` (state.clock), else `default`.

@@ -139,6 +139,10 @@ pub trait Link {
     /// The clock's WiFi address, if known: reported over USB in CFG (`_ip`), the address in use
     /// over WiFi. Lets "Update clock" and a switch to WiFi skip the mDNS lookup.
     fn clock_ip(&self) -> Option<String>;
+    /// Whether the clock has a web password, if it said (CFG `_pw` / status `net.key_required`).
+    fn web_password_set(&self) -> Option<bool>;
+    /// Set ("" = remove) the clock's web password. USB only: other links answer Ok(Err(reason)).
+    fn set_web_password(&mut self, password: &str) -> Result<Result<bool, String>, LinkLost>;
     fn send(&mut self, line: &str) -> Result<(), LinkLost>;
     /// End of a frame (WiFi sends its packet here).
     fn flush(&mut self) -> Result<(), LinkLost>;
@@ -294,6 +298,7 @@ pub struct UsbLink {
     fw: Option<String>,
     protocol: Option<u32>,
     ip: Option<String>,
+    pw_set: Option<bool>,
 }
 
 impl UsbLink {
@@ -306,6 +311,7 @@ impl UsbLink {
             fw: None,
             protocol: None,
             ip: None,
+            pw_set: None,
         }
     }
 
@@ -364,6 +370,26 @@ impl Link for UsbLink {
         self.ip.clone()
     }
 
+    fn web_password_set(&self) -> Option<bool> {
+        self.pw_set
+    }
+
+    fn set_web_password(&mut self, password: &str) -> Result<Result<bool, String>, LinkLost> {
+        Ok(match self.request(&format!("WEBPASS {password}"), &["PWOK", "PWERR"])? {
+            Some(("PWOK", body)) => {
+                let set = body.get("set").and_then(Value::as_bool).unwrap_or(!password.is_empty());
+                self.pw_set = Some(set);
+                Ok(set)
+            }
+            Some((_, body)) => Err(body
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("the clock refused the password")
+                .to_string()),
+            None => Err("the clock didn't answer (older firmware? update the clock first)".into()),
+        })
+    }
+
     fn send(&mut self, line: &str) -> Result<(), LinkLost> {
         self.s.write(format!("{line}\n").as_bytes())?;
         Ok(())
@@ -387,6 +413,7 @@ impl Link for UsbLink {
             .remove("_ip")
             .and_then(|v| v.as_str().map(str::to_owned))
             .filter(|ip| !ip.is_empty()); // "" = the clock isn't on WiFi
+        self.pw_set = c.remove("_pw").and_then(|v| v.as_bool());
         Ok(Some(c))
     }
 
@@ -448,6 +475,7 @@ pub struct WifiLink {
     clock_ntp: bool,
     fw: Option<String>,
     protocol: Option<u32>,
+    pw_set: Option<bool>,
     ok_at: f64,
 }
 
@@ -484,6 +512,7 @@ impl WifiLink {
             clock_ntp: false,
             fw: None,
             protocol: None,
+            pw_set: None,
             ok_at,
         }
     }
@@ -512,6 +541,14 @@ impl Link for WifiLink {
 
     fn clock_ip(&self) -> Option<String> {
         Some(self.ip.clone())
+    }
+
+    fn web_password_set(&self) -> Option<bool> {
+        self.pw_set
+    }
+
+    fn set_web_password(&mut self, _password: &str) -> Result<Result<bool, String>, LinkLost> {
+        Ok(Err("connect the clock by USB to change its password".into()))
     }
 
     fn send(&mut self, line: &str) -> Result<(), LinkLost> {
@@ -549,6 +586,7 @@ impl Link for WifiLink {
         };
         self.ok_at = self.clock.now();
         self.clock_ntp = truthy(st.get("ntp"));
+        self.pw_set = st.get("net").and_then(|n| n.get("key_required")).and_then(Value::as_bool);
         self.fw = st.get("fw").and_then(Value::as_str).map(str::to_owned);
         self.protocol = st
             .get("protocol")

@@ -56,7 +56,7 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `WIFISET ssid⇥pass` | Save WiFi creds (tab‑separated) and reboot |
 | `WIFISSID name` | Change just the network name, keep the password |
 | `WIFISCAN` / `WIFIINFO` / `WIFIRESET` | Scan 2.4 GHz nets / status / clear creds |
-| `WEBPASS <pass>` | Password for `/control`, `/update`, `/wifi` (user `admin`); `WEBPASS` alone clears it |
+| `WEBPASS <pass>` | Web password (user `admin`) for the settings pages and API, `/update`, `/wifi` and the WiFi display stream; `WEBPASS` alone removes it. Up to 64 printable characters, no spaces. Replies `PWOK {"set":…}` / `PWERR {"error":…}`. **USB only**: it isn't a setting (`/api/set`) and isn't accepted over UDP, so changing it needs physical access |
 
 ## Web endpoints (port 80)
 
@@ -255,6 +255,6 @@ that, esptool rewrites the bootloader header to 40 MHz.
 ## Versions
 
 `/api/status` reports `state.fw` (the build stamp) and `state.protocol` (`WFD_PROTOCOL` in
-`main.cpp`); `CFG` reports them as `_fw` / `_protocol`, plus the clock's WiFi address as `_ip` (empty when it isn't on WiFi), so the app sees them over USB too. Bump
+`main.cpp`); `CFG` reports them as `_fw` / `_protocol`, plus the clock's WiFi address as `_ip` (empty when it isn't on WiFi) and whether a web password is set as `_pw`, so the app sees them over USB too. Bump
 `WFD_PROTOCOL` together with `PROTOCOL` in `app.py` whenever commands, settings or the API
 change in a way the app depends on. A test fails if they, or `releases/version.json`, disagree.

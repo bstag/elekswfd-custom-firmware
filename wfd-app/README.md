@@ -64,6 +64,8 @@ The live tests are opt-in: `cargo test -- --ignored` (mDNS lookup of the clock, 
 `cargo run --example audio_probe`. The Python device tests (`wfd-control/test.bat -m device`)
 talk to the clock and the app over HTTP, so they work against this app too.
 
+New in the Rust app only: setting the clock's web password over USB (`POST /api/clock_password`, Connection & firmware on the dashboard).
+
 Known differences from the Python app:
 
 - **Random grid animations** (rain, sparkle, life) use a different random generator, so their
