@@ -1,0 +1,67 @@
+# Tests on every push and pull request: the Rust app, the Python app (with the firmware's C++
+# engines compiled on the runner), and the firmware build. No clock or network device needed.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust app (wfd-app)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: wfd-app
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wfd-app
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
+
+  python:
+    name: Python app + firmware engines (wfd-control)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: wfd-control
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Test
+        run: uv run --with-requirements requirements.txt --with pytest pytest -ra
+
+  firmware:
+    name: Firmware build (wfd-firmware)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wfd-firmware/clock
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ hashFiles('wfd-firmware/clock/platformio.ini') }}
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build
+        run: pio run
+      - name: Embedded pages are up to date
+        # embed_web.py regenerates src/web_pages.h from web/*.html before every build
+        run: git diff --exit-code -- src/web_pages.h || (echo "::error::src/web_pages.h is stale - run pio run (or python embed_web.py) and commit it" && exit 1)
+      - name: Size
+        run: ls -l .pio/build/wfd/firmware.bin
