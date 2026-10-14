@@ -23,6 +23,12 @@
 
 static Preferences prefs;
 
+// What the PC app checks before talking to this firmware. Bump WFD_PROTOCOL whenever commands,
+// settings or the JSON API change in a way the app must know about (app.py PROTOCOL).
+//   1 serial display commands   2 settings over USB (CFG/CFGSET) + JSON API   3 WiFi link (UDP, BYE, /api/frames)
+#define WFD_PROTOCOL 3
+static const char *FW_BUILD = "wfd-clock " __DATE__ " " __TIME__;
+
 // WiFi / NTP state (declared early so serial command handlers can see them)
 static WebServer web(80);
 static DNSServer dns;
@@ -1018,6 +1024,8 @@ static void serialCfg(const String &json) {
   JsonDocument cfg;
   configJson(cfg.to<JsonObject>());
   if (out["warning"].is<JsonObject>()) cfg["_warning"] = out["warning"];
+  cfg["_fw"] = FW_BUILD;                         // so the app sees the version over USB too
+  cfg["_protocol"] = WFD_PROTOCOL;
   Serial.print(json.length() ? "CFGOK " : "CFG ");
   serializeJson(cfg, Serial);
   Serial.println();
@@ -1045,7 +1053,8 @@ static void configJson(JsonObject c) {
 }
 
 static void stateJson(JsonObject s) {
-  s["fw"] = "wfd-clock " __DATE__ " " __TIME__;
+  s["fw"] = FW_BUILD;
+  s["protocol"] = WFD_PROTOCOL;
   s["uptime_s"] = millis() / 1000;
   s["heap_free"] = ESP.getFreeHeap();
   uint8_t t[7];
@@ -1458,6 +1467,10 @@ void loop() {
     else if (line.length() < 1024) line += c;   // room for CFGSET {json}
   }
   wifiLoop();
+  if (Update.isRunning()) {            // OTA upload: take its 1.4 KB pieces back to back, not one per loop
+    uint32_t t = millis();
+    while (Update.isRunning() && millis() - t < 250) web.handleClient();
+  }
   if (netUp) netPoll();
   checkButtons();
   // advance stored animations only when the app is off

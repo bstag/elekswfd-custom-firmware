@@ -1,4 +1,5 @@
 """Cross-checks between the app and the firmware source, so the two can't drift apart."""
+import json
 import re
 from pathlib import Path
 
@@ -77,6 +78,13 @@ def test_app_pages_only_send_known_settings(app):
     assert len(sent) >= 20, sorted(sent)
     unknown = sent - set(app.DEFAULTS) - app.CLOCK_KEYS - {"grid_custom"}
     assert not unknown, f"pages send settings nobody owns: {sorted(unknown)}"
+
+
+def test_app_and_shipped_firmware_speak_the_same_protocol(app):
+    fw = int(re.search(r"#define WFD_PROTOCOL (\d+)", MAIN_CPP.read_text(encoding="utf-8")).group(1))
+    shipped = json.loads((ROOT / "wfd-firmware" / "releases" / "version.json").read_text(encoding="utf-8"))
+    assert app.PROTOCOL == fw, "bump app.PROTOCOL together with WFD_PROTOCOL"
+    assert shipped["protocol"] == fw, "releases/ is stale: run wfd-firmware/make_release.py"
 
 
 def test_firmware_font_table_is_generated_from_font14():

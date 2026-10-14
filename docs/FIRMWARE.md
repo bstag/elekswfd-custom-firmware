@@ -238,14 +238,17 @@ Both headers are committed, so a fresh clone builds as-is.
 After `pio run` in `wfd-firmware/clock`, refresh `wfd-firmware/releases/`:
 
 ```bash
-cd wfd-firmware
-B=clock/.pio/build/wfd
-cp $B/firmware.bin releases/wfd-clock-firmware.bin          # OTA image
-uvx --from "esptool>=4.7,<5" esptool --chip esp32 merge_bin \
-  -o releases/wfd-clock-merged.bin --flash_mode dio --flash_freq 80m --flash_size 4MB \
-  0x1000 $B/bootloader.bin 0x8000 $B/partitions.bin \
-  0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
-  0x10000 $B/firmware.bin                                    # USB image (flash at 0x0)
+python wfd-firmware/make_release.py
 ```
 
-Keep `--flash_freq 80m`. Without it, esptool rewrites the bootloader header to 40 MHz.
+It writes `wfd-clock-firmware.bin` (the OTA image), `wfd-clock-merged.bin` (bootloader, partitions,
+boot_app0 and the app, for the first USB flash at 0x0) and `version.json` (build stamp and
+protocol, which the PC app reads to offer updates). It merges with `--flash_freq 80m`; without
+that, esptool rewrites the bootloader header to 40 MHz.
+
+## Versions
+
+`/api/status` reports `state.fw` (the build stamp) and `state.protocol` (`WFD_PROTOCOL` in
+`main.cpp`); `CFG` reports them as `_fw` / `_protocol`, so the app sees them over USB too. Bump
+`WFD_PROTOCOL` together with `PROTOCOL` in `app.py` whenever commands, settings or the API
+change in a way the app depends on. A test fails if they, or `releases/version.json`, disagree.

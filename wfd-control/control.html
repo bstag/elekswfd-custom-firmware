@@ -225,6 +225,11 @@
       <button class="primary" id="applyLink">Apply</button></div>
     <p class="hint">Over WiFi the live display goes as UDP packets and settings through the clock's web
       API. The password is the clock's web password (serial <code>WEBPASS</code>), if you set one.</p>
+    <div class="row" style="border-top:1px solid var(--line); padding-top:12px">
+      <label>Clock firmware</label><span id="fwClock">–</span></div>
+    <div class="row"><label>This app ships</label><span id="fwRelease">–</span>
+      <button class="primary" id="updateClock" disabled>Update clock</button></div>
+    <p class="hint" id="fwNote"></p>
   </section>
 </main>
 
@@ -259,6 +264,17 @@ async function poll() {
   $('#conn').textContent = state.connected
     ? (state.link === 'wifi' ? 'clock on WiFi · ' + state.port.slice(5) : 'clock on USB · ' + state.port)
     : (config.link === 'usb' ? 'clock not found on USB' : 'looking for the clock (USB / WiFi)…');
+  // firmware: what the clock runs vs what this app ships
+  const proto = state.clock_protocol;
+  $('#fwClock').textContent = state.clock_fw ? `${state.clock_fw.replace('wfd-clock ', '')} · protocol ${proto ?? '?'}` : '–';
+  $('#fwRelease').textContent = state.release ? `${state.release.fw.replace('wfd-clock ', '')} · protocol ${state.release.protocol}` : 'none';
+  const up = state.update || {};
+  $('#updateClock').disabled = !state.update_available || up.state === 'uploading';
+  $('#fwNote').textContent = up.state && up.state !== 'idle' ? up.message
+    : state.compat === 'older' ? 'The clock firmware is older than this app expects: some features may not work until you update it.'
+    : state.compat === 'newer' ? 'The clock runs newer firmware than this app knows; update the app.'
+    : state.update_available ? 'A newer build is available. Updating takes about 20 s; the clock restarts.' : '';
+  $('#fwNote').style.color = state.compat === 'older' || up.state === 'failed' ? 'var(--bad)' : '';
   if (!editingLink) {
     $('#link').value = config.link; $('#clock_host').value = config.clock_host;
     $('#clock_pass').placeholder = state.clock_pass_set ? '(saved, unchanged)' : 'only if the clock has one';
@@ -326,6 +342,12 @@ $('#applyLoc').onclick = () => {             // ZIP and units are the clock's se
 for (const id of ['#link', '#clock_host', '#clock_pass']) {
   $(id).onfocus = () => editingLink = true; $(id).onblur = () => editingLink = false;
 }
+$('#updateClock').onclick = async () => {
+  if (!confirm('Upload the firmware this app ships to the clock? It restarts when done.')) return;
+  const r = await fetch('/api/update_clock', { method:'POST', headers:{'Content-Type':'application/json','X-WFD':'1'}, body:'{}' });
+  if (!r.ok) toast((await r.json().catch(() => ({}))).error || 'update failed to start');
+  poll();
+};
 $('#applyLink').onclick = () => {             // blank password field = keep the saved one
   const patch = { link: $('#link').value, clock_host: $('#clock_host').value.trim() };
   if ($('#clock_pass').value) patch.clock_pass = $('#clock_pass').value;

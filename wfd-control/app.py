@@ -44,6 +44,8 @@ import mdns  # noqa: E402
 
 HERE = Path(__file__).parent
 CONFIG = HERE / "wfd_config.json"
+RELEASES = HERE.parent / "wfd-firmware" / "releases"   # firmware this app ships (make_release.py)
+PROTOCOL = 3                                           # firmware WFD_PROTOCOL this app speaks
 HTTP_ADDR = ("127.0.0.1", 8737)
 CH340_VID, CH340_PID = 0x1A86, 0x7523    # the clock's USB-serial chip
 BAUD = 115200
@@ -200,6 +202,9 @@ state = {
     "clock": None,                     # the clock's own settings (CFG), None until read
     "link": None,                      # "usb" | "wifi" while connected
     "clock_ip": None,                  # last address the clock answered on over WiFi
+    "clock_fw": None, "clock_protocol": None,          # what the clock runs (None until read)
+    "release": None,                   # releases/version.json: the firmware this app ships
+    "update": {"state": "idle", "message": ""},        # "Update clock": idle|uploading|done|failed
 }
 state_lock = threading.Lock()           # writers replace whole values via set_state(); readers of a
                                         # single key need no lock, /api/status serializes under it
@@ -420,6 +425,7 @@ class UsbLink:
     def __init__(self, s):
         self.s, self.name = s, s.port
         self.clock_ntp = False             # unknown over USB: keep sending the PC's time
+        self.fw = self.protocol = None
 
     @property
     def alive(self):
@@ -447,7 +453,10 @@ class UsbLink:
 
     def get_config(self):
         pre, c = self.request("CFG", ["CFG"])
-        return c if pre else None
+        if not pre:
+            return None
+        self.fw, self.protocol = c.pop("_fw", None), c.pop("_protocol", None)
+        return c
 
     def set_config(self, patch):
         pre, body = self.request("CFGSET " + json.dumps(patch, separators=(",", ":")), ["CFGOK", "CFGERR"])
@@ -492,6 +501,7 @@ class WifiLink:
         self.http = http or self._http
         self.buf = []
         self.clock_ntp = False
+        self.fw = self.protocol = None
         self.ok_at = time.time()
 
     @property
@@ -534,6 +544,7 @@ class WifiLink:
             raise LinkLost(f"status: HTTP {code}")
         self.ok_at = time.time()
         self.clock_ntp = bool(body["state"].get("ntp"))
+        self.fw, self.protocol = body["state"].get("fw"), body["state"].get("protocol")
         return body["config"]
 
     def set_config(self, patch):
@@ -559,6 +570,96 @@ class WifiLink:
             self.sock.close()
         except OSError:
             pass
+
+
+def load_release():
+    """releases/version.json -> {"fw", "protocol"} (None if missing)."""
+    try:
+        info = json.loads((RELEASES / "version.json").read_text(encoding="utf-8"))
+        return {"fw": str(info["fw"]), "protocol": int(info["protocol"])}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def firmware_status(st):
+    """What the dashboard shows about the clock's firmware vs this app."""
+    fw, proto, rel = st["clock_fw"], st["clock_protocol"], st["release"]
+    if not st["connected"] or (fw is None and st["clock"] is None):
+        compat = "unknown"
+    elif proto is None or proto < PROTOCOL:
+        compat = "older"                   # (builds before protocol 3 didn't report one)
+    elif proto > PROTOCOL:
+        compat = "newer"
+    else:
+        compat = "ok"
+    available = bool(rel and st["connected"] and fw != rel["fw"] and rel["protocol"] >= (proto or 0))
+    return {"compat": compat, "update_available": available}
+
+
+def multipart(field, filename, data, boundary="wfd-clock-ota-7f3a"):
+    head = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\n"
+            "Content-Type: application/octet-stream\r\n\r\n").encode()
+    return head + data + f"\r\n--{boundary}--\r\n".encode(), f"multipart/form-data; boundary={boundary}"
+
+
+def upload_firmware(ip, data, password=""):
+    """POST the app image to the clock's /update (same as its web page); raises on failure."""
+    body, ctype = multipart("fw", "wfd-clock-firmware.bin", data)
+    headers = {"Content-Type": ctype}
+    if password:
+        headers["Authorization"] = "Basic " + base64.b64encode(f"admin:{password}".encode()).decode()
+    req = urllib.request.Request(f"http://{ip}/update", body, headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            if r.status != 200:
+                raise RuntimeError(f"clock answered HTTP {r.status}")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("wrong clock password" if e.code == 401 else f"clock refused the update (HTTP {e.code})") from e
+    except ConnectionResetError:
+        pass                               # older firmware reboots before closing: the upload got there
+
+
+def wait_for_build(ip, fw, timeout=60):
+    """Poll the clock's /api/status until it reports build fw (True) or time runs out (False)."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            with urllib.request.urlopen(f"http://{ip}/api/status", timeout=3) as r:
+                if json.load(r)["state"].get("fw") == fw:
+                    return True
+        except (OSError, ValueError, KeyError):
+            pass                           # restarting / rejoining WiFi
+        time.sleep(2)
+    return False
+
+
+def update_clock():
+    """Background job for "Update clock": find the clock on the network and upload the release."""
+    def job():
+        try:
+            ip = find_clock_ip()
+            if not ip:
+                raise RuntimeError("clock not found on WiFi (updates go over the network)")
+            data = (RELEASES / "wfd-clock-firmware.bin").read_bytes()
+            set_state(update={"state": "uploading", "message": f"sending {len(data) // 1024} KB to {ip}…"})
+            with cfg_lock:
+                pw = cfg.get("clock_pass", "")
+            try:
+                upload_firmware(ip, data, pw)
+            except (TimeoutError, socket.timeout, urllib.error.URLError):
+                pass                       # the reply can get lost in the restart: check the result instead
+            set_state(update={"state": "uploading", "message": "waiting for the clock to restart…"})
+            want = state["release"]["fw"]
+            if not wait_for_build(ip, want):
+                raise RuntimeError("the clock didn't come back with the new firmware")
+            set_state(update={"state": "done", "message": f"the clock now runs {want.replace('wfd-clock ', '')}"})
+        except Exception as e:
+            set_state(update={"state": "failed", "message": str(e)})
+    if state["update"]["state"] == "uploading":
+        return False
+    set_state(update={"state": "uploading", "message": "looking for the clock…"})
+    threading.Thread(target=job, daemon=True).start()
+    return True
 
 
 def find_clock_ip():
@@ -676,7 +777,7 @@ class ClockLink:
     def read_clock_config(self):
         c = self.link.get_config()
         if c is not None:
-            set_state(clock=c)
+            set_state(clock=c, clock_fw=self.link.fw, clock_protocol=self.link.protocol)
         self.last_cfg = time.time()
 
     def run_clock_requests(self):
@@ -881,8 +982,9 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/status":            # config = app settings + the clock's own
             with cfg_lock, state_lock:
                 shown = {**cfg, **(state["clock"] or {}), "clock_pass": ""}
-                body = json.dumps({"state": {**state, "clock_pass_set": bool(cfg.get("clock_pass"))},
-                                   "config": shown}).encode()
+                st = {**state, "clock_pass_set": bool(cfg.get("clock_pass")), "app_protocol": PROTOCOL,
+                      **firmware_status(state)}
+                body = json.dumps({"state": st, "config": shown}).encode()
             return self._send(200, body)
         self._send(404, {"error": "not found"})
 
@@ -919,6 +1021,12 @@ class H(BaseHTTPRequestHandler):
                 cfg.update(clean)
                 save_config(cfg)
             return self._send(200, {"ok": True, "warning": warning} if warning else {"ok": True})
+        if self.path == "/api/update_clock":     # upload the shipped firmware to the clock (OTA)
+            if not state["release"]:
+                return self._send(400, {"error": "no firmware in wfd-firmware/releases"})
+            if not update_clock():
+                return self._send(409, {"error": "an update is already running"})
+            return self._send(202, {"ok": True})
         if self.path == "/api/sync":
             sync_now.set()
             return self._send(200, {"ok": True})
@@ -966,6 +1074,7 @@ class H(BaseHTTPRequestHandler):
 def main():
     if not CONFIG.exists():
         save_config(cfg)
+    set_state(release=load_release())
     for fn in (lambda: audio_reader("out"), None, lambda: audio_reader("mic"),
                metrics_reader, weather_reader, ClockLink().run):
         if fn is None:

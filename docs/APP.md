@@ -85,6 +85,11 @@ if the clock hasn't synced.
 
 The clock still needs power, so a USB charger is enough once the app uses WiFi.
 
+**Firmware updates:** the Connection section shows the clock's firmware next to the one this app
+ships (`wfd-firmware/releases/`). It warns if the clock is older than the app expects (protocol),
+and **Update clock** uploads the shipped build over WiFi (this works while the display runs over
+USB too). The app then watches the clock until it reports the new build. That takes about 20 s.
+
 When the app quits normally it sends `BYE`, so the clock takes over at once instead of after 2 s.
 
 ## App and clock together

@@ -64,7 +64,7 @@ class FakeSerial:
         self.sim.lines.append(f"{self.sim.now():8.3f} {self.port} {line}")
         cmd, _, arg = line.partition(" ")
         if cmd == "CFG":
-            self.replies.append("CFG " + json.dumps(self.sim.clock_cfg))
+            self.replies.append("CFG " + json.dumps({**self.sim.clock_cfg, **self.sim.version}))
         elif cmd == "CFGSET":
             patch = json.loads(arg)
             bad = {k: "unknown setting" for k in patch if k not in self.sim.clock_cfg}
@@ -144,6 +144,7 @@ class Sim:
         self.lines = []
         self.opens = 0
         self.clock_cfg = json.loads(json.dumps(CLOCK_DEFAULTS))
+        self.version = {"_fw": "wfd-clock Oct 13 2026 19:57:32", "_protocol": 3}   # what CFG reports
         sim = self
 
         class FakeDT(_dt.datetime):
