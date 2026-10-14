@@ -15,10 +15,14 @@ pub struct LevelsOut { pub out: u8, pub mic: u8 }
 pub struct AudioNames { pub out: String, pub mic: String }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct Update { pub state: String, pub message: String }   // idle | uploading | done | failed
+pub struct Update {
+    pub state: String,                       // idle | uploading | done | failed
+    pub message: String,
+    pub last: Option<serde_json::Value>,     // the last attempt's log entry (see ota.rs)
+}
 
 impl Default for Update {
-    fn default() -> Self { Update { state: "idle".into(), message: String::new() } }
+    fn default() -> Self { Update { state: "idle".into(), message: String::new(), last: None } }
 }
 
 #[derive(Clone, Debug, Default, Serialize)]

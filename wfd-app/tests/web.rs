@@ -270,7 +270,7 @@ fn status_returns_state_and_config() {
         .collect();
     mkeys.sort();
     assert_eq!(mkeys, ["cpu", "gpu", "ram"]);
-    assert_eq!(st["update"], json!({"state": "idle", "message": ""}));
+    assert_eq!(st["update"], json!({"state": "idle", "message": "", "last": null}));
     assert_eq!(
         st["weather"].as_object().unwrap().keys().len(),
         5,

@@ -2,6 +2,10 @@
 //! wfd-control/app.py). Finds the clock on WiFi, POSTs the firmware the app ships to its
 //! `/update` page and waits until it reports the new build, with one retry. Progress goes to
 //! `state.update` (idle | uploading | done | failed) for the dashboard.
+//!
+//! Every attempt is logged (to diagnose stalled uploads): one JSON line in `ota-log.jsonl` next to
+//! the settings file, with the app's side (seconds sending, the error) and the clock's own report
+//! of that upload (`state.ota`: bytes, pieces, longest pause and where, signal, memory, result).
 
 use crate::ctx::Ctx;
 use crate::link::basic_auth;
@@ -92,11 +96,18 @@ pub type Upload = Box<dyn Fn(&str, &[u8], &str) -> Result<(), OtaError> + Send>;
 /// `wait_for_build(host, fw, timeout)`
 pub type WaitForBuild = Box<dyn Fn(&str, &str, Duration) -> bool + Send>;
 
+/// `clock_report(host, password)`: the clock's report of its last upload (`state.ota`), if any.
+pub type ClockReport = Box<dyn Fn(&str, &str) -> Option<Value> + Send>;
+/// `log(entry)`: record one attempt.
+pub type Log = Box<dyn Fn(&Ctx, &Value) + Send>;
+
 /// The steps of an update, replaceable for tests.
 pub struct OtaHooks {
     pub find_clock_ip: FindIp,
     pub upload_firmware: Upload,
     pub wait_for_build: WaitForBuild,
+    pub clock_report: ClockReport,
+    pub log: Log,
 }
 
 impl OtaHooks {
@@ -105,7 +116,33 @@ impl OtaHooks {
             find_clock_ip: Box::new(crate::link::find_clock_ip),
             upload_firmware: Box::new(upload_firmware),
             wait_for_build: Box::new(wait_for_build),
+            clock_report: Box::new(clock_report),
+            log: Box::new(append_log),
         }
+    }
+}
+
+/// GET the clock's /api/status and return `state.ota` (its report of the last upload).
+pub fn clock_report(host: &str, password: &str) -> Option<Value> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(3)))
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let mut req = agent.get(format!("http://{host}/api/status"));
+    if !password.is_empty() {
+        req = req.header("Authorization", basic_auth(password));
+    }
+    let body: Value = req.call().ok()?.body_mut().read_json().ok()?;
+    body.get("state")?.get("ota").cloned()
+}
+
+/// Append one line to `ota-log.jsonl` next to the settings file.
+fn append_log(ctx: &Ctx, entry: &Value) {
+    use std::io::Write;
+    let Some(dir) = ctx.cfg_path.parent() else { return };
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("ota-log.jsonl")) {
+        let _ = writeln!(f, "{entry}");
     }
 }
 
@@ -115,10 +152,9 @@ pub fn update_clock(ctx: &Arc<Ctx>) -> bool {
 }
 
 fn set_update(ctx: &Ctx, state: &str, message: impl Into<String>) {
-    ctx.state().update = Update {
-        state: state.into(),
-        message: message.into(),
-    };
+    let mut st = ctx.state();
+    st.update.state = state.into();
+    st.update.message = message.into();
 }
 
 /// `update_clock` with its steps injected.
@@ -132,6 +168,7 @@ pub fn update_clock_with(ctx: &Arc<Ctx>, hooks: OtaHooks) -> bool {
         st.update = Update {
             state: "uploading".into(),
             message: "looking for the clock…".into(),
+            last: st.update.last.take(),
         };
     }
     let ctx = Arc::clone(ctx);
@@ -168,11 +205,31 @@ fn job(ctx: &Ctx, hooks: &OtaHooks) -> Result<String, String> {
         if attempt == 2 {
             set_update(ctx, "uploading", "no new firmware yet; sending it again…");
         }
-        if let Err(OtaError::Refused(msg)) = (hooks.upload_firmware)(&ip, data, &pw) {
+        let t0 = Instant::now();
+        let sent = (hooks.upload_firmware)(&ip, data, &pw);
+        let secs = t0.elapsed().as_secs_f64();
+        let confirmed = match &sent {
+            Err(OtaError::Refused(_)) => false,
+            _ => {
+                set_update(ctx, "uploading", "waiting for the clock to restart…");
+                (hooks.wait_for_build)(&ip, &want, RESTART_WAIT)
+            }
+        };
+        let entry = serde_json::json!({
+            "time": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            "ip": ip, "attempt": attempt, "fw": want, "bytes": data.len(),
+            "app": {"secs": (secs * 10.0).round() / 10.0,
+                    "error": match &sent { Ok(()) => Value::Null,
+                                           Err(OtaError::Refused(m) | OtaError::Transport(m)) => m.clone().into() }},
+            "confirmed": confirmed,
+            "clock": (hooks.clock_report)(&ip, &pw),
+        });
+        (hooks.log)(ctx, &entry);
+        ctx.state().update.last = Some(entry);
+        if let Err(OtaError::Refused(msg)) = sent {
             return Err(msg);
         }
-        set_update(ctx, "uploading", "waiting for the clock to restart…");
-        if (hooks.wait_for_build)(&ip, &want, RESTART_WAIT) {
+        if confirmed {
             return Ok(format!(
                 "the clock now runs {}",
                 want.replace("wfd-clock ", "")

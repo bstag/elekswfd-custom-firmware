@@ -153,6 +153,20 @@ static bool netUp = false;
 static uint32_t udpPackets = 0, udpRejected = 0;
 static String webPass;                          // cached "webpass" (checked 30x a second)
 
+// The last OTA upload, for diagnosing stalls: saved to NVS ("otalog") when an upload ends, so it
+// survives the restart after a good update and is still there after an aborted one. Shown as
+// state.ota in /api/status and printed as an "OTA ..." line on serial.
+struct OtaLog {
+  char result[56];                // ok | no auth | begin failed: .. | write failed: .. | end failed: .. | aborted
+  uint32_t bytes, chunks, ms;     // received, pieces, start -> end
+  uint32_t maxGapMs, gapAt;       // longest pause between pieces, and how far in (bytes) it came
+  int32_t rssiStart, rssiEnd;     // WiFi signal (dBm)
+  uint32_t heapStart, heapEnd;    // free memory
+  uint32_t startMs, lastMs;       // (working values)
+};
+static OtaLog otaLog = {};
+static bool otaLogValid = false;
+
 static void drawGrid(const uint8_t *rows, bool frame) {   // rows[r] bit c = cell (r,c)
   for (int r = 0; r < 7; r++)
     for (int c = 0; c < 7; c++)
@@ -1088,6 +1102,19 @@ static void stateJson(JsonObject s) {
   s["app_connected"] = millis() - appTime < 2000;
   s["message"] = msgShown;
   s["stored_frames"] = gaN;
+  if (otaLogValid) {                               // the last firmware upload (see OtaLog)
+    JsonObject o = s["ota"].to<JsonObject>();
+    o["result"] = otaLog.result;
+    o["bytes"] = otaLog.bytes;
+    o["chunks"] = otaLog.chunks;
+    o["ms"] = otaLog.ms;
+    o["max_gap_ms"] = otaLog.maxGapMs;
+    o["gap_at"] = otaLog.gapAt;
+    o["rssi_start"] = otaLog.rssiStart;
+    o["rssi_end"] = otaLog.rssiEnd;
+    o["heap_start"] = otaLog.heapStart;
+    o["heap_end"] = otaLog.heapEnd;
+  }
   JsonObject net = s["net"].to<JsonObject>();
   net["host"] = String(HOSTNAME) + ".local";
   net["udp_port"] = UDP_PORT;
@@ -1235,19 +1262,61 @@ static void handleControlPost() {
 }
 
 static bool otaOk = false;             // set by the upload handler, read by the final POST handler
+
+static void otaResult(const char *what, const char *detail = nullptr) {
+  if (strcmp(otaLog.result, "running")) return;   // keep the first failure
+  snprintf(otaLog.result, sizeof otaLog.result, detail ? "%s: %s" : "%s", what, detail);
+}
+
+static void otaFinish() {
+  otaLog.ms = millis() - otaLog.startMs;
+  otaLog.rssiEnd = WiFi.RSSI();
+  otaLog.heapEnd = ESP.getFreeHeap();
+  otaLogValid = true;
+  prefs.putBytes("otalog", &otaLog, sizeof otaLog);
+  Serial.printf("OTA %s bytes=%u chunks=%u ms=%u maxgap=%ums@%u rssi=%d..%d heap=%u..%u\n", otaLog.result,
+                otaLog.bytes, otaLog.chunks, otaLog.ms, otaLog.maxGapMs, otaLog.gapAt, otaLog.rssiStart,
+                otaLog.rssiEnd, otaLog.heapStart, otaLog.heapEnd);
+}
+
 static void handleUpdateUpload() {
   HTTPUpload &up = web.upload();
   if (up.status == UPLOAD_FILE_START) {
     otaOk = false;
-    if (webPass.length() && !web.authenticate("admin", webPass.c_str())) return;   // POST handler sends the 401
+    memset(&otaLog, 0, sizeof otaLog);
+    strcpy(otaLog.result, "running");
+    otaLog.startMs = otaLog.lastMs = millis();
+    otaLog.rssiStart = WiFi.RSSI();
+    otaLog.heapStart = ESP.getFreeHeap();
+    if (webPass.length() && !web.authenticate("admin", webPass.c_str())) {   // POST handler sends the 401
+      otaResult("no auth");
+      otaFinish();
+      return;
+    }
     otaOk = Update.begin(UPDATE_SIZE_UNKNOWN);
+    if (!otaOk) otaResult("begin failed", Update.errorString());
   } else if (up.status == UPLOAD_FILE_WRITE) {
-    if (otaOk && Update.write(up.buf, up.currentSize) != up.currentSize) otaOk = false;
+    uint32_t now = millis(), gap = now - otaLog.lastMs;
+    if (gap > otaLog.maxGapMs) { otaLog.maxGapMs = gap; otaLog.gapAt = otaLog.bytes; }
+    otaLog.lastMs = now;
+    otaLog.bytes += up.currentSize;
+    otaLog.chunks++;
+    if (otaOk && Update.write(up.buf, up.currentSize) != up.currentSize) {
+      otaOk = false;
+      otaResult("write failed", Update.errorString());
+    }
   } else if (up.status == UPLOAD_FILE_END) {
-    if (otaOk) otaOk = Update.end(true);
-  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    if (otaOk) {
+      otaOk = Update.end(true);
+      if (!otaOk) otaResult("end failed", Update.errorString());
+    }
+    otaResult("ok");
+    otaFinish();
+  } else if (up.status == UPLOAD_FILE_ABORTED) {   // the connection dropped or stalled mid-upload
     if (otaOk) Update.abort();
     otaOk = false;
+    otaResult("aborted");
+    otaFinish();
   }
   if (!otaOk && up.status != UPLOAD_FILE_START && Update.isRunning()) Update.abort();
 }
@@ -1470,6 +1539,7 @@ void setup() {
   // stored frames keep playing after the upgrade; otherwise default to a built-in animation
   gaAnim = constrain(prefs.getInt("gaid", gaN > 0 ? grid::CUSTOM : grid::SPIN), 0, grid::N_ANIM - 1);
   webPass = prefs.getString("webpass", "");
+  otaLogValid = prefs.getBytes("otalog", &otaLog, sizeof otaLog) == sizeof otaLog;   // last upload
   micAuto = prefs.getInt("micauto", 1);
   analogSetPinAttenuation(MIC_PIN, ADC_11db);   // dead zone hides the room's hum (see mic_dsp.h)
   gEng.bands = micBands;

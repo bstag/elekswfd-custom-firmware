@@ -108,6 +108,12 @@ The clock still needs power, so a USB charger is enough once the app uses WiFi.
 ships (`wfd-firmware/releases/`). It warns if the clock is older than the app expects (protocol),
 and **Update clock** uploads the shipped build over WiFi (this works while the display runs over
 USB too). The app then watches the clock until it reports the new build. That takes about 20 s.
+If an upload stalls, the app tries once more.
+
+Every attempt is logged (Rust app) as one JSON line in `ota-log.jsonl` next to the settings file:
+the app's side (seconds sending, any error, whether the new build came up) and the clock's own
+report of that upload (`state.ota`, see FIRMWARE.md). The dashboard shows the last one under the
+Update button. A stall shows up as a large `max_gap_ms` and `gap_at` says how far in it came.
 
 When the app quits normally it sends `BYE`, so the clock takes over at once instead of after 2 s.
 

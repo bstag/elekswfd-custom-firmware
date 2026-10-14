@@ -48,8 +48,83 @@ fn hooks(
             upload()
         }),
         wait_for_build: Box::new(move |ip, fw, _| built(ip, fw)),
+        clock_report: Box::new(|_, _| None),
+        log: Box::new(|_, _| {}),
     };
     (h, calls)
+}
+
+type Logged = Arc<Mutex<Vec<serde_json::Value>>>;
+
+/// Hooks whose attempts are logged into a Vec, with a clock that reports `report` each time.
+fn logged_hooks(
+    upload: impl Fn() -> Result<(), OtaError> + Send + 'static,
+    built: impl Fn() -> bool + Send + 'static,
+    report: serde_json::Value,
+) -> (OtaHooks, Logged) {
+    let logged: Logged = Arc::default();
+    let l2 = Arc::clone(&logged);
+    let h = OtaHooks {
+        find_clock_ip: Box::new(|_| Some("10.0.0.9".into())),
+        upload_firmware: Box::new(move |_, _, _| upload()),
+        wait_for_build: Box::new(move |_, _, _| built()),
+        clock_report: Box::new(move |ip, _| (ip == "10.0.0.9").then(|| report.clone())),
+        log: Box::new(move |_, e| l2.lock().unwrap().push(e.clone())),
+    };
+    (h, logged)
+}
+
+#[test]
+fn every_attempt_is_logged_with_the_clocks_report() {
+    let ctx = ctx_with_release();
+    let report = serde_json::json!({"result": "ok", "bytes": 9, "max_gap_ms": 40});
+    let (h, logged) = logged_hooks(|| Ok(()), || true, report.clone());
+    assert!(update_clock_with(&ctx, h));
+    assert_eq!(wait_update(&ctx).state, "done");
+    let logged = logged.lock().unwrap();
+    assert_eq!(logged.len(), 1);
+    let e = &logged[0];
+    assert_eq!((e["attempt"].as_u64(), e["confirmed"].as_bool()), (Some(1), Some(true)));
+    assert_eq!((e["ip"].as_str(), e["bytes"].as_u64()), (Some("10.0.0.9"), Some(FIRMWARE.len() as u64)));
+    assert!(e["app"]["error"].is_null() && e["app"]["secs"].is_number());
+    assert_eq!(e["clock"], report);
+    assert_eq!(ctx.state().update.last.as_ref(), Some(e), "the dashboard sees the last one");
+}
+
+#[test]
+fn a_stalled_first_attempt_leaves_two_entries() {
+    let ctx = ctx_with_release();
+    let tries = Arc::new(Mutex::new(0));
+    let t2 = Arc::clone(&tries);
+    let (h, logged) = logged_hooks(
+        || Err(OtaError::Transport("timed out".into())),
+        move || { let mut n = t2.lock().unwrap(); *n += 1; *n == 2 },
+        serde_json::json!({"result": "aborted", "max_gap_ms": 5012}),
+    );
+    assert!(update_clock_with(&ctx, h));
+    assert_eq!(wait_update(&ctx).state, "done");
+    let logged = logged.lock().unwrap();
+    assert_eq!(logged.len(), 2);
+    assert_eq!(logged[0]["app"]["error"], "timed out");
+    assert_eq!(logged[0]["confirmed"], false);
+    assert_eq!(logged[0]["clock"]["result"], "aborted");
+    assert_eq!((logged[1]["attempt"].as_u64(), logged[1]["confirmed"].as_bool()), (Some(2), Some(true)));
+}
+
+#[test]
+fn a_refused_upload_is_logged_too() {
+    let ctx = ctx_with_release();
+    let (h, logged) = logged_hooks(
+        || Err(OtaError::Refused("wrong clock password".into())),
+        || panic!("no waiting after a refusal"),
+        serde_json::json!({"result": "no auth"}),
+    );
+    assert!(update_clock_with(&ctx, h));
+    assert_eq!(wait_update(&ctx).state, "failed");
+    let logged = logged.lock().unwrap();
+    assert_eq!(logged.len(), 1);
+    assert_eq!(logged[0]["app"]["error"], "wrong clock password");
+    assert_eq!(logged[0]["clock"]["result"], "no auth");
 }
 
 #[test]

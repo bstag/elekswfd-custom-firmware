@@ -66,7 +66,7 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `GET /status` | Status page (time, NTP, WiFi, weather) |
 | `GET/POST /control` | Phone control panel (brightness, weather ZIP/units, timezone, message line, standalone toggles) |
 | `GET /wifi`, `POST /save` | WiFi picker: scanned networks by signal, or type a hidden one (captive portal in AP mode) |
-| `GET/POST /update` | OTA firmware upload |
+| `GET/POST /update` | OTA firmware upload (logged, see *Upload log* below) |
 | `GET /rescan` | Re‑scan WiFi networks |
 | `GET /api/status` | JSON: live state + every setting (see below) |
 | `GET /draw` | Grid animator (the same page the PC app serves): draw, preview live, save |
@@ -251,6 +251,22 @@ It writes `wfd-clock-firmware.bin` (the OTA image), `wfd-clock-merged.bin` (boot
 boot_app0 and the app, for the first USB flash at 0x0) and `version.json` (build stamp and
 protocol, which the PC app reads to offer updates). It merges with `--flash_freq 80m`; without
 that, esptool rewrites the bootloader header to 40 MHz.
+
+## Upload log
+
+Each OTA upload is recorded in NVS (`otalog`), so the record survives the restart after a good
+update and is still there after an aborted one. `/api/status` shows it as `state.ota`:
+
+| Field | Meaning |
+|---|---|
+| `result` | `ok`, `no auth`, `begin failed: …`, `write failed: …`, `end failed: …` or `aborted` (connection dropped or stalled) |
+| `bytes`, `chunks`, `ms` | received, pieces, start to end |
+| `max_gap_ms`, `gap_at` | the longest pause between pieces and how many bytes in it came |
+| `rssi_start`, `rssi_end` | WiFi signal (dBm) |
+| `heap_start`, `heap_end` | free memory |
+
+The same appears on serial as one line: `OTA ok bytes=… chunks=… ms=… maxgap=…ms@… rssi=…..… heap=…..…`.
+A healthy upload of the ~1.1 MB image is ~790 pieces in ~16 s with pauses under half a second.
 
 ## Versions
 
