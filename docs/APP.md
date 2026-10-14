@@ -25,7 +25,7 @@ drawing tool and fonts use `font14.py` / `grid_anim.py` (in the same folder).
 - **Weather** — resolves a ZIP or "Town, State" and pushes it; shows condition + temp
 - **Message line** — weather temp / window title / custom text / **date** / rotation; custom text supports `{date} {time} {time12} {day} {temp}` placeholders
 - **Grid** — 13 animations incl. audio/CPU‑reactive; **Save to clock** makes the clock play the
-  built‑ins itself, audio and mouth from its own mic (or stores your drawing); the **grid animator** (`/draw`) is a 7×7 frame editor with live preview
+  built‑ins itself, audio and mouth from its own mic (or stores your drawing); the **grid animator** (`/draw`) is a 7×7 frame editor with live preview. The same page is served by the clock at `http://wfd-clock.local/draw`; there it starts from the clock's stored drawing and saves straight to it
 - **Top row** — icon modes (audio meter / system status) and the logo toggle
 - **Offline message** + standalone toggles — what the clock shows when the app is off. *Save to clock*
   sends the text (placeholders and all); the clock's phone page picks the mode, rotation and speed

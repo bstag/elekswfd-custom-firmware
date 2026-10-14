@@ -69,6 +69,9 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `GET/POST /update` | OTA firmware upload |
 | `GET /rescan` | Re‑scan WiFi networks |
 | `GET /api/status` | JSON: live state + every setting (see below) |
+| `GET /draw` | Grid animator (the same page the PC app serves): draw, preview live, save |
+| `GET /api/frames` | JSON: the stored drawing `{frames, fps, frame}` |
+| `POST /api/preview` | JSON: show one grid frame now for 1.5 s `{"rows": [7 bytes], "frame": 0/1}` |
 | `POST /api/set` | JSON: change settings |
 | `POST /api/frames` | JSON: store drawn grid frames `{"frames": [[r0..r6], ...], "fps": 8, "frame": false}` (≤ 80) and play them when the app is off |
 
@@ -147,8 +150,8 @@ The PC app can drive the clock over WiFi instead of USB (see [APP.md](APP.md#con
 
 `/` serves a dashboard built on this API: a live preview (time, message line, the 7×7 grid as
 it is right now, weather/WiFi/NTP) and every setting, saved as you change it. The source is
-`clock/web/dashboard.html`. `embed_web.py` runs before every `pio run`, gzips the page into
-`src/web_dashboard.h` (about 6 KB), and one OTA update ships the page and firmware together.
+`clock/web/dashboard.html`. `embed_web.py` runs before every `pio run`, gzips every page in `web/`
+(dashboard, grid animator) into `src/web_pages.h` (about 6 + 4 KB), and one OTA update ships the page and firmware together.
 `/control` stays as a basic form for browsers without JavaScript; the old status page is at
 `/status`.
 

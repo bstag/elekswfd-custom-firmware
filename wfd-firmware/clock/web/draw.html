@@ -46,7 +46,7 @@
   <button id="preview" class="on">Live preview</button>
   <button class="primary" id="play">▶ Play on clock</button>
   <button id="saveClock">⭳ Save to clock (standalone)</button>
-  <a href="/">← Back to Control</a>
+  <a href="/">← Back</a>
 </header>
 <main>
   <div>
@@ -70,14 +70,20 @@
       <button id="save">Save .json</button><button id="load">Open .json</button>
       <input type="file" id="file" accept=".json" hidden>
     </div>
-    <p class="hint">Click/drag the grid to draw. Each frame is one step of the animation. "Play on clock" stores it as the
-      <b>Custom</b> grid animation and starts it. Live preview mirrors the current frame onto the clock as you draw.</p>
+    <p class="hint" id="help">Click/drag the grid to draw. Each frame is one step of the animation. Live preview
+      mirrors the current frame onto the clock as you draw. "Save to clock" stores it (up to 80 frames) as the
+      <b>Drawn</b> animation the clock plays when the PC app is off.</p>
+    <p class="hint" id="appHelp">"Play on clock" plays it now as the app's live grid animation.</p>
   </div>
 </main>
 <script>
 const $ = s => document.querySelector(s);
 const NS = 7;
 let frames = [Array(7).fill(0)], cur = 0, frameOn = true, previewOn = true, localTimer = null;
+// This page is served by both the PC app and the clock itself; their APIs differ a little.
+let onClock = false;
+const post = (path, body) => fetch(path, { method:'POST', headers:{'Content-Type':'application/json','X-WFD':'1'},
+                                           body: JSON.stringify(body) });
 
 const gridEl = $('#grid');
 for (let i = 0; i < 49; i++) { const d = document.createElement('div'); d.dataset.i = i; gridEl.appendChild(d); }
@@ -125,8 +131,7 @@ function changed() { renderGrid(); renderThumb(cur); pushPreview(); }
 
 async function pushPreview() {
   if (!previewOn) return;
-  fetch('/api/grid_preview', { method:'POST', headers:{'Content-Type':'application/json','X-WFD':'1'},
-    body: JSON.stringify({ rows: frames[cur], frame: frameOn ? 1 : 0 }) });
+  post(onClock ? '/api/preview' : '/api/grid_preview', { rows: frames[cur], frame: frameOn ? 1 : 0 });
 }
 
 const T = {
@@ -161,9 +166,9 @@ $('#play').onclick = async () => {
 };
 
 $('#saveClock').onclick = async () => {
-  const r = await (await fetch('/api/grid_save', { method:'POST', headers:{'Content-Type':'application/json','X-WFD':'1'},
-    body: JSON.stringify({ frames, fps: +$('#fps').value, frame: frameOn }) })).json();
-  $('#saveClock').textContent = r.error ? 'Error' : '✓ Saved to clock';
+  const body = { frames, fps: +$('#fps').value, frame: frameOn };
+  const r = await (await post(onClock ? '/api/frames' : '/api/grid_save', body)).json().catch(() => ({ error: 1 }));
+  $('#saveClock').textContent = r.error ? 'Error' + (typeof r.error === 'string' ? ': ' + r.error : '') : '✓ Saved to clock';
   setTimeout(() => $('#saveClock').textContent = '⭳ Save to clock (standalone)', 1800);
 };
 
@@ -181,7 +186,26 @@ $('#file').onchange = async e => {
   render(); changed(); e.target.value = '';
 };
 
-render(); changed();
+// Where are we? The app's status has a "link"; the clock's doesn't. On the clock, start from the
+// animation it has stored, and hide "Play on clock" (that's the app's live animation).
+(async () => {
+  try {
+    const st = (await (await fetch('/api/status')).json()).state;
+    onClock = !('link' in st);
+  } catch {}
+  $('#play').hidden = $('#appHelp').hidden = onClock;
+  if (onClock) {
+    try {
+      const d = await (await fetch('/api/frames')).json();
+      if (d.frames && d.frames.length) {
+        frames = d.frames.map(f => [...f]); cur = 0; frameOn = !!d.frame;
+        $('#frame').classList.toggle('on', frameOn);
+        $('#fps').value = d.fps; $('#fpsVal').textContent = d.fps;
+      }
+    } catch {}
+  }
+  render(); changed();
+})();
 </script>
 </body>
 </html>

@@ -41,14 +41,23 @@ def test_app_builtin_grid_list_matches_firmware(app):
     assert names == ["custom"] + app.BUILTIN_GRID
 
 
-def test_embedded_dashboard_matches_source():
-    """src/web_dashboard.h must be the gzip of web/dashboard.html (embed_web.py runs on pio builds)."""
+WEB = ROOT / "wfd-firmware" / "clock" / "web"
+
+
+def test_embedded_pages_match_their_source():
+    """src/web_pages.h must hold the gzip of every web/*.html (embed_web.py runs on pio builds)."""
     import gzip
-    header = (ROOT / "wfd-firmware" / "clock" / "src" / "web_dashboard.h").read_text(encoding="utf-8")
-    data = bytes(int(b, 16) for b in re.findall(r"0x([0-9a-f]{2})", header.split("PROGMEM", 1)[1]))
-    assert int(re.search(r"DASHBOARD_GZ_LEN = (\d+)", header).group(1)) == len(data)
-    html = (ROOT / "wfd-firmware" / "clock" / "web" / "dashboard.html").read_bytes().replace(b"\r\n", b"\n")
-    assert gzip.decompress(data) == html, "web_dashboard.h is stale: run `python wfd-firmware/clock/embed_web.py`"
+    header = (ROOT / "wfd-firmware" / "clock" / "src" / "web_pages.h").read_text(encoding="utf-8")
+    pages = sorted(WEB.glob("*.html"))
+    assert {p.name for p in pages} >= {"dashboard.html", "draw.html"}
+    for page in pages:
+        name = page.stem.upper() + "_GZ"
+        block = re.search(name + r"\[\] PROGMEM = \{([^}]*)\}", header)
+        assert block, f"{page.name} isn't embedded: run `python wfd-firmware/clock/embed_web.py`"
+        data = bytes(int(b, 16) for b in re.findall(r"0x([0-9a-f]{2})", block.group(1)))
+        assert int(re.search(name + r"_LEN = (\d+)", header).group(1)) == len(data)
+        html = page.read_bytes().replace(b"\r\n", b"\n")
+        assert gzip.decompress(data) == html, f"{page.name} changed: run `python wfd-firmware/clock/embed_web.py`"
 
 
 def test_dashboard_only_sends_settings_the_firmware_has():
@@ -69,8 +78,8 @@ def test_clock_owned_settings_match_the_firmware(app):
 def test_app_pages_only_send_known_settings(app):
     here = Path(__file__).resolve().parents[1]
     sent = set()
-    for page in ("control.html", "draw.html"):
-        html = (here / page).read_text(encoding="utf-8")
+    for page in (here / "control.html", WEB / "draw.html"):     # draw.html is shared with the clock
+        html = page.read_text(encoding="utf-8")
         sent |= set(re.findall(r"set(?:Cfg)?\(\{\s*(\w+):", html))
         for _, ids in re.findall(r"for \(const (\w+) of \[([^\]]*)\]\)[^;]{0,120}?setCfg\(\{ \[\1\]", html):
             sent |= set(re.findall(r"'(\w+)'", ids))                       # setCfg({ [id]: ... }) loops

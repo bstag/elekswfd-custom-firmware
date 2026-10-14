@@ -45,6 +45,7 @@ import mdns  # noqa: E402
 HERE = Path(__file__).parent
 CONFIG = HERE / "wfd_config.json"
 RELEASES = HERE.parent / "wfd-firmware" / "releases"   # firmware this app ships (make_release.py)
+WEB = HERE.parent / "wfd-firmware" / "clock" / "web"    # pages shared with the clock (draw.html)
 PROTOCOL = 3                                           # firmware WFD_PROTOCOL this app speaks
 HTTP_ADDR = ("127.0.0.1", 8737)
 CH340_VID, CH340_PID = 0x1A86, 0x7523    # the clock's USB-serial chip
@@ -644,14 +645,19 @@ def update_clock():
             set_state(update={"state": "uploading", "message": f"sending {len(data) // 1024} KB to {ip}…"})
             with cfg_lock:
                 pw = cfg.get("clock_pass", "")
-            try:
-                upload_firmware(ip, data, pw)
-            except (TimeoutError, socket.timeout, urllib.error.URLError):
-                pass                       # the reply can get lost in the restart: check the result instead
-            set_state(update={"state": "uploading", "message": "waiting for the clock to restart…"})
             want = state["release"]["fw"]
-            if not wait_for_build(ip, want):
-                raise RuntimeError("the clock didn't come back with the new firmware")
+            for attempt in (1, 2):         # a stalled upload (busy WiFi) is worth one more try
+                if attempt == 2:
+                    set_state(update={"state": "uploading", "message": "no new firmware yet; sending it again…"})
+                try:
+                    upload_firmware(ip, data, pw)
+                except (TimeoutError, socket.timeout, urllib.error.URLError):
+                    pass                   # the reply can get lost in the restart: check the result instead
+                set_state(update={"state": "uploading", "message": "waiting for the clock to restart…"})
+                if wait_for_build(ip, want, timeout=45):
+                    break
+            else:
+                raise RuntimeError("the clock didn't come back with the new firmware (tried twice)")
             set_state(update={"state": "done", "message": f"the clock now runs {want.replace('wfd-clock ', '')}"})
         except Exception as e:
             set_state(update={"state": "failed", "message": str(e)})
@@ -978,7 +984,7 @@ class H(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             return self._send(200, (HERE / "control.html").read_bytes(), "text/html; charset=utf-8")
         if self.path in ("/draw", "/draw.html"):
-            return self._send(200, (HERE / "draw.html").read_bytes(), "text/html; charset=utf-8")
+            return self._send(200, (WEB / "draw.html").read_bytes(), "text/html; charset=utf-8")
         if self.path == "/api/status":            # config = app settings + the clock's own
             with cfg_lock, state_lock:
                 shown = {**cfg, **(state["clock"] or {}), "clock_pass": ""}

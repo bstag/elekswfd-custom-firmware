@@ -19,7 +19,7 @@
 #include "font14_table.h"
 #include "grid_engine.h"
 #include "mic_dsp.h"
-#include "web_dashboard.h"
+#include "web_pages.h"
 
 static Preferences prefs;
 
@@ -620,7 +620,8 @@ static void micTask(void *) {
   static uint16_t buf[mic::N];
   const uint32_t period = 1000000UL / mic::RATE;
   for (;;) {
-    bool want = millis() - appTime > 2000 && (micAuto || (gaAuto && grid::usesMic(gaAnim)));
+    // Pause during an OTA update: this task busy-waits on core 0, which the WiFi stack needs then.
+    bool want = millis() - appTime > 2000 && (micAuto || (gaAuto && grid::usesMic(gaAnim))) && !Update.isRunning();
     if (!want || micPause) {
       micBass = micTreble = micLevel = 0;
       for (int b = 0; b < mic::NBANDS; b++) micBands[b] = 0;
@@ -1254,6 +1255,11 @@ static void startWebRoutes() {
     web.send_P(200, "text/html", (const char *)DASHBOARD_GZ, DASHBOARD_GZ_LEN);
   });
   web.on("/status", []() { web.send(200, "text/html", statusPage()); });
+  web.on("/draw", HTTP_GET, []() {               // grid animator (the same page the PC app serves)
+    if (!webAuthed()) return;
+    web.sendHeader("Content-Encoding", "gzip");
+    web.send_P(200, "text/html", (const char *)DRAW_GZ, DRAW_GZ_LEN);
+  });
   web.on("/save", HTTP_POST, handleSave);
   web.on("/wifi", HTTP_GET, []() {                // change networks (also reachable in AP mode)
     if (!webAuthed()) return;
@@ -1268,6 +1274,34 @@ static void startWebRoutes() {
   web.on("/api/status", HTTP_GET, handleApiStatus);
   web.on("/api/set", HTTP_POST, handleApiSet);
   web.on("/api/frames", HTTP_POST, handleApiFrames);
+  web.on("/api/frames", HTTP_GET, []() {         // the stored drawing, for the animator to start from
+    JsonDocument out;
+    JsonArray fr = out["frames"].to<JsonArray>();
+    for (int i = 0; i < gaN; i++) {
+      JsonArray row = fr.add<JsonArray>();
+      for (int r = 0; r < 7; r++) row.add(gaFrames[i * 7 + r]);
+    }
+    out["fps"] = gaFps;
+    out["frame"] = (bool)gaFlag;
+    sendJson(200, out);
+  });
+  web.on("/api/preview", HTTP_POST, []() {       // the animator's live preview: show one frame now
+    JsonDocument in, out;
+    if (web.header("X-WFD") != "1") { out["error"] = "missing X-WFD header"; return sendJson(403, out); }
+    if (!webAuthed()) return;
+    if (deserializeJson(in, web.arg("plain")) || !in["rows"].is<JsonArrayConst>()) {
+      out["error"] = "expected {\"rows\": [7 row bytes], \"frame\": 0/1}";
+      return sendJson(400, out);
+    }
+    int r = 0;
+    for (JsonVariantConst v : in["rows"].as<JsonArrayConst>()) if (r < 7) gridRows[r++] = v.as<int>() & 0x7F;
+    while (r < 7) gridRows[r++] = 0;
+    gridFrame = in["frame"].as<int>() ? 1 : 0;
+    gridTime = millis();                           // shows like a live GRID for 1.5 s
+    dirty = true;
+    out["ok"] = true;
+    sendJson(200, out);
+  });
   const char *hdrs[] = {"X-WFD"};
   web.collectHeaders(hdrs, 1);
   web.on("/update", HTTP_GET, []() { if (webAuthed()) web.send(200, "text/html", page("WFD Update", UPDATE_FORM)); });
@@ -1467,10 +1501,6 @@ void loop() {
     else if (line.length() < 1024) line += c;   // room for CFGSET {json}
   }
   wifiLoop();
-  if (Update.isRunning()) {            // OTA upload: take its 1.4 KB pieces back to back, not one per loop
-    uint32_t t = millis();
-    while (Update.isRunning() && millis() - t < 250) web.handleClient();
-  }
   if (netUp) netPoll();
   checkButtons();
   // advance stored animations only when the app is off

@@ -82,12 +82,23 @@ def test_lost_reply_still_counts_if_the_clock_runs_the_new_build(app, api, relea
 
 
 def test_update_fails_if_the_new_build_never_shows_up(app, api, release, monkeypatch):
+    uploads = []
     monkeypatch.setattr(app, "find_clock_ip", lambda: "10.0.0.9")
-    monkeypatch.setattr(app, "upload_firmware", lambda *a, **k: None)
+    monkeypatch.setattr(app, "upload_firmware", lambda *a, **k: uploads.append(1))
     monkeypatch.setattr(app, "wait_for_build", lambda ip, fw, timeout=60: False)
     api("/api/update_clock", {})
     up = wait_update(app)
     assert up["state"] == "failed" and "didn't come back" in up["message"]
+    assert len(uploads) == 2, "one retry before giving up"
+
+
+def test_a_stalled_upload_is_retried(app, api, release, monkeypatch):
+    uploads, confirmed = [], iter([False, True])
+    monkeypatch.setattr(app, "find_clock_ip", lambda: "10.0.0.9")
+    monkeypatch.setattr(app, "upload_firmware", lambda *a, **k: uploads.append(1))
+    monkeypatch.setattr(app, "wait_for_build", lambda ip, fw, timeout=60: next(confirmed))
+    api("/api/update_clock", {})
+    assert wait_update(app)["state"] == "done" and len(uploads) == 2
 
 
 def test_update_reports_failures(app, api, release, monkeypatch):
