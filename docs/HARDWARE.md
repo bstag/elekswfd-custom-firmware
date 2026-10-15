@@ -40,10 +40,22 @@ bytes). Init sequence: `80 A4 98 81 83 Bx 88` (x = brightness nibble). Everythin
 panel is one bit in that RAM.
 
 **Colours are fixed per LED.** The panel isn't a VFD and isn't one colour: it's ordinary LEDs
-behind the front window, and each one has its own colour. For example, the CPU label is red and
-the CPU/GPU/RAM meters run from green up to red. The TM1680 only switches each LED on or off,
-and brightness is one setting for the whole panel. Software can choose which LEDs light, but it
-can't change their colour or dim one area against another.
+behind the front window, and each one has its own colour:
+
+| Area | Colour |
+|---|---|
+| Clock digits, message line | white |
+| 7×7 dot grid | white |
+| Weekday indicators | white |
+| CPU/GPU/RAM meters | green → yellow → red along the bar |
+| Spectrum (audio) columns | green → yellow → red, the same scale |
+| `%` signs | green |
+| CPU label | red |
+| `SUNNY` weather word | red |
+
+The TM1680 only switches each LED on or off, and brightness is one setting for the whole panel.
+Software can choose which LEDs light, but it can't change their colour or dim one area against
+another. (A meter turns red because the LEDs near its top end are red ones.)
 
 Panel elements (all mapped in `wfd-firmware/clock/src/clock_panel.h`):
 
