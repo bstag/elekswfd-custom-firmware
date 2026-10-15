@@ -50,8 +50,8 @@ behind the front window, and each one has its own colour:
 | CPU/GPU/RAM meters | green → yellow → red along the bar |
 | Spectrum (audio) columns | green → yellow → red, the same scale |
 | `%` signs | green |
-| CPU label | red |
-| `SUNNY` weather word | red |
+| CPU, GPU, RAM labels | red |
+| Weather words | `SUNNY` red, `CLOUD` yellow‑orange, `RAINS` white |
 
 The TM1680 only switches each LED on or off, and brightness is one setting for the whole panel.
 Software can choose which LEDs light, but it can't change their colour or dim one area against
