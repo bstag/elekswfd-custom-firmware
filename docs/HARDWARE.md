@@ -52,6 +52,8 @@ behind the front window, and each one has its own colour:
 | `%` signs | green |
 | CPU, GPU, RAM labels | red |
 | Weather words | `SUNNY` red, `CLOUD` yellow‑orange, `RAINS` white |
+| ELEKSMAKER logo | orange |
+| Top-row icons | in coloured groups: audio (speaker, mic, headphones) red; mixer and computer (monitor, tower, server) white; clock face orange; calendar green |
 
 The TM1680 only switches each LED on or off, and brightness is one setting for the whole panel.
 Software can choose which LEDs light, but it can't change their colour or dim one area against
