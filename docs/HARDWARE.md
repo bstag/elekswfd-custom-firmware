@@ -51,11 +51,11 @@ behind the front window, and each one has its own colour:
 | Spectrum (audio) columns | green → yellow → red, the same scale |
 | `%` signs | green |
 | CPU, GPU, RAM labels | red |
-| Weather words | `SUNNY` red, `CLOUD` yellow‑orange, `RAINS` white |
+| Weather words | `SUNNY` red, `CLOUD` orange, `RAINS` white |
 | ELEKSMAKER logo | orange |
 | Top-row icons, audio group | speaker, mic, headphones, vinyl: red |
 | Top-row icons, PC group | mixer, monitor, tower, server: white |
-| Top-row icons, time group | clock, hourglass, battery: yellow‑orange |
+| Top-row icons, time group | clock, hourglass, battery: orange |
 | Top-row icons, status group | calendar, WiFi: green |
 
 The TM1680 only switches each LED on or off, and brightness is one setting for the whole panel.
