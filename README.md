@@ -64,6 +64,9 @@ Full teardown of how the panel is wired is in [docs/HARDWARE.md](docs/HARDWARE.m
 ## Quick start
 
 ### 1. Flash the firmware (USB, one time)
+On Windows: download the zip from the [latest release](https://github.com/bstag/elekswfd-custom-firmware/releases/latest), unzip, plug the clock into a
+**USB 2.0 port** and double-click **`wfd-flash.exe`**. It backs up your clock first, then
+flashes it. Or, from the repo with Python:
 ```bash
 pip install esptool pyserial
 python wfd-firmware/flash_usb.py

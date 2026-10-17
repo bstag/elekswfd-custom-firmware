@@ -3,7 +3,7 @@ Build the release files into dist\ (used by .github/workflows/release.yml, works
 
     powershell -ExecutionPolicy Bypass -File wfd-app\release\package.ps1 [-Tag v1.0.0] [-NoBuild]
 
-dist\wfd-app-<tag>-windows-x64.zip   wfd-app.exe + install.ps1 + README.txt
+dist\wfd-app-<tag>-windows-x64.zip   wfd-app.exe + wfd-flash.exe + install.ps1 + README.txt
 dist\wfd-clock-firmware.bin          OTA image   } copied from wfd-firmware\releases\
 dist\wfd-clock-merged.bin            USB image   }
 dist\notes.md                        release notes header
@@ -22,6 +22,7 @@ if (-not $NoBuild) {
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 }
 $exe = Join-Path $crate 'target\release\wfd-app.exe'
+$flash = Join-Path $crate 'target\release\wfd-flash.exe'
 
 # the exe says its own version and the firmware it ships
 $about = (& $exe --version | Out-String).Trim()
@@ -33,7 +34,7 @@ if ($Tag -ne "v$version") { throw "tag $Tag doesn't match Cargo.toml version $ve
 Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
 $stage = Join-Path $dist "wfd-app-$Tag-windows-x64"
 New-Item -ItemType Directory -Force $stage | Out-Null
-Copy-Item $exe, (Join-Path $crate 'install.ps1'), (Join-Path $PSScriptRoot 'README.txt') $stage
+Copy-Item $exe, $flash, (Join-Path $crate 'install.ps1'), (Join-Path $PSScriptRoot 'README.txt') $stage
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath "$stage.zip"
 Remove-Item $stage -Recurse -Force
 
@@ -43,8 +44,10 @@ Copy-Item (Join-Path $fwDir 'wfd-clock-firmware.bin'), (Join-Path $fwDir 'wfd-cl
 @"
 **PC app $version** for Windows 10/11 (x64). Ships clock firmware **$fw**.
 
-- ``wfd-app-$Tag-windows-x64.zip``: unzip, run ``install.ps1`` (starts at login). No Rust or other runtime needed.
-- ``wfd-clock-merged.bin``: first flash over USB (``python wfd-firmware/flash_usb.py``, or esptool at ``0x0``).
+- ``wfd-app-$Tag-windows-x64.zip``: unzip, then
+  - **first time:** plug the clock into a USB 2.0 port and run ``wfd-flash.exe``. It backs up the clock, then flashes it.
+  - **the PC app:** run ``install.ps1`` (starts at login). No Rust or other runtime needed.
+- ``wfd-clock-merged.bin``: the full USB image, for esptool at ``0x0`` (``wfd-flash.exe`` has it built in).
 - ``wfd-clock-firmware.bin``: OTA update. The app's **Update clock** button does this for you.
 
 See the [README](https://github.com/bstag/elekswfd-custom-firmware#quick-start) to get started.

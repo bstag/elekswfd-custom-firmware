@@ -30,6 +30,26 @@ and `flash_usb.py` / `backup_usb.py` notice this and say so. Then:
 This repo doesn't include the driver: it's WCH's, and their page has the current signed version.
 macOS and Linux have CH340 support built in.
 
+## Easiest: `wfd-flash.exe` (Windows, nothing to install)
+
+Download the zip from the [latest release](https://github.com/bstag/elekswfd-custom-firmware/releases/latest), unzip, plug the clock into a USB 2.0 port
+and double-click **`wfd-flash.exe`**. It finds the clock (and says so if Windows is missing
+its USB driver), **backs up the whole 4 MB flash first** to `Documents\WFD Clock backups`,
+checked against the clock's own MD5 (if the backup fails, nothing is written), then asks and
+flashes the firmware built into it.
+
+- A **stock** clock gets the whole image. Its old settings are in the backup.
+- A clock **already on this firmware** keeps its WiFi and settings: the tool asks it (`CFG`)
+  first and then writes everything except the `nvs` partition.
+- **Back to stock:** `wfd-flash.exe --restore "<backup file>"` (it backs up first too).
+- `--backup-only` only takes a backup; `--yes` skips the questions.
+
+If the WFD Control app is running it holds the port; the tool offers to stop it and starts
+it again afterwards. The source is `wfd-app/src/bin/wfd-flash.rs` (built on
+[espflash](https://github.com/esp-rs/espflash)).
+
+The Python way below does the same from the repo.
+
 ## Back up first (so you can revert)
 
 **Do this before your first flash.** A backup lets you return to the original stock
@@ -54,7 +74,10 @@ python wfd-firmware/flash_usb.py
 ```
 This **automatically backs up your current firmware first** (pass `--no-backup` to skip),
 then flashes `wfd-firmware/releases/wfd-clock-merged.bin` (bootloader + partitions + app)
-to offset `0x0`. If it can't connect, move to a USB 2.0 port.
+to offset `0x0`. If it can't connect, move to a USB 2.0 port. The merged image fills the
+settings partition with 0xFF, so this **erases WiFi and settings**: fine for a first flash,
+but to re-flash a clock that already runs this firmware use `wfd-flash.exe` (keeps them) or
+update over WiFi.
 
 Manual equivalent:
 ```bash

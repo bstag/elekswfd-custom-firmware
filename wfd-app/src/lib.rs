@@ -24,6 +24,7 @@ pub mod clocklink;
 pub mod config;
 pub mod ctx;
 pub mod dsp;
+pub mod flashplan;
 pub mod font14;
 pub mod grid_anim;
 pub mod icons;
