@@ -236,9 +236,10 @@ room, record a new trace and adjust `Loudness` in `mic_dsp.h` until the tests pa
 
 `style`, `bright`, `clk24`, `webpass`, `micauto`; grid `gaid/gfps/gflag/gauto` + drawn frames `gn` + `ganim` (blob); message line
 `omauto/mmode/mrot/mdwell/mscroll` + `omtext`; WiFi/location `ssid/pass/tz/lat/lon/wunit/zip`.
-Settings survive OTA updates and `wfd-flash.exe` (the `nvs` partition offset is unchanged and
-both leave it alone). Writing the whole `wfd-clock-merged.bin` at 0x0 (esptool,
-`flash_usb.py`) erases them, because the image fills `nvs` with 0xFF.
+Settings survive OTA updates, `wfd-flash.exe` and `flash_usb.py` (the `nvs` partition offset
+is unchanged and they leave it alone on a clock that already runs this firmware). Writing the
+whole `wfd-clock-merged.bin` at 0x0 by hand (esptool, or `flash_usb.py --wipe-settings`)
+erases them, because the image fills `nvs` with 0xFF.
 
 ## Partition table (`partitions_wfd.csv`, 4 MB, dual‑OTA)
 

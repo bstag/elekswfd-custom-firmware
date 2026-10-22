@@ -75,9 +75,10 @@ python wfd-firmware/flash_usb.py
 This **automatically backs up your current firmware first** (pass `--no-backup` to skip),
 then flashes `wfd-firmware/releases/wfd-clock-merged.bin` (bootloader + partitions + app)
 to offset `0x0`. If it can't connect, move to a USB 2.0 port. The merged image fills the
-settings partition with 0xFF, so this **erases WiFi and settings**: fine for a first flash,
-but to re-flash a clock that already runs this firmware use `wfd-flash.exe` (keeps them) or
-update over WiFi.
+settings partition with 0xFF, so writing it whole **erases WiFi and settings**. That's fine
+for a first flash; on a clock that already runs this firmware the script notices (it asks
+`CFG` first) and writes everything except `nvs`, so they're kept. `--wipe-settings` writes
+the whole image anyway.
 
 Manual equivalent:
 ```bash
