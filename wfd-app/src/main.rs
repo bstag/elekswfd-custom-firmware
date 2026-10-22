@@ -107,6 +107,26 @@ fn attach_parent_console() {
     }
 }
 
+/// Let go of the terminal we attached to once started. A console closes every process attached
+/// to it (CTRL_CLOSE_EVENT), so otherwise the app would quit when the terminal that started it
+/// (install.ps1, or a manual run) is closed. Later stderr writes go nowhere (null handles).
+fn detach_console() {
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        use windows_sys::Win32::System::Console::{
+            FreeConsole, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+        };
+        // SAFETY: plain Win32 calls; FreeConsole fails harmlessly when there is no console.
+        unsafe {
+            if FreeConsole() != 0 {
+                for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+                    SetStdHandle(which, std::ptr::null_mut());
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     attach_parent_console();
     let args = match parse_args() {
@@ -116,6 +136,15 @@ fn main() {
             std::process::exit(2);
         }
     };
+
+    let _ = LOG.set(args.config.with_file_name("wfd-app.log"));
+    log(&format!("started: wfd-app {} (pid {})", env!("CARGO_PKG_VERSION"), std::process::id()));
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let name = thread::current().name().unwrap_or("?").to_string();
+        log(&format!("panic in thread {name}: {info}"));
+        default_panic(info);
+    }));
 
     let ctx = Arc::new(Ctx::new(args.config.clone(), embedded_release(), FIRMWARE));
     if !args.config.exists()
@@ -148,12 +177,14 @@ fn main() {
         Ok(s) => s,
         Err(e) => {
             eprintln!("can't listen on {}: {e}", args.addr);
+            log(&format!("stopped: can't listen on {} ({e}); is another copy running?", args.addr));
             ctx.stop.store(true, Ordering::Relaxed);
             std::process::exit(1);
         }
     };
     let url = format!("http://{}", args.addr);
     println!("WFD Control at {url}");
+    detach_console();
     if args.browser {
         spawn("browser", move || {
             thread::sleep(Duration::from_millis(600));
@@ -164,6 +195,7 @@ fn main() {
 
     // Stopping: give the clock link a moment to let go of the clock, then leave.
     let _ = link_done.recv_timeout(Duration::from_secs(2));
+    log("stopped: the dashboard server ended");
     std::process::exit(0);
 }
 
@@ -257,6 +289,20 @@ fn open_browser(url: &str) {
 }
 
 static STOP: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+static LOG: OnceLock<PathBuf> = OnceLock::new();
+
+/// One line in wfd-app.log (next to the settings): starts, why it stopped, panics. Kept small:
+/// past 256 KB the old log is renamed to wfd-app.log.old.
+fn log(msg: &str) {
+    use std::io::Write;
+    let Some(path) = LOG.get() else { return };
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > 256 * 1024) {
+        let _ = std::fs::rename(path, path.with_extension("log.old"));
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{} {msg}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+    }
+}
 
 /// Ctrl-C / closing the console sets ctx.stop; the web loop then returns and main exits.
 fn on_ctrl_c(stop: Arc<AtomicBool>) {
@@ -272,7 +318,22 @@ fn on_ctrl_c(stop: Arc<AtomicBool>) {
                 add: i32,
             ) -> i32;
         }
-        unsafe extern "system" fn handler(_ctrl_type: u32) -> i32 {
+        unsafe extern "system" fn handler(ctrl_type: u32) -> i32 {
+            const CTRL_LOGOFF_EVENT: u32 = 5;
+            let what = match ctrl_type {
+                0 => "Ctrl+C",
+                1 => "Ctrl+Break",
+                2 => "its console was closed",
+                CTRL_LOGOFF_EVENT => "a sign-out",
+                6 => "Windows shutting down",
+                _ => "a console event",
+            };
+            if ctrl_type == CTRL_LOGOFF_EVENT {
+                // a console passes on any user's sign-out; ours ends the session (and us) anyway
+                log("ignored a sign-out signal from the console");
+                return 1;
+            }
+            log(&format!("stopping: {what} (console event {ctrl_type})"));
             if let Some(stop) = STOP.get() {
                 stop.store(true, Ordering::Relaxed);
             }
