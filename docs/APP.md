@@ -46,7 +46,11 @@ drawing tool and fonts use `font14.py` / `grid_anim.py` (in the same folder).
   right; five styles; gain sliders
 - **System bars** — live CPU (psutil) / GPU (`nvidia-smi`) / RAM
 - **Weather** — resolves a ZIP or "Town, State" and pushes it; shows condition + temp
-- **Message line** — weather temp / window title / custom text / **date** / rotation; custom text supports `{date} {time} {time12} {day} {temp}` placeholders
+- **Message line** — weather temp / window title / custom text / **date** / **forecast** (Rust app) / rotation; custom text supports `{date} {time} {time12} {day} {temp}` placeholders
+- **Alarms & timer** — up to 4 alarms with weekdays and a countdown timer. They're the
+  clock's settings and run on the clock (see FIRMWARE.md); an alert flashes the display until a
+  clock button or *Stop* is pressed
+- **Forecast** — today and the next days on the dashboard
 - **Grid** — 14 animations incl. audio/CPU‑reactive and **Weather** (a pixel scene for the current
   weather; *Grid scene* under Weather & time zone picks one by hand); **Save to clock** makes the clock play the
   built‑ins itself, audio and mouth from its own mic (or stores your drawing); the **grid animator** (`/draw`) is a 7×7 frame editor with live preview. The same page is served by the clock at `http://wfd-clock.local/draw`; there it starts from the clock's stored drawing and saves straight to it

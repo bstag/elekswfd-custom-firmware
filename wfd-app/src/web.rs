@@ -123,6 +123,10 @@ pub fn status(ctx: &Ctx) -> Value {
     if let Some(clock) = &st.clock {
         shown.extend(clock.clone());
     }
+    // the clock's timer counts down between reads of its settings
+    if let (Some(left), Some(at)) = (shown.get("timer").and_then(Value::as_u64), st.clock_read_at) {
+        shown.insert("timer".into(), json!(left.saturating_sub(at.elapsed().as_secs())));
+    }
     shown.insert("clock_pass".into(), json!(""));
 
     let (compat, update_available) = crate::release::firmware_status(

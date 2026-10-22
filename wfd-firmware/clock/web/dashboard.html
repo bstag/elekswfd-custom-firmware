@@ -77,6 +77,15 @@
   .facts b { color:var(--text); font-weight:600; }
   .banner { background:var(--accent-dim); color:var(--text); border-radius:7px; padding:8px 10px; font-size:13px; margin-top:10px; }
   .banner.warn { background:#4a2c14; border:1px solid #a8642a; }
+  .days { display:flex; gap:3px; flex-wrap:wrap; }
+  .days button { padding:5px 7px; font-size:12px; min-width:34px; }
+  .days button.sel { background:var(--accent-dim); border-color:var(--accent); color:var(--accent); }
+  input[type=time] { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:7px;
+    padding:6px 8px; font:inherit; color-scheme:dark; }
+  .fc { display:grid; grid-template-columns:repeat(auto-fit,minmax(90px,1fr)); gap:8px; }
+  .fc div { background:var(--panel2); border-radius:8px; padding:8px 10px; font-size:13px; }
+  .fc b { display:block; font-size:12px; color:var(--muted); font-weight:600; }
+  .fc .t { font-size:16px; font-weight:600; }
   .banner a { color:var(--accent); }
 
   footer { max-width:900px; margin:0 auto; padding:4px 16px 24px; display:flex; gap:16px; flex-wrap:wrap; font-size:13px; }
@@ -165,7 +174,8 @@
     <h2>Message line <small>while the app runs</small></h2>
     <div class="row"><label>Show</label>
       <div class="seg" id="liveMode"><button data-v="weather">Temp</button><button data-v="window">Window</button>
-        <button data-v="text">Text</button><button data-v="date">Date</button><button data-v="rotate">Rotate</button></div></div>
+        <button data-v="text">Text</button><button data-v="date">Date</button><button data-v="forecast">Forecast</button>
+        <button data-v="rotate">Rotate</button></div></div>
     <div class="row"><label for="custom_text">Text</label>
       <input type="text" id="custom_text" placeholder="e.g. HI {time12}">
       <button class="primary" id="saveLiveText">Set</button></div>
@@ -187,7 +197,7 @@
     <div id="msgBody">
       <div class="row"><label>Show</label>
         <div class="seg" id="mode"><button data-v="weather">Temp</button><button data-v="text">Text</button>
-          <button data-v="date">Date</button><button data-v="rotate">Rotate</button></div></div>
+          <button data-v="date">Date</button><button data-v="forecast">Forecast</button><button data-v="rotate">Rotate</button></div></div>
       <div class="row"><label for="offline_text">Text</label>
         <input type="text" id="offline_text" maxlength="96" placeholder="e.g. HI {time12}">
         <button class="primary" id="saveText">Save</button></div>
@@ -198,7 +208,8 @@
         <div class="row"><label>Rotate</label>
           <label><input type="checkbox" data-r="weather"> Temp</label>
           <label><input type="checkbox" data-r="text"> Text</label>
-          <label><input type="checkbox" data-r="date"> Date</label></div>
+          <label><input type="checkbox" data-r="date"> Date</label>
+          <label><input type="checkbox" data-r="forecast"> Forecast</label></div>
         <div class="row"><label for="dwell">Each for</label>
           <input type="number" id="dwell" min="2" max="600"><label>seconds</label></div>
       </div>
@@ -230,6 +241,29 @@
         <label class="switch"><input type="checkbox" id="frame"><span class="slider"></span></label></div>
       <p class="hint"><a href="/draw" style="color:var(--accent)">Draw your own animation →</a></p>
     </div>
+  </section>
+
+  <section>
+    <h2>Alarms &amp; timer <small>on the clock: they work with the PC off</small></h2>
+    <div class="banner warn" id="alertBanner" hidden><b id="alertWhat">Alarm</b> going off on the clock.
+      <button class="primary" id="alertStop" style="margin-left:8px">Stop</button></div>
+    <div class="row"><label>Timer</label>
+      <div class="seg" id="timerQuick"><button data-t="60">1m</button><button data-t="300">5m</button>
+        <button data-t="600">10m</button><button data-t="900">15m</button><button data-t="1800">30m</button></div></div>
+    <div class="row"><label for="timerMin">Minutes</label>
+      <input type="number" id="timerMin" min="1" max="1439" value="25">
+      <button id="timerStart">Start</button><button id="timerCancel">Cancel</button>
+      <span class="val" id="timerLeft" style="min-width:0"></span></div>
+    <div class="sub" id="alarmRows"></div>
+    <div class="row"><button class="primary" id="alarmsSave">Save alarms</button>
+      <button id="alertTest">Test alarm</button></div>
+    <p class="hint">The whole display flashes and shows ALARM or TIMER; any button on the clock stops it
+      (or it stops by itself after 5 minutes). A running timer counts down on the message line.</p>
+  </section>
+
+  <section id="fcBox" hidden>
+    <h2>Forecast</h2>
+    <div class="fc" id="fc"></div>
   </section>
 
   <section>
@@ -374,6 +408,13 @@ function show(v) {
   $('#usbBanner').hidden = !v.usbProblem;
   if (v.usbProblem) $('#usbProblem').textContent = v.usbProblem[0].toUpperCase() + v.usbProblem.slice(1);
   $('#fw').textContent = v.fw || '';
+  const fcw = v.s.weather || {}, fc = fcw.forecast || [];
+  $('#fcBox').hidden = !fc.length;
+  if (fc.length) {
+    const deg = '°' + (fcw.unit === 1 || fcw.unit === 'C' ? 'C' : 'F');
+    $('#fc').innerHTML = fc.map((d, i) => `<div><b>${i ? d.day : 'Today'}</b>${SCENES[d.scene] || ''}<br>
+      <span class="t">${d.hi}${deg}</span> / ${d.lo}${deg}</div>`).join('');
+  }
   const scene = cfg.weather_scene && cfg.weather_scene !== 'auto' ? cfg.weather_scene : (v.s.weather || {}).scene;
   $('#sceneNow').textContent = scene ? 'showing: ' + (SCENES[scene] || scene) : '';
   const custom = $('#anim [data-v=custom]');
@@ -433,6 +474,10 @@ function render() {
   check('#frame', cfg.standalone_frame);
   val('#zip', cfg.location); val('#units', cfg.units); val('#tz', cfg.tz);
   val('#weather_scene', cfg.weather_scene || 'auto');
+  renderAlarms();
+  const left = +cfg.timer || 0;
+  $('#timerLeft').textContent = left ? fmtLeft(left) + ' left' : 'no timer running';
+  $('#alertBanner').hidden = !cfg.alert;
   if (!isApp) return;
   for (const id of ['time_sync', 'spectrum', 'bars', 'weather', 'logo', 'grid_enable', 'grid_frame']) check('#' + id, cfg[id]);
   val('#gain_out', cfg.gain_out); val('#gain_mic', cfg.gain_mic);
@@ -484,6 +529,43 @@ for (const id of ['time_sync', 'spectrum', 'bars', 'weather', 'logo', 'grid_enab
   $('#' + id).onchange = e => set({ [id]: e.target.checked });
 $$('[data-r]').forEach(b => b.onchange = () => set({ standalone_rotate: $$('[data-r]').filter(x => x.checked).map(x => x.dataset.r) }));
 $$('[data-lr]').forEach(b => b.onchange = () => set({ ['rotate_' + b.dataset.lr]: b.checked }));
+const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const fmtLeft = s => s >= 3600 ? `${Math.floor(s / 3600)}h ${String(Math.floor(s / 60) % 60).padStart(2, '0')}m`
+                               : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+$('#alarmRows').innerHTML = [0, 1, 2, 3].map(i => `<div class="row" data-a="${i}"><label>Alarm ${i + 1}</label>
+  <label class="switch"><input type="checkbox" class="aOn"><span class="slider"></span></label>
+  <input type="time" class="aTime" value="07:00">
+  <span class="days">${DAY_KEYS.map(d => `<button data-d="${d}">${d[0].toUpperCase() + d.slice(1, 2)}</button>`).join('')}</span></div>`).join('');
+let alarmsEdited = false;                     // don't overwrite rows the user is changing
+function renderAlarms() {
+  if (alarmsEdited || !Array.isArray(cfg.alarms)) return;
+  $$('#alarmRows [data-a]').forEach((row, i) => {
+    const a = cfg.alarms[i] || { on: false, time: '07:00', days: [] };
+    row.querySelector('.aOn').checked = !!a.on;
+    const unset = !a.on && !(a.days || []).length && a.time === '00:00';   // never set: suggest 07:00
+    if (document.activeElement !== row.querySelector('.aTime')) row.querySelector('.aTime').value = unset ? '07:00' : a.time;
+    row.querySelectorAll('[data-d]').forEach(b => b.classList.toggle('sel', (a.days || []).includes(b.dataset.d)));
+  });
+}
+$('#alarmRows').onclick = e => { if (e.target.dataset.d) { e.target.classList.toggle('sel'); alarmsEdited = true; } };
+$('#alarmRows').oninput = () => { alarmsEdited = true; };
+$('#alarmRows').onchange = e => {               // switched on with no days ticked: every day
+  const row = e.target.closest('[data-a]');
+  if (e.target.classList.contains('aOn') && e.target.checked && !row.querySelector('[data-d].sel'))
+    row.querySelectorAll('[data-d]').forEach(b => b.classList.add('sel'));
+};
+$('#alarmsSave').onclick = async () => {
+  const alarms = $$('#alarmRows [data-a]').map(row => ({
+    on: row.querySelector('.aOn').checked, time: row.querySelector('.aTime').value || '07:00',
+    days: [...row.querySelectorAll('[data-d]')].filter(b => b.classList.contains('sel')).map(b => b.dataset.d) }));
+  alarmsEdited = false;
+  await set({ alarms });
+};
+$('#timerQuick').onclick = e => { if (e.target.dataset.t) set({ timer: +e.target.dataset.t }); };
+$('#timerStart').onclick = () => set({ timer: Math.max(1, Math.min(1439, Math.round(+$('#timerMin').value) || 25)) * 60 });
+$('#timerCancel').onclick = () => set({ timer: 0 });
+$('#alertTest').onclick = () => set({ alert: true });
+$('#alertStop').onclick = () => set({ alert: false });
 $('#weather_scene').innerHTML = '<option value="auto">Follow the weather</option>'
   + Object.entries(SCENES).map(([k, name]) => `<option value="${k}">${name}</option>`).join('');
 $('#weather_scene').onchange = e => set({ weather_scene: e.target.value });

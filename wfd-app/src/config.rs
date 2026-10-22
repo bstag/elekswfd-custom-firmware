@@ -8,11 +8,11 @@ use serde_json::{Map, Number, Value, json};
 use std::path::Path;
 
 /// Firmware `WFD_PROTOCOL` this app speaks.
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 
 /// Settings owned by the clock (firmware configJson / applySettings). The clock validates them;
 /// the app never stores them in its own file.
-pub const CLOCK_KEYS: [&str; 18] = [
+pub const CLOCK_KEYS: [&str; 21] = [
     "brightness",
     "clock_24h",
     "style",
@@ -31,6 +31,9 @@ pub const CLOCK_KEYS: [&str; 18] = [
     "standalone_fps",
     "standalone_frame",
     "weather_scene",
+    "alarms",
+    "timer",
+    "alert",
 ];
 
 /// app.py `DEFAULTS`, in its declaration order (the order `save` writes keys in).
@@ -42,7 +45,7 @@ fn default_entries() -> Vec<(&'static str, Value)> {
         ("gain_mic", json!(1.0)),
         ("bars", json!(true)),
         ("weather", json!(true)),
-        ("message_mode", json!("weather")), // weather | window | text | date | rotate
+        ("message_mode", json!("weather")), // weather | window | text | date | forecast | rotate
         ("custom_text", json!("HELLO")),
         ("scroll_ms", json!(350)),
         ("rotate_weather", json!(true)),
@@ -85,7 +88,7 @@ fn range(key: &str) -> Option<(f64, f64)> {
 /// Allowed values for choice settings, sorted (app.py `_CHOICES`).
 fn choices(key: &str) -> Option<&'static [&'static str]> {
     match key {
-        "message_mode" => Some(&["date", "rotate", "text", "weather", "window"]),
+        "message_mode" => Some(&["date", "forecast", "rotate", "text", "weather", "window"]),
         "icon_mode" => Some(&["all", "audio", "off", "system"]),
         "link" => Some(&["auto", "usb", "wifi"]),
         _ => None,

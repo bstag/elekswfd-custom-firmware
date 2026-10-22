@@ -274,8 +274,8 @@ fn status_returns_state_and_config() {
     assert_eq!(st["update"], json!({"state": "idle", "message": "", "last": null}));
     assert_eq!(
         st["weather"].as_object().unwrap().keys().len(),
-        6,
-        "code, temp, unit, label, cond, scene"
+        7,
+        "code, temp, unit, label, cond, scene, forecast"
     );
 }
 

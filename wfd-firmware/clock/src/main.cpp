@@ -17,6 +17,7 @@
 #include <ArduinoJson.h>
 #include "clock_panel.h"
 #include "font14_table.h"
+#include "extras.h"
 #include "grid_engine.h"
 #include "mic_dsp.h"
 #include "web_pages.h"
@@ -27,7 +28,8 @@ static Preferences prefs;
 // settings or the JSON API change in a way the app must know about (app.py PROTOCOL).
 //   1 serial display commands   2 settings over USB (CFG/CFGSET) + JSON API   3 WiFi link (UDP, BYE, /api/frames)
 //   4 "weather" grid animation + weather_scene setting
-#define WFD_PROTOCOL 4
+//   5 alarms, timer, alert settings + forecast (message source, state.weather.forecast)
+#define WFD_PROTOCOL 5
 static const char *FW_BUILD = "wfd-clock " __DATE__ " " __TIME__;
 
 // WiFi / NTP state (declared early so serial command handlers can see them)
@@ -97,12 +99,24 @@ static uint32_t wxTime = 0;
 static int wxScene = -1;              // grid::Scene from our own fetch (WMO code + day/night), -1 = none yet
 static uint32_t wxSceneTime = 0;
 static int wxScenePick = -1;          // "weather_scene" setting: a grid::Scene, or -1 = auto
+// forecast from our own fetch: day 0 = today (Open-Meteo daily, timezone=auto)
+static int fcN = 0, fcHi[4], fcLo[4], fcCode[4];
+static uint32_t fcTime = 0;
+static bool fcFresh() { return fcN >= 2 && millis() - fcTime < 10800000; }
+// alarms (NVS "alarms"), the countdown timer and the alert that both raise
+static extras::Alarm alarms[extras::N_ALARMS] = {};
+static uint32_t cdEnd = 0;         // millis() when the timer ends, 0 = no timer
+enum { ALERT_NONE = 0, ALERT_ALARM, ALERT_TIMER };
+static int alertKind = ALERT_NONE;
+static uint32_t alertAt = 0;
+static const uint32_t ALERT_MAX_MS = 300000;   // an unanswered alert stops after 5 minutes
+static uint32_t timerLeft() { return cdEnd && (int32_t)(cdEnd - millis()) > 0 ? (cdEnd - millis() + 999) / 1000 : 0; }
 
 static uint8_t msgRam[12] = {0};      // raw glyphs for the 6 message chars (lo,hi x6 = bytes 0..11)
 static uint32_t msgTime = 0;
 
 // on-device message line (runs when the app isn't driving the message chars)
-enum { SRC_TEMP = 0, SRC_TEXT = 1, SRC_DATE = 2, N_SRC = 3, MODE_ROTATE = 3 };
+enum { SRC_TEMP = 0, SRC_TEXT = 1, SRC_DATE = 2, MODE_ROTATE = 3, SRC_FORECAST = 4, N_SRC = 5 };   // 3 = rotate (a mode, not a source; kept for saved settings)
 #define MSG_TEXT_MAX 96
 static int omAuto = 0;                // 1 = run this engine when the app is off, 0 = just the temperature
 static int msgMode = SRC_TEXT;        // SRC_TEMP / SRC_TEXT / SRC_DATE / MODE_ROTATE
@@ -243,6 +257,7 @@ static void drawCol(const uint8_t *BY, const uint8_t *MK, int level, int col) {
   }
 }
 
+static void render6(const String &s, int start, uint8_t *out);
 static void draw() {
   memset(ram, 0, sizeof ram);
   const uint8_t *t = curT;
@@ -288,11 +303,47 @@ static void draw() {
       }
   if (logoOn && millis() - logoTime < 1500)          // ELEKSMAKER logo
     for (int i = 0; i < N_LOGO; i++) ram[LOGO_BYTE[i]] |= LOGO_MASK[i];
+  if (cdEnd) {                                    // countdown on the message line (bytes 0..11)
+    char buf[8];
+    extras::timerText(timerLeft(), buf);
+    render6(String(buf), 0, ram);
+  }
+  if (alertKind) {                                   // flash: everything on, then the reason
+    if ((millis() / 400) % 2) memset(ram, 0xFF, sizeof ram);
+    else render6(String(alertKind == ALERT_TIMER ? " TIMER" : " ALARM"), 0, ram);
+  }
   tmFlush();
 }
 
 static String line;
 static bool dirty = false;            // a command changed the display; loop() redraws once
+
+static void startAlert(int kind) {
+  alertKind = kind;
+  alertAt = millis();
+  dirty = true;
+  Serial.printf("ALERT %s\n", kind == ALERT_TIMER ? "timer" : "alarm");
+}
+static void stopAlert() {
+  if (!alertKind) return;
+  alertKind = ALERT_NONE;
+  dirty = true;
+  Serial.println("ALERT off");
+}
+// Called 5x a second: fire alarms (once per matching minute), end the timer, time out an alert.
+// Returns true while something on the display moves (the timer, the flashing).
+static bool extrasTick() {
+  static int lastMinute = -1;
+  if (cdEnd && (int32_t)(millis() - cdEnd) >= 0) { cdEnd = 0; startAlert(ALERT_TIMER); }
+  if (alertKind && millis() - alertAt > ALERT_MAX_MS) stopAlert();
+  int hh = bcd2dec(curT[2] & 0x3F), mi = bcd2dec(curT[1]), wd = constrain((curT[3] & 7) - 1, 0, 6);
+  int minute = wd * 1440 + hh * 60 + mi;
+  if (minute != lastMinute) {
+    lastMinute = minute;
+    if (!alertKind && extras::alarmDue(alarms, extras::N_ALARMS, wd, hh, mi) >= 0) startAlert(ALERT_ALARM);
+  }
+  return cdEnd || alertKind;
+}
 
 // Parse up to n space-separated ints from s into out (unparsed slots keep their value).
 static int parseInts(const String &s, int *out, int n) {
@@ -771,7 +822,10 @@ static String expandMsg(String s) {
 static int rotSrc = N_SRC - 1, scrollPos = 0;
 static uint32_t rotAt = 0, msgStepAt = 0;
 
-static bool srcAvailable(int src) { return src != SRC_TEMP || wxFresh(); }
+static bool srcAvailable(int src) {
+  return src == MODE_ROTATE ? false : src == SRC_TEMP ? wxFresh() : src == SRC_FORECAST ? fcFresh() : true;
+}
+static int todayIdx() { return constrain((curT[3] & 7) - 1, 0, 6); }   // 0 = Monday
 
 // One engine step: choose the source, render the next scroll position into engRam.
 static void msgStep() {
@@ -790,8 +844,16 @@ static void msgStep() {
     }
     src = (msgRot & (1 << rotSrc)) && srcAvailable(rotSrc) ? rotSrc : SRC_TEMP;
   }
+  if (src == SRC_FORECAST && !fcFresh()) src = SRC_TEMP;      // no forecast yet: the temperature
   if (src == SRC_TEMP) { engTemp = true; msgShown = wxFresh() ? tempText() : ""; return; }
   engTemp = false;
+  if (src == SRC_FORECAST) {                                  // HI / LO / tomorrow, 3 s each
+    char buf[8];
+    extras::forecastText((millis() / 3000) % 3, fcHi[0], fcLo[0], fcHi[1], todayIdx() + 1, wxUnit ? 'C' : 'F', buf);
+    msgShown = buf;
+    render6(msgShown, 0, engRam);
+    return;
+  }
   String txt = expandMsg(src == SRC_DATE ? String("{date}") : msgText);
   txt.trim();
   if (txt.length() == 0) txt = " ";
@@ -816,8 +878,8 @@ static void setMsgText(String t) {
 }
 
 static void setMsgCfg(int mode, int rot, int dwell, int scroll) {
-  mode = constrain(mode, 0, MODE_ROTATE);
-  rot &= (1 << N_SRC) - 1;
+  mode = constrain(mode, 0, N_SRC - 1);
+  rot &= ((1 << N_SRC) - 1) & ~(1 << MODE_ROTATE);
   dwell = constrain(dwell, 2, 600);
   scroll = constrain(scroll, 50, 5000);
   if (mode == msgMode && rot == msgRot && dwell == msgDwell && scroll == msgScroll) return;
@@ -885,17 +947,17 @@ static String controlPage() {
   s += "<h3>Message line <small class=dim>when the app is off</small></h3>";
   s += "<div class=row><input type=checkbox name=omauto id=omauto " + String(omAuto ? "checked" : "") +
        "><label for=omauto>Use these settings (off = temperature only)</label></div>";
-  const char *modes[] = {"Temperature", "Text", "Date", "Rotate"};
+  const char *modes[] = {"Temperature", "Text", "Date", "Rotate", "Forecast"};
   s += "<label>Show</label><select name=mmode>";
-  for (int i = 0; i <= MODE_ROTATE; i++)
+  for (int i = 0; i < N_SRC; i++)
     s += "<option value=" + String(i) + (msgMode == i ? " selected" : "") + ">" + modes[i] + "</option>";
   s += "</select>";
   s += "<label>Text</label><input name=omtext maxlength=" + String(MSG_TEXT_MAX) + " value='" + esc(msgText) + "'>";
   s += "<p class=dim style='margin:4px 0;font-size:13px'>Placeholders: {time} {time12} {date} {day} {temp}</p>";
   s += "<label>Rotate through</label><div class=row style=margin-top:4px>";
-  const char *srcs[] = {"Temperature", "Text", "Date"};
+  const char *srcs[] = {"Temperature", "Text", "Date", "", "Forecast"};
   for (int i = 0; i < N_SRC; i++)
-    s += "<input type=checkbox name=rot" + String(i) + " id=rot" + String(i) + ((msgRot >> i) & 1 ? " checked" : "") +
+    if (i != MODE_ROTATE) s += "<input type=checkbox name=rot" + String(i) + " id=rot" + String(i) + ((msgRot >> i) & 1 ? " checked" : "") +
          "><label for=rot" + String(i) + ">" + srcs[i] + "</label>";
   s += "</div>";
   s += "<label>Seconds per item (rotate)</label><input type=number name=mdwell min=2 max=600 value=" + String(msgDwell) + ">";
@@ -910,7 +972,7 @@ static String controlPage() {
 // One table of settings, shared by POST /api/set and the /control form. Names match the PC app
 // where the meaning is the same; clock-only settings for "when the app is off" are standalone_*.
 // applySettings() checks every key first and changes nothing unless all are valid.
-static const char *MSG_MODE_NAMES[] = {"weather", "text", "date", "rotate"};   // index = SRC_* / MODE_ROTATE
+static const char *MSG_MODE_NAMES[] = {"weather", "text", "date", "rotate", "forecast"};   // index = SRC_* / MODE_ROTATE
 
 static int indexOf(const char *const *names, int n, const char *s) {
   for (int i = 0; i < n; i++) if (s && strcmp(names[i], s) == 0) return i;
@@ -968,13 +1030,13 @@ static bool setting(const char *k, JsonVariantConst v, bool apply, Pending &pd, 
     if (!boolOf(v, i, err)) return false;
     pd.omauto = i;
   } else if (!strcmp(k, "standalone_msg_mode")) {
-    if ((i = indexOf(MSG_MODE_NAMES, 4, v.as<const char *>())) < 0) { err = "expected weather, text, date or rotate"; return false; }
+    if ((i = indexOf(MSG_MODE_NAMES, N_SRC, v.as<const char *>())) < 0) { err = "expected weather, text, date, forecast or rotate"; return false; }
     pd.mode = i; pd.msg = true;
   } else if (!strcmp(k, "standalone_rotate")) {
     if (!v.is<JsonArrayConst>()) { err = "expected a list of weather/text/date"; return false; }
     int rot = 0;
     for (JsonVariantConst s : v.as<JsonArrayConst>()) {
-      if ((i = indexOf(MSG_MODE_NAMES, N_SRC, s.as<const char *>())) < 0) { err = "expected a list of weather/text/date"; return false; }
+      if ((i = indexOf(MSG_MODE_NAMES, N_SRC, s.as<const char *>())) < 0 || i == MODE_ROTATE) { err = "expected a list of weather/text/date/forecast"; return false; }
       rot |= 1 << i;
     }
     pd.rot = rot; pd.msg = true;
@@ -1000,6 +1062,30 @@ static bool setting(const char *k, JsonVariantConst v, bool apply, Pending &pd, 
   } else if (!strcmp(k, "standalone_frame")) {
     if (!boolOf(v, pd.flag, err)) return false;
     pd.grid = true;
+  } else if (!strcmp(k, "alarms")) {           // [{"on":true,"time":"06:30","days":["mon",...]}], up to 4
+    if (!v.is<JsonArrayConst>() || v.size() > extras::N_ALARMS) { err = "expected a list of up to 4 alarms"; return false; }
+    extras::Alarm next[extras::N_ALARMS] = {};
+    int n = 0;
+    for (JsonVariantConst a : v.as<JsonArrayConst>()) {
+      int hh, mm, on;
+      if (!a.is<JsonObjectConst>() || !extras::parseTime(a["time"].as<const char *>(), &hh, &mm)) { err = "alarm " + String(n + 1) + ": expected \"time\": \"HH:MM\""; return false; }
+      if (!boolOf(a["on"], on, err)) { err = "alarm " + String(n + 1) + ": \"on\" " + err; return false; }
+      if (!a["days"].is<JsonArrayConst>()) { err = "alarm " + String(n + 1) + ": expected \"days\": [\"mon\", ...]"; return false; }
+      uint8_t days = 0;
+      for (JsonVariantConst d : a["days"].as<JsonArrayConst>()) {
+        int di = indexOf(extras::DAY_KEYS, 7, d.as<const char *>());
+        if (di < 0) { err = "alarm " + String(n + 1) + ": days are mon tue wed thu fri sat sun"; return false; }
+        days |= 1 << di;
+      }
+      next[n++] = {(uint8_t)on, (uint8_t)hh, (uint8_t)mm, days};
+    }
+    if (apply) { memcpy(alarms, next, sizeof alarms); prefs.putBytes("alarms", alarms, sizeof alarms); }
+  } else if (!strcmp(k, "timer")) {            // seconds to count down; 0 cancels
+    if (!intIn(v, 0, 86399, i, err)) return false;
+    if (apply) { cdEnd = i ? millis() + (uint32_t)i * 1000 : 0; if (!cdEnd && alertKind == ALERT_TIMER) stopAlert(); dirty = true; }
+  } else if (!strcmp(k, "alert")) {            // false stops an alert; true tests one
+    if (!boolOf(v, i, err)) return false;
+    if (apply) { if (i) startAlert(ALERT_ALARM); else stopAlert(); }
   } else if (!strcmp(k, "weather_scene")) {
     const char *s = v.as<const char *>() ? v.as<const char *>() : "";
     i = strcmp(s, "auto") ? grid::sceneFromName(s) : -1;
@@ -1095,6 +1181,18 @@ static void configJson(JsonObject c) {
   c["standalone_fps"] = gaFps;
   c["standalone_frame"] = (bool)gaFlag;
   c["weather_scene"] = wxScenePick < 0 ? "auto" : grid::SCENE_NAMES[wxScenePick];
+  JsonArray al = c["alarms"].to<JsonArray>();
+  for (int a = 0; a < extras::N_ALARMS; a++) {
+    JsonObject o = al.add<JsonObject>();
+    char hm[6];
+    snprintf(hm, sizeof hm, "%02d:%02d", alarms[a].hh, alarms[a].mm);
+    o["on"] = (bool)alarms[a].on;
+    o["time"] = hm;
+    JsonArray d = o["days"].to<JsonArray>();
+    for (int k = 0; k < 7; k++) if (alarms[a].days >> k & 1) d.add(extras::DAY_KEYS[k]);
+  }
+  c["timer"] = timerLeft();
+  c["alert"] = alertKind != ALERT_NONE;
 }
 
 static void stateJson(JsonObject s) {
@@ -1120,6 +1218,19 @@ static void stateJson(JsonObject s) {
   wx["unit"] = wxUnit ? "C" : "F";
   wx["cond"] = wxCode == 1 ? "Sunny" : wxCode == 2 ? "Cloudy" : wxCode == 3 ? "Rain" : "";
   wx["scene"] = grid::SCENE_NAMES[currentScene()];   // what the weather animation shows now
+  if (fcFresh()) {
+    JsonArray fc = wx["forecast"].to<JsonArray>();
+    static const char *const DAYS3[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+    for (int d = 0; d < fcN; d++) {
+      JsonObject o = fc.add<JsonObject>();
+      o["day"] = DAYS3[(todayIdx() + d) % 7];
+      o["hi"] = fcHi[d];
+      o["lo"] = fcLo[d];
+      o["scene"] = grid::SCENE_NAMES[grid::sceneFromWmo(fcCode[d], true)];
+    }
+  }
+  s["timer"] = timerLeft();
+  s["alert"] = alertKind == ALERT_TIMER ? "timer" : alertKind == ALERT_ALARM ? "alarm" : "";
   s["app_connected"] = millis() - appTime < 2000;
   s["message"] = msgShown;
   s["stored_frames"] = gaN;
@@ -1256,9 +1367,9 @@ static void handleControlPost() {
   if (zip.length() && zip != prefs.getString("zip", "")) in["location"] = zip;
   if (web.hasArg("omtext")) in["offline_text"] = web.arg("omtext");
   if (web.hasArg("mmode")) {
-    in["standalone_msg_mode"] = MSG_MODE_NAMES[constrain(web.arg("mmode").toInt(), 0, MODE_ROTATE)];
+    in["standalone_msg_mode"] = MSG_MODE_NAMES[constrain(web.arg("mmode").toInt(), 0, N_SRC - 1)];
     JsonArray rot = in["standalone_rotate"].to<JsonArray>();
-    for (int i = 0; i < N_SRC; i++) if (web.hasArg("rot" + String(i))) rot.add(MSG_MODE_NAMES[i]);
+    for (int i = 0; i < N_SRC; i++) if (i != MODE_ROTATE && web.hasArg("rot" + String(i))) rot.add(MSG_MODE_NAMES[i]);
     in["standalone_dwell"] = web.arg("mdwell").toInt();
     in["standalone_scroll_ms"] = web.arg("mscroll").toInt();
   }
@@ -1464,7 +1575,8 @@ static void netWeatherFetch() {       // fetch Open-Meteo directly over HTTPS
   HTTPClient http;
   http.setTimeout(6000);
   String url = "https://api.open-meteo.com/v1/forecast?latitude=" + g_lat + "&longitude=" + g_lon +
-               "&current=temperature_2m,weather_code,is_day&temperature_unit=" + (g_wunit ? "celsius" : "fahrenheit");
+               "&current=temperature_2m,weather_code,is_day&temperature_unit=" + (g_wunit ? "celsius" : "fahrenheit") +
+               "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto";
   if (!http.begin(cli, url)) return;
   int rc = http.GET();
   if (rc == 200) {
@@ -1479,6 +1591,18 @@ static void netWeatherFetch() {       // fetch Open-Meteo directly over HTTPS
       int di = p.indexOf("is_day\":", cur < 0 ? 0 : cur);
       wxScene = grid::sceneFromWmo(code, di < 0 || p.substring(di + 8).toInt() != 0);
       wxSceneTime = millis();
+      const char *body = p.c_str(), *daily = strstr(body, "\"daily\":{");
+      if (daily) {
+        double hi[4], lo[4], wc[4];
+        int n = extras::jsonArray(body, daily, "temperature_2m_max", hi, 4);
+        n = min(n, extras::jsonArray(body, daily, "temperature_2m_min", lo, 4));
+        n = min(n, extras::jsonArray(body, daily, "weather_code", wc, 4));
+        if (n >= 2) {
+          for (int d = 0; d < n; d++) { fcHi[d] = (int)lround(hi[d]); fcLo[d] = (int)lround(lo[d]); fcCode[d] = (int)wc[d]; }
+          fcN = n;
+          fcTime = millis();
+        }
+      }
       wxTemp = temp;
       wxUnit = g_wunit;
       wxTime = millis();
@@ -1564,13 +1688,14 @@ void setup() {
   gaAnim = constrain(prefs.getInt("gaid", gaN > 0 ? grid::CUSTOM : grid::SPIN), 0, grid::N_ANIM - 1);
   webPass = prefs.getString("webpass", "");
   wxScenePick = constrain(prefs.getInt("wxsc", -1), -1, grid::N_SCENE - 1);
+  if (prefs.getBytes("alarms", alarms, sizeof alarms) != sizeof alarms) memset(alarms, 0, sizeof alarms);
   otaLogValid = prefs.getBytes("otalog", &otaLog, sizeof otaLog) == sizeof otaLog;   // last upload
   micAuto = prefs.getInt("micauto", 1);
   analogSetPinAttenuation(MIC_PIN, ADC_11db);   // dead zone hides the room's hum (see mic_dsp.h)
   gEng.bands = micBands;
   xTaskCreatePinnedToCore(micTask, "mic", 4096, nullptr, 1, nullptr, 0);
   omAuto = prefs.getInt("omauto", 0);    // restore the message-line engine
-  msgMode = constrain(prefs.getInt("mmode", SRC_TEXT), 0, MODE_ROTATE);
+  msgMode = constrain(prefs.getInt("mmode", SRC_TEXT), 0, N_SRC - 1);
   msgRot = prefs.getInt("mrot", 0b111);
   msgDwell = prefs.getInt("mdwell", 8);
   msgScroll = prefs.getInt("mscroll", 350);
@@ -1589,6 +1714,7 @@ static void checkButtons() {
     uint8_t v = digitalRead(pins[i]);
     if (prev[i] == 1 && v == 0 && millis() - lastPress > 200) {   // falling edge, debounced
       lastPress = millis();
+      if (alertKind) { stopAlert(); draw(); prev[i] = v; continue; }   // any button stops an alert
       if (i == 0) setStyle(specStyle <= 1 ? N_STYLES : specStyle - 1);   // left: prev
       else setStyle(specStyle >= N_STYLES ? 1 : specStyle + 1);          // middle/right: next
       Serial.printf("button %d -> style %d\n", i, specStyle);
@@ -1626,6 +1752,11 @@ void loop() {
   if (millis() - last >= 250) {
     last = millis();
     if (rtcRead(curT)) redraw = true;
+  }
+  static uint32_t extrasAt = 0;
+  if (millis() - extrasAt >= 200) {
+    extrasAt = millis();
+    if (extrasTick()) redraw = true;
   }
   if (redraw || dirty) {               // one I2C flush per pass, however many commands arrived
     dirty = false;

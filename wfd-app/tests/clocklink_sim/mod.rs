@@ -63,6 +63,7 @@ pub fn app() -> Arc<Ctx> {
             label: "Waco".into(),
             cond: "Sunny".into(),
             scene: "clear".into(),
+            forecast: vec![],
         };
         st.metrics = Metrics {
             cpu: 37,

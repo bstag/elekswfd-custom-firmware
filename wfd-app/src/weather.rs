@@ -9,6 +9,7 @@ use ureq::Agent;
 
 /// Current weather as the clock shows it. `code`: 1 sunny, 2 cloudy, 3 rain; `unit`: 1 = Celsius.
 /// `scene`: the finer picture for the "weather" grid animation (`grid_anim::SCENES`), "" = unknown.
+/// `forecast`: today and the next days (up to 4).
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct Weather {
     pub code: u8,
@@ -17,6 +18,58 @@ pub struct Weather {
     pub label: String,
     pub cond: String,
     pub scene: String,
+    pub forecast: Vec<Day>,
+}
+
+/// One forecast day: "Thu", high and low (rounded like the clock: half away from zero), scene.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Day {
+    pub day: String,
+    pub hi: i32,
+    pub lo: i32,
+    pub scene: String,
+}
+
+/// forecast `daily` -> up to 4 days (the clock reads the same arrays).
+pub fn parse_forecast(d: &Value) -> Vec<Day> {
+    let daily = &d["daily"];
+    let col = |k: &str| daily[k].as_array().cloned().unwrap_or_default();
+    let (days, hi, lo, codes) = (
+        col("time"),
+        col("temperature_2m_max"),
+        col("temperature_2m_min"),
+        col("weather_code"),
+    );
+    let n = days.len().min(hi.len()).min(lo.len()).min(codes.len()).min(4);
+    (0..n)
+        .map_while(|i| {
+            let date = chrono::NaiveDate::parse_from_str(days[i].as_str()?, "%Y-%m-%d").ok()?;
+            let code = codes[i].as_f64()? as i64;
+            Some(Day {
+                day: date.format("%a").to_string(),
+                hi: hi[i].as_f64()?.round() as i32,
+                lo: lo[i].as_f64()?.round() as i32,
+                scene: crate::grid_anim::SCENES[crate::grid_anim::scene_from_wmo(code, true)].into(),
+            })
+        })
+        .collect()
+}
+
+/// The forecast on the message line (firmware `extras::forecastText`), item 0..2 of the cycle:
+/// "HI 78F", "LO 55F", "THU 81". None until two days are known.
+pub fn forecast_text(item: u64, days: &[Day], unit: u8) -> Option<String> {
+    if days.len() < 2 {
+        return None;
+    }
+    let u = if unit == 1 { 'C' } else { 'F' };
+    Some(match item % 3 {
+        2 => format!("{} {}", days[1].day.to_uppercase(), days[1].hi),
+        k => {
+            let (lbl, t) = if k == 0 { ("HI", days[0].hi) } else { ("LO", days[0].lo) };
+            let s = format!("{lbl} {t}{u}");
+            if s.len() > 6 { format!("{lbl} {t}") } else { s }
+        }
+    })
 }
 
 /// Resolved location (rounded to 4 decimals like app.py's `geo` state) and unit (1 = Celsius).
@@ -187,23 +240,24 @@ pub fn resolve_location(loc: &str) -> Result<(f64, f64, String), String> {
     resolve_with(&agent(), loc)
 }
 
-/// (clock code, rounded temperature, scene) at a location.
-fn fetch_with(agent: &Agent, lat: f64, lon: f64, celsius: bool) -> Result<(u8, i32, &'static str), String> {
+/// (clock code, rounded temperature, scene, forecast) at a location.
+fn fetch_with(agent: &Agent, lat: f64, lon: f64, celsius: bool) -> Result<(u8, i32, &'static str, Vec<Day>), String> {
     let uname = if celsius { "celsius" } else { "fahrenheit" };
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}\
-         &current=temperature_2m,weather_code,is_day&temperature_unit={uname}",
+         &current=temperature_2m,weather_code,is_day&temperature_unit={uname}\
+         &daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto",
         py_float(lat),
         py_float(lon)
     );
     let d = get_json(agent, &url)?;
     let (code, temp) = parse_current(&d)?;
-    Ok((code, temp, parse_scene(&d)?))
+    Ok((code, temp, parse_scene(&d)?, parse_forecast(&d)))
 }
 
 /// Current (clock code, rounded temperature) at a location.
 pub fn fetch_current(lat: f64, lon: f64, celsius: bool) -> Result<(u8, i32), String> {
-    fetch_with(&agent(), lat, lon, celsius).map(|(code, temp, _)| (code, temp))
+    fetch_with(&agent(), lat, lon, celsius).map(|(code, temp, _, _)| (code, temp))
 }
 
 /// One `weather_reader` iteration at a time; re-resolves the location only when it changes.
@@ -238,7 +292,7 @@ impl WeatherReader {
             self.cur_loc = Some(loc.to_string());
         }
         let (lat, lon, label) = self.place.clone().expect("resolved above");
-        let (code, temp, scene) = fetch_with(&self.agent, lat, lon, celsius)?;
+        let (code, temp, scene, forecast) = fetch_with(&self.agent, lat, lon, celsius)?;
         let unit = u8::from(celsius);
         let geo = Geo {
             lat: round4(lat),
@@ -252,6 +306,7 @@ impl WeatherReader {
             label,
             cond: condition(code).to_string(),
             scene: scene.to_string(),
+            forecast,
         };
         Ok((geo, weather))
     }

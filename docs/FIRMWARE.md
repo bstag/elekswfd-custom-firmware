@@ -106,8 +106,8 @@ is set. Every key is checked first; if any is bad nothing changes, and you get a
 | `location` | 5‑digit US ZIP | looked up on the clock |
 | `offline_text` | string ≤ 96 | message text; placeholders allowed |
 | `msg_standalone` | bool | run the message line when the app is off |
-| `standalone_msg_mode` | `weather` / `text` / `date` / `rotate` | |
-| `standalone_rotate` | list of `weather` `text` `date` | what rotate cycles through |
+| `standalone_msg_mode` | `weather` / `text` / `date` / `forecast` / `rotate` | |
+| `standalone_rotate` | list of `weather` `text` `date` `forecast` | what rotate cycles through |
 | `standalone_dwell` | int 2–600 | seconds per item |
 | `standalone_scroll_ms` | int 50–5000 | ms per scroll step |
 | `mic_standalone` | bool | spectrum columns from the clock's mic when the app is off |
@@ -116,6 +116,9 @@ is set. Every key is checked first; if any is bad nothing changes, and you get a
 | `standalone_fps` | int 1–30 | |
 | `standalone_frame` | bool | light the border |
 | `weather_scene` | `auto` or a scene | what `weather` draws: `auto` follows the weather; or `clear partly cloudy fog rain snow storm night night_partly` |
+| `alarms` | list of up to 4 `{"on": bool, "time": "HH:MM", "days": ["mon", …]}` | days are `mon tue wed thu fri sat sun`; reported as 4 entries |
+| `timer` | seconds 0–86399 | starts a countdown (0 cancels); reads back the seconds left |
+| `alert` | bool | `false` stops an alarm or timer alert; `true` starts a test alert; reads back whether one is going off |
 
 ```bash
 curl http://<clock-ip>/api/status
@@ -168,7 +171,25 @@ The clock renders the 6‑character message line itself, so it needs no PC:
 | Temperature | Current temperature (blank until weather has loaded) |
 | Text | `omtext`, scrolling if longer than 6 chars |
 | Date | e.g. `TUE OCT 13` |
-| Rotate | Cycles through the ticked sources every *dwell* seconds; temperature is skipped while there's no weather |
+| Forecast | `HI 78F`, `LO 55F` (today) and `THU 81` (tomorrow's high), 3 s each; the temperature until a forecast has loaded |
+| Rotate | Cycles through the ticked sources every *dwell* seconds; temperature and forecast are skipped while they haven't loaded |
+
+The forecast comes with the clock's own weather fetch (Open‑Meteo `daily`, 4 days); `/api/status`
+shows it as `state.weather.forecast` (`[{day, hi, lo, scene}]`, today first).
+
+## Alarms and timer
+
+Up to 4 alarms, each with a time and weekdays, and a countdown timer: settings `alarms` and
+`timer`, so they're set from the dashboard, `/api/set` or the app, and they run on the clock with
+the PC off (alarms are saved in NVS; a timer doesn't survive a restart). The clock has no
+speaker, so an alarm or a finished timer is an **alert**: the whole panel flashes (all LEDs, then
+`ALARM` / `TIMER` on the message line) until any of the three buttons is pressed, the `alert`
+setting is set to `false`, or 5 minutes pass. Each alarm fires once in its minute, by the RTC's
+local time. A running timer counts down on the message line (`  4:59`, ` 1H05M`) over whatever
+it would show. `/api/status` reports `state.timer` (seconds left) and `state.alert` (`alarm`,
+`timer` or empty); serial prints `ALERT alarm|timer|off`. The logic (when an alarm is due, the
+texts, reading the forecast) is `src/extras.h`, compiled and tested on the PC like the other
+engines.
 
 Text placeholders expand live from the RTC and weather: `{time}` (`17:05`), `{time12}`
 (`5:05PM`), `{date}` (`TUE OCT 13`), `{day}` (`TUESDAY`), `{temp}` (`91F`). The PC app
@@ -298,4 +319,5 @@ A healthy upload of the ~1.1 MB image is ~790 pieces in ~16 s with pauses under 
 `main.cpp`); `CFG` reports them as `_fw` / `_protocol`, plus the clock's WiFi address as `_ip` (empty when it isn't on WiFi) and whether a web password is set as `_pw`, so the app sees them over USB too. Bump
 `WFD_PROTOCOL` together with `PROTOCOL` in `app.py` whenever commands, settings or the API
 change in a way the app depends on. A test fails if they, or `releases/version.json`, disagree.
-Protocol 4 added the `weather` animation and the `weather_scene` setting.
+Protocol 4 added the `weather` animation and the `weather_scene` setting; protocol 5 the
+`alarms`, `timer` and `alert` settings and the forecast.

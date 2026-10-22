@@ -296,6 +296,7 @@ impl ClockLink {
         if let Some(c) = config {
             let mut st = self.ctx.state();
             st.clock = Some(c);
+            st.clock_read_at = Some(std::time::Instant::now());
             st.clock_fw = fw;
             st.clock_protocol = protocol;
             st.clock_pw_set = pw_set;
@@ -539,6 +540,8 @@ impl ClockLink {
             "window" => return Some("window"),
             "text" => return Some("text"),
             "date" => return Some("date"),
+            // the forecast once two days are known; until then the firmware shows the temp
+            "forecast" => return (self.ctx.state().weather.forecast.len() >= 2).then_some("forecast"),
             "rotate" => {}
             _ => return None, // "weather": the firmware draws the temperature itself
         }
@@ -577,6 +580,9 @@ impl ClockLink {
             let txt = match cur {
                 "window" => (self.p.foreground_title)(),
                 "date" => now.format("%a %b %d").to_string().to_uppercase(),
+                // HI / LO / tomorrow, 3 s each (like the clock)
+                "forecast" => crate::weather::forecast_text((self.clock.now() / 3.0) as u64, &w.forecast, w.unit)
+                    .unwrap_or_default(),
                 _ => {
                     // custom text with the firmware's placeholders (same order as app.py)
                     let fill = [

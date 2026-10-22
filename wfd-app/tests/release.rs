@@ -28,14 +28,15 @@ type StatusCase = (
 
 #[test]
 fn firmware_status_table() {
+    const P: u32 = wfd_app::config::PROTOCOL;
     let cases: [StatusCase; 6] = [
-        // the app speaks protocol 4 (config::PROTOCOL)
-        ("A", Some(4), Some(rel("A", 4)), "ok", false),
-        ("A", Some(4), Some(rel("B", 4)), "ok", true), // newer build, same protocol
-        ("old", None, Some(rel("B", 4)), "older", true), // before versions were reported
-        ("A", Some(3), Some(rel("B", 4)), "older", true),
-        ("A", Some(5), Some(rel("B", 4)), "newer", false), // never "update" to an older protocol
-        ("A", Some(4), None, "ok", false),                 // no release shipped
+        // relative to the protocol this app speaks
+        ("A", Some(P), Some(rel("A", P)), "ok", false),
+        ("A", Some(P), Some(rel("B", P)), "ok", true), // newer build, same protocol
+        ("old", None, Some(rel("B", P)), "older", true), // before versions were reported
+        ("A", Some(P - 1), Some(rel("B", P)), "older", true),
+        ("A", Some(P + 1), Some(rel("B", P)), "newer", false), // never "update" to an older protocol
+        ("A", Some(P), None, "ok", false),                     // no release shipped
     ];
     for (fw, proto, release, compat, available) in cases {
         assert_eq!(

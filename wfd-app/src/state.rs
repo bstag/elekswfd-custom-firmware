@@ -49,6 +49,8 @@ pub struct State {
     pub update: Update,
     pub grid_rows: Option<[u8; 7]>,
     pub usb_problem: Option<String>,        // the clock is plugged in but its USB driver isn't working (usbdriver.rs)
+    #[serde(skip)]
+    pub clock_read_at: Option<std::time::Instant>, // when `clock` was read (counts its timer down)
 }
 
 pub type Shared = Arc<Mutex<State>>;

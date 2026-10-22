@@ -103,3 +103,41 @@ fn live_zip_76708() {
     println!("{geo_c:?}\n{w_c:?}");
     assert_eq!((geo_c.lat, geo_c.lon, geo_c.unit), (geo.lat, geo.lon, 1));
 }
+
+fn day(day: &str, hi: i32, lo: i32) -> Day {
+    Day { day: day.into(), hi, lo, scene: "clear".into() }
+}
+
+#[test]
+fn parses_the_forecast() {
+    let d = json!({"daily": {
+        "time": ["2026-10-22", "2026-10-23", "2026-10-24", "2026-10-25"],
+        "weather_code": [2, 61, 3, 0],
+        "temperature_2m_max": [78.4, 81.5, 69.5, -0.5],
+        "temperature_2m_min": [55.2, 60.9, 48.0, -2.5]}});
+    let f = parse_forecast(&d);
+    assert_eq!(f.len(), 4);
+    assert_eq!((f[0].day.as_str(), f[0].hi, f[0].lo, f[0].scene.as_str()), ("Thu", 78, 55, "partly"));
+    assert_eq!((f[1].day.as_str(), f[1].hi, f[1].scene.as_str()), ("Fri", 82, "rain"), "rounds half away from zero, like the clock");
+    assert_eq!((f[3].hi, f[3].lo), (-1, -3));
+    assert!(parse_forecast(&json!({"current": {}})).is_empty());
+    let short = json!({"daily": {"time": ["2026-10-22"], "weather_code": [0], "temperature_2m_max": [70], "temperature_2m_min": [50]}});
+    assert_eq!(parse_forecast(&short).len(), 1);
+}
+
+#[test]
+fn forecast_text_matches_the_clock() {
+    // the same cases as wfd-control/tests/test_extras.py (firmware extras::forecastText)
+    let f = [day("Wed", 78, 55), day("Thu", 81, 60)];
+    assert_eq!(forecast_text(0, &f, 0).as_deref(), Some("HI 78F"));
+    assert_eq!(forecast_text(1, &f, 0).as_deref(), Some("LO 55F"));
+    assert_eq!(forecast_text(2, &f, 0).as_deref(), Some("THU 81"));
+    assert_eq!(forecast_text(5, &f, 0).as_deref(), Some("THU 81"), "cycles");
+    let hot = [day("Sun", 104, 80), day("Mon", 99, 70)];
+    assert_eq!(forecast_text(0, &hot, 0).as_deref(), Some("HI 104"), "no room for the unit");
+    let cold = [day("Sun", -5, -12), day("Mon", 0, -3)];
+    assert_eq!(forecast_text(1, &cold, 1).as_deref(), Some("LO -12"));
+    let mild = [day("Sun", 3, -2), day("Mon", 4, 0)];
+    assert_eq!(forecast_text(1, &mild, 1).as_deref(), Some("LO -2C"));
+    assert_eq!(forecast_text(0, &f[..1], 0), None, "needs two days");
+}

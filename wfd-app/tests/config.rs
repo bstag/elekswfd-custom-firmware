@@ -74,7 +74,7 @@ fn defaults_match_app_py() {
     assert_eq!(d["gain_out"], json!(1.0));
     assert!(d["gain_out"].is_f64() && d["scroll_ms"].is_i64());
     assert_eq!(d["grid_custom"], json!([]));
-    assert_eq!(PROTOCOL, 4);
+    assert_eq!(PROTOCOL, 5);
     assert!(CLOCK_KEYS.iter().all(|k| !d.contains_key(*k)));
     // Python writes exactly this for DEFAULTS
     let path = temp_file("defaults.json");
@@ -121,6 +121,12 @@ fn coerce_matches_python_table() {
         } else {
             let err = got.expect_err(&format!("{key} {value} should fail"));
             if let Some(msg) = c["error"].as_str() {
+                // the Rust app has one message mode Python doesn't: "forecast"
+                let msg = if key == "message_mode" {
+                    msg.replace("'date', 'rotate'", "'date', 'forecast', 'rotate'")
+                } else {
+                    msg.to_string()
+                };
                 assert_eq!(err, msg, "{key} {value}");
             }
         }
