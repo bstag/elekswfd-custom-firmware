@@ -191,6 +191,13 @@ it would show. `/api/status` reports `state.timer` (seconds left) and `state.ale
 texts, reading the forecast) is `src/extras.h`, compiled and tested on the PC like the other
 engines.
 
+## Buttons
+
+A short press changes the spectrum style (left: previous, middle/right: next), or stops an
+alert. Holding any button for 2 s scrolls the clock's address (`IP 192.168.0.152`, 20 s) when
+it's on WiFi; when it isn't, it opens the `WFD-Setup` network and picker again (see
+[FLASHING.md](FLASHING.md#wifi-setup-one-time-no-usb)).
+
 Text placeholders expand live from the RTC and weather: `{time}` (`17:05`), `{time12}`
 (`5:05PM`), `{date}` (`TUE OCT 13`), `{day}` (`TUESDAY`), `{temp}` (`91F`). The PC app
 expands the same set, so a text reads the same whether the app is running or not.

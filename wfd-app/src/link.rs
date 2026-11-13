@@ -33,6 +33,15 @@ pub const UDP_PORT: u16 = 4210;
 pub const MDNS_TIMEOUT: Duration = Duration::from_millis(2500);
 /// How long a USB settings request waits for its reply (app.py `request(timeout=1.5)`).
 const REQUEST_TIMEOUT: f64 = 1.5;
+/// ...and for a change the clock has to look up on the internet first (a ZIP: up to 6 s there).
+const SLOW_REQUEST_TIMEOUT: f64 = 8.0;
+const SLOW_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+/// Settings the clock answers slowly (it geocodes a new ZIP before replying).
+pub fn is_slow_patch(patch: &Map<String, Value>) -> bool {
+    patch.contains_key("location")
+}
+/// The clock's name on the network (its firmware's mDNS hostname).
+const CLOCK_NAME: &str = "wfd-clock.local";
 /// No good HTTP answer for this long: the WiFi clock is gone.
 const WIFI_ALIVE: f64 = 15.0;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -156,6 +165,11 @@ pub trait Link {
     fn store_frames(&mut self, frames: &[[u8; 7]], fps: u32, frame: bool) -> Result<(), LinkLost>;
     /// Called right after `SET` (USB waits and discards the reply).
     fn after_time(&mut self) -> Result<(), LinkLost>;
+    /// Something the user should fix although the link is up (e.g. the clock rejects our
+    /// display stream), as of the last config read.
+    fn problem(&self) -> Option<String> {
+        None
+    }
     fn close(&mut self);
 }
 
@@ -321,9 +335,10 @@ impl UsbLink {
         &mut self,
         line: &str,
         prefixes: &[&'static str],
+        timeout: f64,
     ) -> Result<Option<(&'static str, Value)>, LinkLost> {
         self.send(line)?;
-        let deadline = self.clock.now() + REQUEST_TIMEOUT;
+        let deadline = self.clock.now() + timeout;
         while self.clock.now() < deadline {
             let raw = self.s.readline()?;
             if raw.is_empty() {
@@ -375,7 +390,7 @@ impl Link for UsbLink {
     }
 
     fn set_web_password(&mut self, password: &str) -> Result<Result<bool, String>, LinkLost> {
-        Ok(match self.request(&format!("WEBPASS {password}"), &["PWOK", "PWERR"])? {
+        Ok(match self.request(&format!("WEBPASS {password}"), &["PWOK", "PWERR"], REQUEST_TIMEOUT)? {
             Some(("PWOK", body)) => {
                 let set = body.get("set").and_then(Value::as_bool).unwrap_or(!password.is_empty());
                 self.pw_set = Some(set);
@@ -400,7 +415,7 @@ impl Link for UsbLink {
     }
 
     fn get_config(&mut self) -> Result<Option<Map<String, Value>>, LinkLost> {
-        let Some((_, Value::Object(mut c))) = self.request("CFG", &["CFG"])? else {
+        let Some((_, Value::Object(mut c))) = self.request("CFG", &["CFG"], REQUEST_TIMEOUT)? else {
             return Ok(None);
         };
         // the build info travels with the settings but isn't one
@@ -419,7 +434,8 @@ impl Link for UsbLink {
 
     fn set_config(&mut self, patch: &Map<String, Value>) -> Result<ClockReply, LinkLost> {
         let line = format!("CFGSET {}", py_json(&Value::Object(patch.clone())));
-        Ok(match self.request(&line, &["CFGOK", "CFGERR"])? {
+        let timeout = if is_slow_patch(patch) { SLOW_REQUEST_TIMEOUT } else { REQUEST_TIMEOUT };
+        Ok(match self.request(&line, &["CFGOK", "CFGERR"], timeout)? {
             Some(("CFGOK", mut body)) => Ok(body
                 .as_object_mut()
                 .and_then(|b| b.remove("_warning"))
@@ -477,6 +493,13 @@ pub struct WifiLink {
     protocol: Option<u32>,
     pw_set: Option<bool>,
     ok_at: f64,
+    /// when the first display packet went out (None: nothing sent yet)
+    streaming_since: Option<f64>,
+    /// the clock's count of rejected packets at the last status read
+    rejected: Option<u64>,
+    /// status reads in a row that showed the clock not taking our stream
+    deaf_reads: u32,
+    problem: Option<String>,
 }
 
 impl WifiLink {
@@ -514,7 +537,41 @@ impl WifiLink {
             protocol: None,
             pw_set: None,
             ok_at,
+            streaming_since: None,
+            rejected: None,
+            deaf_reads: 0,
+            problem: None,
         }
+    }
+
+    /// Is the clock taking the display stream? Its status says whether it heard the app in the
+    /// last 2 s and how many packets it threw away (wrong password). One bad read can be the
+    /// clock having been busy, so it takes two in a row.
+    fn check_stream(&mut self, st: &Value) {
+        let net = st.get("net");
+        let rejected = net.and_then(|n| n.get("udp_rejected")).and_then(Value::as_u64);
+        let more_rejected = matches!((self.rejected, rejected), (Some(a), Some(b)) if b > a);
+        self.rejected = rejected;
+        let hears_us = st.get("app_connected").and_then(Value::as_bool);
+        let streaming = self
+            .streaming_since
+            .is_some_and(|t| self.clock.now() - t > 3.0);
+        if !streaming || hears_us != Some(false) {
+            self.deaf_reads = 0;
+            self.problem = None;
+            return;
+        }
+        self.deaf_reads += 1;
+        if self.deaf_reads < 2 {
+            return;
+        }
+        self.problem = Some(if self.pw_set == Some(true) && self.password.is_empty() {
+            "the clock has a web password: enter it under Connection (App uses password)".into()
+        } else if more_rejected {
+            "the clock is rejecting the display: wrong clock password (Connection, App uses password)".into()
+        } else {
+            "the clock answers, but the live display isn't reaching it (a firewall or the router is blocking UDP port 4210)".into()
+        });
     }
 }
 
@@ -572,6 +629,9 @@ impl Link for WifiLink {
         }
         self.sock.send_to(packet.as_bytes(), &self.ip, UDP_PORT)?;
         self.buf.clear();
+        if self.streaming_since.is_none() {
+            self.streaming_since = Some(self.clock.now());
+        }
         Ok(())
     }
 
@@ -592,7 +652,10 @@ impl Link for WifiLink {
             .get("protocol")
             .and_then(Value::as_u64)
             .and_then(|p| u32::try_from(p).ok());
-        Ok(Some(config.clone()))
+        let config = config.clone();
+        let st = st.clone();
+        self.check_stream(&st);
+        Ok(Some(config))
     }
 
     fn set_config(&mut self, patch: &Map<String, Value>) -> Result<ClockReply, LinkLost> {
@@ -635,6 +698,10 @@ impl Link for WifiLink {
 
     fn after_time(&mut self) -> Result<(), LinkLost> {
         Ok(())
+    }
+
+    fn problem(&self) -> Option<String> {
+        self.problem.clone()
     }
 
     fn close(&mut self) {
@@ -704,6 +771,13 @@ impl HttpApi for UreqHttp {
             if let Some(a) = &self.auth {
                 req = req.header("Authorization", a);
             }
+            let slow = path == "/api/set"
+                && body.and_then(Value::as_object).is_some_and(is_slow_patch);
+            let req = if slow {
+                req.config().timeout_global(Some(SLOW_HTTP_TIMEOUT)).build()
+            } else {
+                req
+            };
             match body {
                 Some(b) => req
                     .header("Content-Type", "application/json")
@@ -729,17 +803,33 @@ impl HttpApi for UreqHttp {
 
 // ------------------------------------------------------------------ finding the clock
 
+/// A CH340 port that didn't answer like the clock (see [`avoid_port`]).
+static AVOID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// `name` has a CH340 chip but isn't the clock (plenty of boards use that chip): from now on
+/// [`find_port`] prefers any other CH340 port, and only falls back to this one.
+pub fn avoid_port(name: &str) {
+    *AVOID.lock().unwrap() = Some(name.to_string());
+}
+
 /// The clock's serial port (CH340), if plugged in.
 pub fn find_port() -> Option<String> {
-    serialport::available_ports()
+    let ports: Vec<String> = serialport::available_ports()
         .ok()?
         .into_iter()
-        .find_map(|p| match p.port_type {
+        .filter_map(|p| match p.port_type {
             serialport::SerialPortType::UsbPort(u) if u.vid == CH340_VID && u.pid == CH340_PID => {
                 Some(p.port_name)
             }
             _ => None,
         })
+        .collect();
+    let avoid = AVOID.lock().unwrap().clone();
+    ports
+        .iter()
+        .find(|p| Some(*p) != avoid.as_ref())
+        .or(ports.first())
+        .cloned()
 }
 
 /// A real serial port with pyserial-like `readline` (1 s timeout).
@@ -844,7 +934,7 @@ pub fn find_clock_ip(ctx: &Ctx) -> Option<String> {
             .to_string()
     };
     let host = if host.is_empty() {
-        "wfd-clock.local".to_string()
+        CLOCK_NAME.to_string()
     } else {
         host
     };
@@ -868,25 +958,66 @@ pub fn find_clock_ip(ctx: &Ctx) -> Option<String> {
     ip.or_else(|| ctx.state().clock_ip.clone())
 }
 
+/// Where the last address the clock answered on is kept between runs (next to the settings).
+fn last_ip_path(ctx: &Ctx) -> std::path::PathBuf {
+    ctx.cfg_path.with_file_name("clock-ip.txt")
+}
+
+/// The address saved by [`remember_ip`] in an earlier run, if any.
+pub fn load_last_ip(ctx: &Ctx) -> Option<String> {
+    let text = std::fs::read_to_string(last_ip_path(ctx)).ok()?;
+    let ip = text.trim();
+    is_dotted_quad(ip).then(|| ip.to_string())
+}
+
+/// The clock is at `ip` (it answered there, or said so over USB): use it first from now on,
+/// also after a restart of the app.
+pub fn remember_ip(ctx: &Ctx, ip: &str) {
+    let changed = {
+        let mut st = ctx.state();
+        let changed = st.clock_ip.as_deref() != Some(ip);
+        st.clock_ip = Some(ip.to_string());
+        changed
+    };
+    if changed && load_last_ip(ctx).as_deref() != Some(ip) {
+        let _ = std::fs::write(last_ip_path(ctx), ip);
+    }
+}
+
+fn try_wifi(ctx: &Ctx, ip: &str, pw: &str, clock: &Rc<dyn Clock>) -> Option<Box<dyn Link>> {
+    let mut link = WifiLink::new(ip, pw, Rc::clone(clock)).ok()?;
+    if link.get_config().is_err() {
+        link.close();
+        return None;
+    }
+    remember_ip(ctx, ip);
+    Some(Box::new(link))
+}
+
 /// Connect over WiFi: find the clock, check it answers (reads its settings), remember its IP.
 pub fn open_wifi(ctx: &Ctx, clock: Rc<dyn Clock>) -> Option<Box<dyn Link>> {
     let ip = find_clock_ip(ctx)?;
-    let pw = {
+    let (pw, host) = {
         let cfg = ctx.cfg.lock().unwrap();
-        cfg.get("clock_pass")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
+        let text = |k: &str| cfg.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        (text("clock_pass"), text("clock_host").trim().to_string())
     };
-    let mut link = WifiLink::new(&ip, &pw, clock).ok()?;
-    if link.get_config().is_err() {
-        link.close();
+    if let Some(link) = try_wifi(ctx, &ip, &pw, &clock) {
+        return Some(link);
+    }
+    {
         let mut st = ctx.state();
         if st.clock_ip.as_deref() == Some(ip.as_str()) {
             st.clock_ip = None; // stale: look it up by name next time
         }
-        return None;
     }
-    ctx.state().clock_ip = Some(ip);
-    Some(Box::new(link))
+    // A typed-in IP that doesn't answer: the router may have given the clock another address.
+    // Ask for it by name before giving up.
+    if host == ip {
+        let found = crate::mdns::resolve(CLOCK_NAME, MDNS_TIMEOUT).map(|a| a.to_string());
+        if let Some(found) = found.filter(|f| *f != ip) {
+            return try_wifi(ctx, &found, &pw, &clock);
+        }
+    }
+    None
 }

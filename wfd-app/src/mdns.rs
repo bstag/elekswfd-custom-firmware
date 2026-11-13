@@ -72,34 +72,73 @@ pub fn parse_a_records(data: &[u8]) -> Vec<Ipv4Addr> {
     parse(data).unwrap_or_default()
 }
 
-/// IP of `name` (e.g. "wfd-clock.local") via one multicast mDNS query, or None.
+/// This PC's own IPv4 addresses, one per network adapter (no loopback).
+fn local_ipv4s() -> Vec<Ipv4Addr> {
+    let mut out = Vec::new();
+    for (_, data) in &sysinfo::Networks::new_with_refreshed_list() {
+        for net in data.ip_networks() {
+            if let std::net::IpAddr::V4(a) = net.addr
+                && !a.is_loopback()
+                && !a.is_unspecified()
+                && !out.contains(&a)
+            {
+                out.push(a);
+            }
+        }
+    }
+    out
+}
+
+/// When the query goes out again (multicast UDP gets lost; the clock can be busy for a moment).
+const RESEND_AT: [Duration; 3] = [
+    Duration::ZERO,
+    Duration::from_millis(500),
+    Duration::from_millis(1300),
+];
+
+/// IP of `name` (e.g. "wfd-clock.local") via multicast mDNS, or None.
+///
+/// The query goes out on every network adapter, not just the default one: on a PC with a VPN
+/// or virtual adapters (Tailscale, Hyper-V, WSL) Windows would otherwise send it there and the
+/// clock on the LAN never hears it. It is repeated twice; the first A record wins.
 pub fn resolve(name: &str, timeout: Duration) -> Option<Ipv4Addr> {
     if name.split('.').any(|l| l.len() > 255) {
         return None;
     }
-    let s = UdpSocket::bind("0.0.0.0:0").ok()?;
-    s.set_multicast_ttl_v4(255).ok()?;
-    let deadline = Instant::now() + timeout;
-    s.send_to(&build_query(name), MDNS_ADDR).ok()?;
+    let mut from = local_ipv4s();
+    from.push(Ipv4Addr::UNSPECIFIED); // and wherever Windows routes it by default
+    let socks: Vec<UdpSocket> = from
+        .into_iter()
+        .filter_map(|a| {
+            let s = UdpSocket::bind((a, 0)).ok()?;
+            s.set_multicast_ttl_v4(255).ok()?;
+            s.set_nonblocking(true).ok()?;
+            Some(s)
+        })
+        .collect();
+    if socks.is_empty() {
+        return None;
+    }
+    let query = build_query(name);
+    let start = Instant::now();
+    let mut sent = 0;
     let mut buf = [0u8; 1500];
-    loop {
-        let left = deadline
-            .checked_duration_since(Instant::now())
-            .filter(|d| !d.is_zero())?;
-        s.set_read_timeout(Some(left.min(Duration::from_millis(300))))
-            .ok()?;
-        match s.recv_from(&mut buf) {
-            Ok((n, _)) => {
+    while start.elapsed() < timeout {
+        if sent < RESEND_AT.len() && start.elapsed() >= RESEND_AT[sent] {
+            sent += 1;
+            for s in &socks {
+                let _ = s.send_to(&query, MDNS_ADDR); // an adapter that can't send it: skip
+            }
+        }
+        for s in &socks {
+            // drain what arrived; any error (nothing yet, an ICMP "unreachable") ends this socket's turn
+            while let Ok((n, _)) = s.recv_from(&mut buf) {
                 if let Some(&ip) = parse_a_records(&buf[..n]).first() {
                     return Some(ip);
                 }
             }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(_) => return None,
         }
+        std::thread::sleep(Duration::from_millis(20));
     }
+    None
 }

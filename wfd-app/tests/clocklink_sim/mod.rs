@@ -114,6 +114,10 @@ pub struct SimState {
     pub opens: usize,
     pub clock_cfg: Map<String, Value>,
     pub version: Map<String, Value>,
+    /// extra keys of `state` in the clock's /api/status (app_connected, net, ...)
+    pub status_state: Map<String, Value>,
+    /// the USB device never answers (another board with the same chip)
+    pub usb_silent: bool,
 }
 
 /// Drives ClockLink on simulated time. wifi: no USB (until usb_present), the clock answers over
@@ -145,6 +149,8 @@ impl Sim {
             opens: 0,
             clock_cfg: clock_defaults(),
             version: version.as_object().unwrap().clone(),
+            status_state: Map::new(),
+            usb_silent: false,
         };
         Sim {
             ctx: Arc::clone(ctx),
@@ -363,6 +369,9 @@ impl SerialIo for FakeSerial {
         self.sim.log(&self.port, &line);
         let (cmd, arg) = line.split_once(' ').unwrap_or((&line, ""));
         let mut s = self.sim.st.borrow_mut();
+        if s.usb_silent {
+            return Ok(());
+        }
         match cmd {
             "CFG" => {
                 let mut all = s.clock_cfg.clone();
@@ -450,10 +459,11 @@ impl HttpApi for FakeHttp {
             return Err(LinkLost("timed out".into()));
         }
         Ok(match (method, path) {
-            ("GET", "/api/status") => (
-                200,
-                json!({"state": {"ntp": s.clock_ntp}, "config": s.clock_cfg.clone()}),
-            ),
+            ("GET", "/api/status") => {
+                let mut state = s.status_state.clone();
+                state.insert("ntp".into(), json!(s.clock_ntp));
+                (200, json!({"state": state, "config": s.clock_cfg.clone()}))
+            }
             ("POST", "/api/set") => {
                 let patch = body.unwrap().as_object().unwrap().clone();
                 let bad = validate(&s.clock_cfg, &patch);

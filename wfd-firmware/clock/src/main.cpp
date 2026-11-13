@@ -112,6 +112,13 @@ static uint32_t alertAt = 0;
 static const uint32_t ALERT_MAX_MS = 300000;   // an unanswered alert stops after 5 minutes
 static uint32_t timerLeft() { return cdEnd && (int32_t)(cdEnd - millis()) > 0 ? (cdEnd - millis() + 999) / 1000 : 0; }
 
+// A short notice on the message line (the IP or the setup AP after holding a button); scrolls
+// when longer than 6 characters and goes away by itself.
+static String infoText;
+static uint32_t infoUntil = 0, infoStepAt = 0;
+static int infoPos = 0;
+static bool infoOn() { return infoText.length() && (int32_t)(infoUntil - millis()) > 0; }
+
 static uint8_t msgRam[12] = {0};      // raw glyphs for the 6 message chars (lo,hi x6 = bytes 0..11)
 static uint32_t msgTime = 0;
 
@@ -308,7 +315,11 @@ static void draw() {
     extras::timerText(timerLeft(), buf);
     render6(String(buf), 0, ram);
   }
-  if (alertKind) {                                   // flash: everything on, then the reason
+  if (infoOn()) {                                 // notice from a held button, over the message line
+    if (infoText.length() <= 6) render6(infoText, 0, ram);
+    else { String d = infoText + "   "; render6(d + d, infoPos % d.length(), ram); }
+  }
+  if (alertKind) {                                 // flash: everything on, then the reason
     if ((millis() / 400) % 2) memset(ram, 0xFF, sizeof ram);
     else render6(String(alertKind == ALERT_TIMER ? " TIMER" : " ALARM"), 0, ram);
   }
@@ -317,6 +328,14 @@ static void draw() {
 
 static String line;
 static bool dirty = false;            // a command changed the display; loop() redraws once
+
+static void showInfo(const String &text, uint32_t ms) {
+  infoText = text;
+  infoUntil = millis() + ms;
+  infoStepAt = millis();
+  infoPos = 0;
+  dirty = true;
+}
 
 static void startAlert(int kind) {
   alertKind = kind;
@@ -672,7 +691,9 @@ static void handleSave() {
   prefs.putString("ssid", ssid);
   prefs.putString("pass", web.arg("pass"));
   web.send(200, "text/html", page("WFD WiFi Setup",
-           "<h2>Saved — connecting…</h2><p>Rejoin your normal WiFi. The clock is restarting.</p>"));
+           "<h2>Saved — connecting…</h2><p>Rejoin your normal WiFi. The clock is restarting.</p>"
+           "<p>Then open <b>http://wfd-clock.local</b>. If that doesn't load, hold any button on the clock "
+           "for 2 seconds: it scrolls its address (or opens this setup again if it couldn't join).</p>"));
   delay(900);
   ESP.restart();
 }
@@ -1459,7 +1480,10 @@ static const char *UPDATE_FORM =
     "<p class=dim>Upload a firmware .bin for this clock. It reboots when done. <a href=/>Back</a></p>";
 
 static void startWebRoutes() {
-  web.on("/", []() {                             // setup portal in AP mode, else the dashboard
+  static bool started = false;                   // the setup AP can open after the routes are up
+  if (started) return;
+  started = true;
+  web.on("/", []() {                            // setup portal in AP mode, else the dashboard
     if (apMode) return web.send(200, "text/html", setupPage());
     if (!webAuthed()) return;                      // so the browser has the login for the API calls
     web.sendHeader("Content-Encoding", "gzip");
@@ -1536,8 +1560,18 @@ static void startWebRoutes() {
   web.begin();
 }
 
-static void startAP() {
+// The "WFD-Setup" network with the WiFi picker. At boot when no network is saved; `byButton`
+// when a button was held while the saved network couldn't be joined (wrong password, new
+// router). That one gives up after 10 minutes and restarts, to try the saved network again.
+static uint32_t apSince = 0;
+static const uint32_t AP_GIVE_UP_MS = 600000;
+static void startAP(bool byButton = false) {
   apMode = true;
+  if (byButton) {
+    apSince = millis() | 1;
+    WiFi.setAutoReconnect(false);       // the retries would keep pulling the AP off its channel
+    WiFi.disconnect();
+  }
   WiFi.mode(WIFI_AP_STA);
   WiFi.scanNetworks(true);
   WiFi.softAP("WFD-Setup");
@@ -1615,6 +1649,7 @@ static void wifiLoop() {
   if (apMode) {
     dns.processNextRequest();
     web.handleClient();
+    if (apSince && millis() - apSince > AP_GIVE_UP_MS) ESP.restart();
     return;
   }
   if (WiFi.status() == WL_CONNECTED) {
@@ -1706,21 +1741,44 @@ void setup() {
                 specStyle, brightness, gaN, gaAuto, msgMode, omAuto, apMode ? "setup-AP" : "connecting");
 }
 
+// Any button held for 2 s: where is the clock on the network? On WiFi it scrolls its address;
+// off WiFi it opens the "WFD-Setup" network so a phone can pick a network again.
+static void wifiButton() {
+  if (apMode) {
+    showInfo("JOIN WFD-SETUP WIFI", 60000);
+  } else if (WiFi.status() == WL_CONNECTED) {
+    showInfo("IP " + WiFi.localIP().toString(), 20000);
+  } else {
+    startAP(true);
+    showInfo("JOIN WFD-SETUP WIFI", 60000);
+  }
+  Serial.printf("button held -> %s\n", infoText.c_str());
+}
+
 static void checkButtons() {
   static uint8_t prev[3] = {1, 1, 1};
-  static uint32_t lastPress = 0;
+  static uint32_t edgeAt[3] = {0, 0, 0};
+  static bool used[3] = {false, false, false};   // this press already did something
   const int pins[3] = {25, 26, 27};
+  const uint32_t HOLD_MS = 2000;
   for (int i = 0; i < 3; i++) {
     uint8_t v = digitalRead(pins[i]);
-    if (prev[i] == 1 && v == 0 && millis() - lastPress > 200) {   // falling edge, debounced
-      lastPress = millis();
-      if (alertKind) { stopAlert(); draw(); prev[i] = v; continue; }   // any button stops an alert
-      if (i == 0) setStyle(specStyle <= 1 ? N_STYLES : specStyle - 1);   // left: prev
-      else setStyle(specStyle >= N_STYLES ? 1 : specStyle + 1);          // middle/right: next
-      Serial.printf("button %d -> style %d\n", i, specStyle);
-      draw();
+    if (v != prev[i] && millis() - edgeAt[i] > 40) {   // debounced edge
+      prev[i] = v;
+      edgeAt[i] = millis();
+      if (v == 0) {                                    // pressed: any button stops an alert
+        used[i] = false;
+        if (alertKind) { stopAlert(); draw(); used[i] = true; }
+      } else if (!used[i]) {                           // released after a short press
+        if (i == 0) setStyle(specStyle <= 1 ? N_STYLES : specStyle - 1);   // left: prev
+        else setStyle(specStyle >= N_STYLES ? 1 : specStyle + 1);          // middle/right: next
+        Serial.printf("button %d -> style %d\n", i, specStyle);
+        draw();
+      }
+    } else if (prev[i] == 0 && !used[i] && millis() - edgeAt[i] >= HOLD_MS) {
+      used[i] = true;
+      wifiButton();
     }
-    prev[i] = v;
   }
 }
 
@@ -1757,6 +1815,10 @@ void loop() {
   if (millis() - extrasAt >= 200) {
     extrasAt = millis();
     if (extrasTick()) redraw = true;
+  }
+  if (infoText.length()) {             // the notice: scroll it, drop it when its time is up
+    if (!infoOn()) { infoText = ""; redraw = true; }
+    else if (infoText.length() > 6 && millis() - infoStepAt >= 350) { infoStepAt = millis(); infoPos++; redraw = true; }
   }
   if (redraw || dirty) {               // one I2C flush per pass, however many commands arrived
     dirty = false;

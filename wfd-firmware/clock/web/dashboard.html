@@ -123,6 +123,7 @@
       driver by itself; if it hasn't, get <b>CH341SER.EXE</b> from
       <a href="https://www.wch-ic.com/downloads/CH341SER_EXE.html" target="_blank" rel="noopener">WCH, the chip's maker</a>,
       run it, then unplug and replug the clock.</div>
+    <div class="banner warn app-only" id="linkBanner" hidden><span id="linkProblem"></span>.</div>
   </section>
 
   <section>
@@ -373,7 +374,7 @@ function view(s) {
     conn: s.connected ? (s.link === 'wifi' ? 'clock on WiFi · ' + s.port.slice(5) : 'clock on USB · ' + s.port)
                       : s.usb_problem ? 'clock on USB needs a driver'
                       : (cfg.link === 'usb' ? 'clock not found on USB' : 'looking for the clock (USB / WiFi)…'),
-    usbProblem: s.usb_problem || '',
+    usbProblem: s.usb_problem || '', linkProblem: s.link_problem || '',
     time: (s.time || '').split(' ').pop() || '--:--:--', message: (s.message || '').replace(/^temp /, ''),
     rows: s.grid_rows || null, border: !!(s.grid_rows && cfg.grid_frame),
     cols: cfg.spectrum ? [s.levels.out, s.levels.mic] : [0, 0],
@@ -407,6 +408,8 @@ function show(v) {
   $('#appBanner').hidden = !v.appDriving;
   $('#usbBanner').hidden = !v.usbProblem;
   if (v.usbProblem) $('#usbProblem').textContent = v.usbProblem[0].toUpperCase() + v.usbProblem.slice(1);
+  $('#linkBanner').hidden = !v.linkProblem;
+  if (v.linkProblem) $('#linkProblem').textContent = v.linkProblem[0].toUpperCase() + v.linkProblem.slice(1);
   $('#fw').textContent = v.fw || '';
   const fcw = v.s.weather || {}, fc = fcw.forecast || [];
   $('#fcBox').hidden = !fc.length;

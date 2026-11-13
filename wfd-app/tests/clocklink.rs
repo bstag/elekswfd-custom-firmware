@@ -470,3 +470,23 @@ fn app_expands_every_firmware_placeholder() {
     let msg = ctx.state().message.clone();
     assert!(!msg.contains('{'), "{msg}");
 }
+
+#[test]
+fn nothing_is_sent_while_the_clock_is_being_updated() {
+    let ctx = app();
+    let s = Sim::new(&ctx, 6.0)
+        .event(2.0, |s| s.ctx.state().update.state = "uploading".into())
+        .event(4.0, |s| s.ctx.state().update.state = "done".into());
+    s.run();
+    let times: Vec<f64> = s
+        .lines()
+        .iter()
+        .map(|l| l.split_whitespace().next().unwrap().parse().unwrap())
+        .collect();
+    assert!(times.iter().any(|t| *t < 2.0) && times.iter().any(|t| *t > 4.6));
+    assert!(
+        !times.iter().any(|t| (2.6..4.0).contains(t)),
+        "quiet during the upload"
+    );
+    assert!(s.sent().contains(&"BYE".to_string()), "the clock is told the app let go");
+}

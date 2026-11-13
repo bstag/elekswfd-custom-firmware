@@ -373,3 +373,64 @@ fn http_garbage_or_no_answer_is_link_lost() {
     let err: LinkLost = http.call("GET", "/api/status", None).unwrap_err();
     assert!(!err.0.is_empty());
 }
+
+#[test]
+fn one_missed_answer_does_not_drop_the_link() {
+    // the clock is busy for a few seconds (its weather fetch): no reconnect, no gap in the stream
+    let ctx = app();
+    let s = Sim::new(&ctx, 20.0)
+        .wifi("")
+        .event(4.0, |s| s.st.borrow_mut().wifi_down = true)
+        .event(9.0, |s| s.st.borrow_mut().wifi_down = false);
+    s.run();
+    assert_eq!(s.st.borrow().wifi_opens, 1, "the link was kept");
+    assert!(ctx.state().connected);
+}
+
+#[test]
+fn a_rejected_stream_is_reported() {
+    // the clock answers HTTP but throws our packets away: wrong clock password
+    let ctx = app();
+    let s = Sim::new(&ctx, 14.0).wifi("wrong");
+    s.st.borrow_mut().status_state = json!({"app_connected": false,
+        "net": {"key_required": true, "udp_rejected": 10}})
+    .as_object()
+    .unwrap()
+    .clone();
+    let s = s
+        .event(7.0, |s| s.st.borrow_mut().status_state["net"]["udp_rejected"] = json!(200))
+        .event(12.0, |s| s.st.borrow_mut().status_state["net"]["udp_rejected"] = json!(400));
+    s.run();
+    let problem = ctx.state().link_problem.clone().unwrap_or_default();
+    assert!(problem.contains("wrong clock password"), "{problem:?}");
+}
+
+#[test]
+fn a_clock_taking_the_stream_reports_nothing() {
+    let ctx = app();
+    let s = Sim::new(&ctx, 14.0).wifi("");
+    s.st.borrow_mut().status_state =
+        json!({"app_connected": true, "net": {"key_required": false, "udp_rejected": 0}})
+            .as_object()
+            .unwrap()
+            .clone();
+    s.run();
+    assert_eq!(ctx.state().link_problem, None);
+}
+
+#[test]
+fn a_usb_device_that_is_not_the_clock_is_skipped_for_wifi() {
+    // another board with the same USB chip is plugged in; the clock itself is on WiFi
+    let ctx = app();
+    let s = Sim::new(&ctx, 30.0).wifi("");
+    {
+        let mut st = s.st.borrow_mut();
+        st.usb_present = true;
+        st.usb_silent = true;
+    }
+    s.run();
+    let st = ctx.state();
+    assert!(st.connected && st.link.as_deref() == Some("wifi"), "{:?}", st.link);
+    assert_eq!(s.st.borrow().opens, 1, "the other device was probed once, then left alone");
+    assert_eq!(s.st.borrow().wifi_opens, 1, "and the WiFi link wasn't dropped for it");
+}

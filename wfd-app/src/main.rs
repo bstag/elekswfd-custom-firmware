@@ -153,6 +153,9 @@ fn main() {
         eprintln!("can't write {}: {e}", args.config.display());
     }
     on_ctrl_c(Arc::clone(&ctx.stop));
+    // where the clock answered last time: tried first, before any lookup by name
+    let last_ip = link::load_last_ip(&ctx);
+    ctx.state().clock_ip = last_ip;
 
     audio::start(Arc::clone(&ctx.audio), Arc::clone(&ctx.stop));
     metrics::start(Arc::clone(&ctx.metrics), Arc::clone(&ctx.stop));

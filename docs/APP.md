@@ -115,8 +115,21 @@ env. The Rust installer renames that copy to `.vbs.disabled` so only one app run
 The app talks to the clock over **USB** or **WiFi** (setting `link`, in the *Connection* section):
 
 - **Auto** (default): USB when the clock is plugged in, otherwise WiFi. While on WiFi it checks
-  for USB every 10 s and switches over.
+  for USB every 10 s and switches over once the port has opened. A port that another program
+  holds, or a different board with the same USB chip (it doesn't answer `CFG`), is left alone
+  for 5 minutes and WiFi keeps serving; the dashboard says which it is when nothing connects.
 - **USB only** / **WiFi only**.
+
+Finding the clock on WiFi, in order: a typed IP (`clock_host`), the address it last answered
+on (kept in `clock-ip.txt` next to the settings, so it survives a restart), then its name. The
+name lookup goes out on every network adapter and is repeated, so a VPN or virtual adapter
+(Tailscale, Hyper-V, WSL) doesn't swallow it. A typed IP that stops answering falls back to
+the name, since the router may have given the clock a new address.
+
+Once connected over WiFi, one missed answer doesn't drop the link (the clock is busy for a few
+seconds when it fetches the weather); 15 s of silence does. If the clock answers but isn't
+taking the live display, the dashboard says why: a wrong or missing clock password, or UDP
+port 4210 blocked. The display stream stops while "Update clock" uploads firmware.
 
 If the clock is plugged in but Windows has no driver for its USB chip (no COM port), the
 dashboard says so and links to the driver (Rust app; see

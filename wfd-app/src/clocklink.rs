@@ -132,6 +132,8 @@ pub struct ClockLink {
     last_usb_check: f64,
     /// (link, clock_host, clock_pass) the link was made with
     link_cfg: [Value; 3],
+    /// a CH340 port that didn't answer like the clock, and when we found out
+    not_clock: Option<(String, f64)>,
     grid: GridEngine,
 }
 
@@ -182,6 +184,7 @@ impl ClockLink {
             last_cfg: 0.0,
             last_usb_check: 0.0,
             link_cfg: Default::default(),
+            not_clock: None,
             grid,
         }
     }
@@ -189,6 +192,15 @@ impl ClockLink {
     /// The loop: connect, one frame, flush, sleep a tick; until `ctx.stop`.
     pub fn run(&mut self) {
         while !self.ctx.stopping() {
+            if self.ctx.state().update.state == "uploading" {
+                // "Update clock" is sending firmware: leave the clock alone until it's done
+                if self.link.is_some() {
+                    self.say_bye();
+                    self.drop_link();
+                }
+                self.clock.sleep(0.5);
+                continue;
+            }
             if !self.connect() {
                 self.clock.sleep(2.0);
                 continue;
@@ -199,7 +211,8 @@ impl ClockLink {
                 Some(l) => l.flush(),
                 None => Ok(()),
             });
-            if res.is_err() {
+            if let Err(e) = res {
+                eprintln!("clock link lost: {e}");
                 self.drop_link();
             }
             self.clock.sleep(TICK);
@@ -221,6 +234,7 @@ impl ClockLink {
         let mut st = self.ctx.state();
         st.connected = false;
         st.link = None;
+        st.link_problem = None;
     }
 
     fn link(&mut self) -> &mut dyn Link {
@@ -245,24 +259,81 @@ impl ClockLink {
                 .unwrap_or("auto")
                 .to_string()
         };
-        let serial = if mode == "auto" || mode == "usb" {
+        // In auto mode, a CH340 port that just turned out not to be the clock is left alone
+        // for a while (WiFi serves meanwhile) instead of being probed again on every connect.
+        let port = (self.p.find_port)();
+        let skip_usb = mode == "auto" && self.is_not_clock(port.as_deref());
+        let serial = if (mode == "auto" || mode == "usb") && !skip_usb {
             (self.p.open_serial)()
         } else {
             None
         };
-        self.link = match serial {
-            Some(s) => Some(Box::new(UsbLink::new(s, Rc::clone(&self.clock)))),
-            None if mode == "auto" || mode == "wifi" => (self.p.open_wifi)(&self.ctx),
-            None => None,
-        };
+        if let Some(s) = serial {
+            let link: Box<dyn Link> = Box::new(UsbLink::new(s, Rc::clone(&self.clock)));
+            match self.start_link(link) {
+                Ok(true) => return true,
+                Ok(false) => {
+                    let name = port.clone().unwrap_or_else(|| self.link().name());
+                    self.set_not_clock(name);
+                }
+                Err(_) => {
+                    self.drop_link();
+                    return false;
+                }
+            }
+        }
+        if mode == "auto" || mode == "wifi" {
+            if let Some(link) = (self.p.open_wifi)(&self.ctx) {
+                return match self.start_link(link) {
+                    Ok(_) => true,
+                    Err(_) => {
+                        self.drop_link();
+                        false
+                    }
+                };
+            }
+        }
+        self.not_clock = None; // nothing else to use: probe that USB port again next time
+        if port.is_none() {
+            self.ctx.state().link_problem = None; // nothing plugged in: no USB complaint to show
+        }
+        if let Some(port) = port.filter(|_| mode != "wifi" && self.ctx.state().link_problem.is_none()) {
+            // (reached only when the port didn't open: a silent one set its own message above)
+            self.ctx.state().link_problem = Some(format!(
+                "{port} is the clock's USB port, but another program has it open (a serial monitor, or a second copy of this app)"
+            ));
+        }
+        false
+    }
+
+    /// Nothing on `port` speaks our protocol (another board with the same USB chip): drop it,
+    /// say so, and leave it alone for a while.
+    fn set_not_clock(&mut self, port: String) {
+        self.drop_link();
+        link::avoid_port(&port);
+        self.ctx.state().link_problem = Some(format!(
+            "{port} doesn't answer like the clock (another device with the same USB chip, or the stock firmware)"
+        ));
+        self.not_clock = Some((port, self.clock.now()));
+    }
+
+    /// Is `port` the one that recently didn't answer like the clock?
+    fn is_not_clock(&self, port: Option<&str>) -> bool {
+        match (&self.not_clock, port) {
+            (Some((name, at)), Some(port)) => name == port && self.clock.now() - at < 300.0,
+            _ => false,
+        }
+    }
+
+    /// Take `link` into use: forget what was sent, read the clock's settings, sync its time.
+    /// Ok(false): the link is open but nothing answered like the clock (USB only).
+    fn start_link(&mut self, link: Box<dyn Link>) -> Result<bool, LinkLost> {
+        self.link = Some(link);
         {
             let mut st = self.ctx.state();
-            st.connected = self.link.is_some();
+            st.connected = true;
             st.port = self.link.as_ref().map(|l| l.name());
             st.link = self.link.as_ref().map(|l| l.kind().to_string());
-        }
-        if self.link.is_none() {
-            return false;
         }
         self.link_cfg = {
             let cfg = self.ctx.cfg.lock().unwrap();
@@ -271,41 +342,46 @@ impl ClockLink {
         self.sent.clear(); // a fresh (or power-cycled) clock needs everything again
         // First the clock's settings: they also tell whether it has NTP time.
         // (app.py lets an error here escape and end the thread; here it just drops the link)
-        let res = self.read_clock_config().and_then(|()| {
-            let sync = truthy(self.ctx.cfg.lock().unwrap().get("time_sync"));
-            if sync && !self.link().clock_ntp() {
-                self.set_time()
-            } else {
-                Ok(())
-            }
-        });
-        if res.is_err() {
-            self.drop_link();
-            return false;
+        let mut answered = self.read_clock_config()?;
+        if !answered {
+            answered = self.read_clock_config()?; // it may have been busy: once more
+        }
+        if !answered {
+            return Ok(false);
+        }
+        let sync = truthy(self.ctx.cfg.lock().unwrap().get("time_sync"));
+        if sync && !self.link().clock_ntp() {
+            self.set_time()?;
         }
         self.last_sync = self.clock.now();
-        true
+        Ok(true)
     }
 
-    fn read_clock_config(&mut self) -> Result<(), LinkLost> {
+    /// Read the clock's settings into `state.clock`. Ok(false): it didn't answer (USB).
+    fn read_clock_config(&mut self) -> Result<bool, LinkLost> {
         let link = self.link();
         let config = link.get_config()?;
         let (fw, protocol) = link.version();
         let ip = link.clock_ip();
         let pw_set = link.web_password_set();
+        let problem = link.problem();
+        let answered = config.is_some();
         if let Some(c) = config {
-            let mut st = self.ctx.state();
-            st.clock = Some(c);
-            st.clock_read_at = Some(std::time::Instant::now());
-            st.clock_fw = fw;
-            st.clock_protocol = protocol;
-            st.clock_pw_set = pw_set;
-            if ip.is_some() {
-                st.clock_ip = ip;
+            {
+                let mut st = self.ctx.state();
+                st.clock = Some(c);
+                st.clock_read_at = Some(std::time::Instant::now());
+                st.clock_fw = fw;
+                st.clock_protocol = protocol;
+                st.clock_pw_set = pw_set;
+                st.link_problem = problem;
+            }
+            if let Some(ip) = ip {
+                link::remember_ip(&self.ctx, &ip);
             }
         }
         self.last_cfg = self.clock.now();
-        Ok(())
+        Ok(answered)
     }
 
     /// Answer the web server's CFGSET requests (then re-read the clock's settings).
@@ -425,14 +501,36 @@ impl ClockLink {
             && self.clock.now() - self.last_usb_check > 10.0
         {
             self.last_usb_check = self.clock.now(); // plugged in meanwhile? USB is the better link
-            if (self.p.find_port)().is_some() {
+            let port = (self.p.find_port)();
+            if let Some(port) = port.filter(|p| !self.is_not_clock(Some(p))) {
+                // Only leave WiFi once the port has opened: a port another program holds would
+                // otherwise cost a reconnect every time we look.
+                let Some(serial) = (self.p.open_serial)() else {
+                    self.not_clock = Some((port, self.clock.now())); // look again in a few minutes
+                    return Ok(());
+                };
                 self.drop_link();
+                let usb: Box<dyn Link> = Box::new(UsbLink::new(serial, Rc::clone(&self.clock)));
+                match self.start_link(usb) {
+                    Ok(true) => {}
+                    Ok(false) => self.set_not_clock(port),
+                    Err(_) => self.drop_link(),
+                }
                 return Ok(());
             }
         }
         self.run_clock_requests()?;
         if self.clock.now() - self.last_cfg > 5.0 {
-            self.read_clock_config()?; // pick up changes made on the clock itself
+            // pick up changes made on the clock itself
+            if let Err(e) = self.read_clock_config() {
+                // Over WiFi one missed answer isn't a lost clock (it is busy for seconds when it
+                // fetches the weather): keep going and ask again soon. The link ends itself when
+                // nothing has answered for a while (`alive`).
+                if !self.link.as_ref().is_some_and(|l| l.kind() == "wifi" && l.alive()) {
+                    return Err(e);
+                }
+                self.last_cfg = self.clock.now() - 3.0;
+            }
         }
         self.push_location()?;
         self.run_upload()?;

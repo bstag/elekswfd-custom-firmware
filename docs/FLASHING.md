@@ -105,8 +105,15 @@ On first boot with no saved WiFi, the clock hosts an access point **"WFD-Setup"*
    **case‑sensitive** (e.g. `bluey` ≠ `Bluey`).
 4. Save. The clock restarts, joins your WiFi, and syncs NTP time + weather.
 
-Find the clock's IP from your router, or it's shown on the status page. Serial
-fallbacks (see [FIRMWARE.md](FIRMWARE.md)): `WIFISCAN`, `WIFIINFO`, `WIFIRESET`.
+**Hold any button for 2 seconds** to find the clock on the network:
+
+- On WiFi, it scrolls its address on the message line (`IP 192.168.0.152`) for 20 seconds.
+- Off WiFi (wrong password, new router), it opens **WFD-Setup** again and scrolls
+  `JOIN WFD-SETUP WIFI`. The saved network is kept until you save a new one; after
+  10 minutes without a save the clock restarts and tries the saved network again.
+
+A short press still changes the spectrum style (now on release). The address is also on
+the status page and in your router. Serial fallbacks (see [FIRMWARE.md](FIRMWARE.md)): `WIFISCAN`, `WIFIINFO`, `WIFIRESET`.
 
 ## OTA updates (after the first flash — no USB ever again)
 

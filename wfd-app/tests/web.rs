@@ -255,6 +255,7 @@ fn status_returns_state_and_config() {
         "release",
         "update",
         "grid_rows",
+        "link_problem",
         "usb_problem",
         "clock_pass_set",
         "app_protocol",

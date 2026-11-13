@@ -33,6 +33,7 @@ pub const BUILTIN_GRID: [&str; 12] = [
 
 /// How long `/api/set` waits for the clock (app.py set_clock default).
 const CLOCK_TIMEOUT: Duration = Duration::from_secs(3);
+const SLOW_CLOCK_TIMEOUT: Duration = Duration::from_secs(12);
 
 /// Serve the dashboard + API on `addr` (e.g. "127.0.0.1:8737") until ctx.stop.
 /// Panics if the address can't be bound (like app.py, which can't start without its port).
@@ -225,7 +226,9 @@ fn api_set(ctx: &Ctx, body: Map<String, Value>) -> Reply {
     }
     let mut warning = None;
     if !clock.is_empty() {
-        match ctx.set_clock(clock, CLOCK_TIMEOUT) {
+        // a new ZIP is looked up by the clock before it answers
+        let wait = if crate::link::is_slow_patch(&clock) { SLOW_CLOCK_TIMEOUT } else { CLOCK_TIMEOUT };
+        match ctx.set_clock(clock, wait) {
             Ok(w) => warning = w.filter(truthy),
             Err(info) => return json_reply(400, json!({"error": info})),
         }
