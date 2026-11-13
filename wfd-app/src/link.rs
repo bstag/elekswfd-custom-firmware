@@ -984,6 +984,32 @@ pub fn remember_ip(ctx: &Ctx, ip: &str) {
     }
 }
 
+/// Does the clock's web API answer at `ip`? (its status page needs no password)
+fn answers(ip: &str) -> bool {
+    UreqHttp::new(ip, "", HTTP_TIMEOUT)
+        .call("GET", "/api/status", None)
+        .is_ok_and(|(code, body)| code == 200 && body.get("state").is_some())
+}
+
+/// The clock's address for "Update clock": like [`find_clock_ip`], but only an address the
+/// clock answers on. A typed-in IP that has gone stale (the router moved the clock) gives way
+/// to the address the clock itself reported or last answered on, then to a lookup by name.
+pub fn find_answering_clock_ip(ctx: &Ctx) -> Option<String> {
+    let mut tried: Vec<String> = Vec::new();
+    let known = ctx.state().clock_ip.clone();
+    for ip in [find_clock_ip(ctx), known].into_iter().flatten() {
+        if tried.contains(&ip) {
+            continue;
+        }
+        if answers(&ip) {
+            return Some(ip);
+        }
+        tried.push(ip);
+    }
+    let found = crate::mdns::resolve(CLOCK_NAME, MDNS_TIMEOUT)?.to_string();
+    (!tried.contains(&found) && answers(&found)).then_some(found)
+}
+
 fn try_wifi(ctx: &Ctx, ip: &str, pw: &str, clock: &Rc<dyn Clock>) -> Option<Box<dyn Link>> {
     let mut link = WifiLink::new(ip, pw, Rc::clone(clock)).ok()?;
     if link.get_config().is_err() {

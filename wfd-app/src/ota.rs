@@ -113,7 +113,7 @@ pub struct OtaHooks {
 impl OtaHooks {
     pub fn real() -> Self {
         OtaHooks {
-            find_clock_ip: Box::new(crate::link::find_clock_ip),
+            find_clock_ip: Box::new(crate::link::find_answering_clock_ip),
             upload_firmware: Box::new(upload_firmware),
             wait_for_build: Box::new(wait_for_build),
             clock_report: Box::new(clock_report),

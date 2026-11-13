@@ -51,3 +51,13 @@ fn a_stale_address_is_forgotten() {
     assert!(open_wifi(&ctx, Rc::new(RealClock)).is_none());
     assert_eq!(ctx.state().clock_ip, None, "next time: look it up by name");
 }
+
+#[test]
+fn an_update_skips_addresses_that_do_not_answer() {
+    // a typed-in IP and a remembered one, both dead (TEST-NET), and a name nothing answers to
+    let ctx = app();
+    set_cfg(&ctx, json!({"clock_host": "192.0.2.1"}));
+    ctx.state().clock_ip = Some("192.0.2.2".into());
+    let found = wfd_app::link::find_answering_clock_ip(&ctx);
+    assert!(found.as_deref() != Some("192.0.2.1") && found.as_deref() != Some("192.0.2.2"), "{found:?}");
+}
