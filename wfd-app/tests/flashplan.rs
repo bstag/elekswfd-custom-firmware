@@ -62,3 +62,15 @@ fn recognises_our_firmware_by_its_cfg_reply() {
 fn backups_are_named_by_time() {
     assert_eq!(backup_name("20261017-141500"), "clock-backup-20261017-141500.bin");
 }
+
+#[test]
+fn our_firmware_is_recognised_inside_a_flash_image() {
+    use wfd_app::flashplan::firmware_in_image;
+    let mut img = vec![0xFFu8; 4096];
+    img.extend_from_slice(b"junk wfd-clock.local more wfd-clock ready, style\0");
+    img.extend_from_slice(b"wfd-clock Nov  3 2026 08:05:09\0");
+    img.extend_from_slice(&[0xFF; 64]);
+    assert_eq!(firmware_in_image(&img).as_deref(), Some("wfd-clock Nov  3 2026 08:05:09"));
+    assert_eq!(firmware_in_image(&[0xFF; 4096]), None);
+    assert_eq!(firmware_in_image(b"stock firmware, EleksWFD, wfd-clock "), None);
+}

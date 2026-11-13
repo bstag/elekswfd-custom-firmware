@@ -313,6 +313,8 @@ pub struct UsbLink {
     protocol: Option<u32>,
     ip: Option<String>,
     pw_set: Option<bool>,
+    /// the clock said it has internet time (CFG `_ntp`; older firmware doesn't say: false)
+    ntp: bool,
 }
 
 impl UsbLink {
@@ -326,6 +328,7 @@ impl UsbLink {
             protocol: None,
             ip: None,
             pw_set: None,
+            ntp: false,
         }
     }
 
@@ -372,9 +375,10 @@ impl Link for UsbLink {
         self.s.is_open()
     }
 
-    /// Unknown over USB: keep sending the PC's time.
+    /// A clock with internet time keeps its own (in its own time zone setting): sending the
+    /// PC's time as well made the two take turns when the zones differed.
     fn clock_ntp(&self) -> bool {
-        false
+        self.ntp
     }
 
     fn version(&self) -> (Option<String>, Option<u32>) {
@@ -429,6 +433,7 @@ impl Link for UsbLink {
             .and_then(|v| v.as_str().map(str::to_owned))
             .filter(|ip| !ip.is_empty()); // "" = the clock isn't on WiFi
         self.pw_set = c.remove("_pw").and_then(|v| v.as_bool());
+        self.ntp = c.remove("_ntp").and_then(|v| v.as_bool()).unwrap_or(false);
         Ok(Some(c))
     }
 
@@ -809,7 +814,7 @@ static AVOID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 /// `name` has a CH340 chip but isn't the clock (plenty of boards use that chip): from now on
 /// [`find_port`] prefers any other CH340 port, and only falls back to this one.
 pub fn avoid_port(name: &str) {
-    *AVOID.lock().unwrap() = Some(name.to_string());
+    *AVOID.lock().unwrap_or_else(|e| e.into_inner()) = Some(name.to_string());
 }
 
 /// The clock's serial port (CH340), if plugged in.
@@ -824,7 +829,7 @@ pub fn find_port() -> Option<String> {
             _ => None,
         })
         .collect();
-    let avoid = AVOID.lock().unwrap().clone();
+    let avoid = AVOID.lock().unwrap_or_else(|e| e.into_inner()).clone();
     ports
         .iter()
         .find(|p| Some(*p) != avoid.as_ref())
@@ -926,7 +931,7 @@ fn is_dotted_quad(host: &str) -> bool {
 /// USB, `_ip`) or last answered on; else the configured name / wfd-clock.local via DNS or mDNS.
 pub fn find_clock_ip(ctx: &Ctx) -> Option<String> {
     let host = {
-        let cfg = ctx.cfg.lock().unwrap();
+        let cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
         cfg.get("clock_host")
             .and_then(Value::as_str)
             .unwrap_or("")
@@ -1024,7 +1029,7 @@ fn try_wifi(ctx: &Ctx, ip: &str, pw: &str, clock: &Rc<dyn Clock>) -> Option<Box<
 pub fn open_wifi(ctx: &Ctx, clock: Rc<dyn Clock>) -> Option<Box<dyn Link>> {
     let ip = find_clock_ip(ctx)?;
     let (pw, host) = {
-        let cfg = ctx.cfg.lock().unwrap();
+        let cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
         let text = |k: &str| cfg.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         (text("clock_pass"), text("clock_host").trim().to_string())
     };

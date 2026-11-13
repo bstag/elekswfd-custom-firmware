@@ -118,7 +118,7 @@ fn get(ctx: &Ctx, path: &str) -> Reply {
 /// GET /api/status: state (+ clock_pass_set, app_protocol, compat, update_available) and
 /// config = app settings + the clock's own, with the password blanked.
 pub fn status(ctx: &Ctx) -> Value {
-    let cfg = ctx.cfg.lock().unwrap();
+    let cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
     let st = ctx.state();
     let mut shown = cfg.clone();
     if let Some(clock) = &st.clock {
@@ -234,7 +234,7 @@ fn api_set(ctx: &Ctx, body: Map<String, Value>) -> Reply {
         }
     }
     {
-        let mut cfg = ctx.cfg.lock().unwrap();
+        let mut cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
         cfg.extend(clean);
         if let Err(e) = config::save(&ctx.cfg_path, &cfg) {
             return json_reply(500, json!({"error": format!("can't save settings: {e}")}));
@@ -261,7 +261,7 @@ fn grid_preview(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
         }
     }
     let frame = body.get("frame").is_some_and(truthy);
-    *ctx.grid_preview.lock().unwrap() = crate::ctx::GridPreview {
+    *ctx.grid_preview.lock().unwrap_or_else(|e| e.into_inner()) = crate::ctx::GridPreview {
         rows,
         frame,
         at: Some(Instant::now()),
@@ -281,7 +281,7 @@ fn grid_save(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
     }
     let drawn = drawn.filter(truthy);
     let (anim, custom, fps, frame) = {
-        let cfg = ctx.cfg.lock().unwrap();
+        let cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
         let anim = body
             .get("anim")
             .or(cfg.get("grid_anim"))
@@ -327,7 +327,7 @@ fn grid_save(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
         UploadJob::Frames { frames, .. } => frames.len(),
         UploadJob::Anim { .. } => 1,
     };
-    ctx.uploads.lock().unwrap().push_back(job);
+    ctx.uploads.lock().unwrap_or_else(|e| e.into_inner()).push_back(job);
     json_reply(200, json!({"queued": queued}))
 }
 

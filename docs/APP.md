@@ -141,8 +141,17 @@ uploads use the clock's web API. The clock is found as `wfd-clock.local`: the ap
 itself, because Windows doesn't always resolve `.local` names. You can also enter an IP
 (`clock_host`). Over USB the clock tells the app its WiFi address (`_ip` in `CFG`), so "Update clock" and a switch to WiFi go straight there; otherwise the app remembers the last address that worked, and forgets it if it stops answering. To set the clock's web password, use *Clock web password* in this section while the clock is on USB: it's sent over USB only, so only someone with the clock in hand can change it, and the app saves it as its own password (`clock_pass`) so WiFi and updates keep working. (Rust app; the Python app doesn't have this.) If the clock already has a web password set some other way
 (serial `WEBPASS`), enter it as the clock password (`clock_pass`). The app never shows it back.
-A clock with internet time (NTP) keeps its own time over WiFi; the app sends the PC's time only
-if the clock hasn't synced.
+A clock with internet time (NTP) keeps its own time, over WiFi and over USB (`_ntp` in `CFG`);
+the app sends the PC's time only if the clock hasn't synced, or when you press *Sync now*. The
+clock shows that time in its own *Time zone* setting, so set that if it differs from the PC's.
+
+`wfd-app.log` (next to the settings) records starts and stops, panics, each time the clock
+connects and why a link was lost; a repeating line is written at most once in 10 minutes. A
+worker thread that crashes is started again (after 2 s, then longer each time, up to a minute).
+The GPU load comes from Windows' own counters (`GPU Engine`, what Task Manager shows): the
+busiest engine of any GPU in the PC, NVIDIA, AMD or Intel. Only where Windows has no such
+counters does the app fall back to one `nvidia-smi` kept running in its repeat mode (it ends
+with the app).
 
 The clock still needs power, so a USB charger is enough once the app uses WiFi.
 

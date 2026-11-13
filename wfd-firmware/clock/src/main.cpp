@@ -96,6 +96,8 @@ static int barCpu = 0, barGpu = 0, barRam = 0;   // 0..100 percent
 static uint32_t barsTime = 0;
 static int wxCode = 0, wxTemp = 0, wxUnit = 0;   // code 0=none 1=sunny 2=cloud 3=rains; unit 0=F 1=C
 static uint32_t wxTime = 0;
+static bool wxHave = false;           // some weather has arrived since boot (wxTime 0 isn't "fresh")
+static bool wxFresh() { return wxHave && millis() - wxTime < 1200000; }   // PC every 60 s, own fetch every 15 min
 static int wxScene = -1;              // grid::Scene from our own fetch (WMO code + day/night), -1 = none yet
 static uint32_t wxSceneTime = 0;
 static int wxScenePick = -1;          // "weather_scene" setting: a grid::Scene, or -1 = auto
@@ -290,7 +292,7 @@ static void draw() {
     drawBar(BAR_RAM_BYTE, BAR_RAM_MASK, barRam, LBL_RAM_BYTE, LBL_RAM_MASK, PCT_RAM_BYTE, PCT_RAM_MASK);
   }
   bool appOn = millis() - appTime < 2000;
-  bool wxLive = millis() - wxTime < 1200000;   // weather fresh (PC every 60s, on-device every 15min)
+  bool wxLive = wxFresh();
   if (wxLive) drawWeatherWord();
   if (millis() - msgTime < 1500) {                  // live scrolling text from the app
     for (int i = 0; i < 12; i++) ram[i] = msgRam[i];
@@ -558,6 +560,7 @@ static void handle(const String &s) {
     wxTemp = constrain(v[1], -99, 199);
     wxUnit = v[2] ? 1 : 0;
     wxTime = millis();
+    wxHave = true;
     dirty = true;
   } else if (cmd == "STYLE") {
     int v = arg.toInt();
@@ -817,8 +820,6 @@ static void setGridAnim(int anim, int fps, int flag) {
 static const char *DAY_ABBR[7] = {"MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"};
 static const char *DAY_FULL[7] = {"MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"};
 static const char *MON_ABBR[12] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
-
-static bool wxFresh() { return millis() - wxTime < 1200000; }
 
 static String tempText() { return String(wxTemp) + (wxUnit ? "C" : "F"); }
 
@@ -1167,6 +1168,7 @@ static void serialCfg(const String &json) {
   cfg["_protocol"] = WFD_PROTOCOL;
   cfg["_ip"] = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String();   // "" off WiFi
   cfg["_pw"] = webPass.length() > 0;                // a web password is set (WEBPASS)
+  cfg["_ntp"] = ntpSynced;                          // has internet time: the app leaves the clock's time alone
   Serial.print(json.length() ? "CFGOK " : "CFG ");
   serializeJson(cfg, Serial);
   Serial.println();
@@ -1489,7 +1491,7 @@ static void startWebRoutes() {
     web.sendHeader("Content-Encoding", "gzip");
     web.send_P(200, "text/html", (const char *)DASHBOARD_GZ, DASHBOARD_GZ_LEN);
   });
-  web.on("/status", []() { web.send(200, "text/html", statusPage()); });
+  web.on("/status", []() { if (webAuthed()) web.send(200, "text/html", statusPage()); });   // names the WiFi and location
   web.on("/draw", HTTP_GET, []() {               // grid animator (the same page the PC app serves)
     if (!webAuthed()) return;
     web.sendHeader("Content-Encoding", "gzip");
@@ -1501,6 +1503,7 @@ static void startWebRoutes() {
     web.send(200, "text/html", setupPage());
   });
   web.on("/rescan", []() {
+    if (!webAuthed()) return;
     WiFi.scanDelete(); WiFi.scanNetworks(true);
     web.sendHeader("Location", "/wifi"); web.send(303);
   });
@@ -1579,6 +1582,17 @@ static void startAP(bool byButton = false) {
   startWebRoutes();
 }
 
+// Why the last attempt to join the saved network ended (WIFI_REASON_*), set by the WiFi task.
+static volatile uint8_t wifiFailReason = 0;
+// The network is there but turns us away (wrong password, mostly), as opposed to not being
+// found at all (router off or out of range: keep trying, it comes back by itself).
+static bool wifiRejected() {
+  uint8_t r = wifiFailReason;
+  return r == WIFI_REASON_AUTH_EXPIRE || r == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+         r == WIFI_REASON_AUTH_FAIL || r == WIFI_REASON_HANDSHAKE_TIMEOUT;
+}
+static const uint32_t REJECTED_MS = 180000;   // turned away for this long since boot: open the setup network
+
 static void wifiBegin() {
   g_tz = prefs.getString("tz", "CST6CDT,M3.2.0,M11.1.0");   // US Central w/ DST (default)
   g_lat = prefs.getString("lat", ""); g_lon = prefs.getString("lon", ""); g_wunit = prefs.getInt("wunit", 0);
@@ -1588,6 +1602,8 @@ static void wifiBegin() {
     WiFi.setHostname("wfd-clock");
     WiFi.setSleep(false);               // keep radio responsive / stable
     WiFi.setAutoReconnect(true);
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) { wifiFailReason = info.wifi_sta_disconnected.reason; },
+                 ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
     WiFi.begin(ssid.c_str(), prefs.getString("pass", "").c_str());
   } else {
     startAP();
@@ -1602,29 +1618,39 @@ static void ntpToRtc() {
   ntpSynced = true;
 }
 
-static void netWeatherFetch() {       // fetch Open-Meteo directly over HTTPS
-  if (WiFi.status() != WL_CONNECTED || g_lat.length() == 0) return;
+// ---- weather: fetched by a background task, so the display and the network keep running ----
+// The HTTPS request takes seconds (TLS handshake). loop() only hands the task a job
+// (netWeatherFetch) and picks up the finished result (weatherApply); the task never touches
+// the display state itself.
+struct WxJob { char lat[24], lon[24]; int unit; };
+struct WxResult { bool ok; int code, scene, temp, unit; int n, hi[4], lo[4], wc[4]; };
+static WxJob wxJob;
+static WxResult wxResult;
+static volatile bool wxBusy = false, wxDone = false;
+static TaskHandle_t wxTaskHandle = nullptr;
+
+static void weatherFetch(const WxJob &job, WxResult &r) {   // Open-Meteo directly over HTTPS
+  r.ok = false;
+  r.n = 0;
   WiFiClientSecure cli;
   cli.setInsecure();
   HTTPClient http;
   http.setTimeout(6000);
-  String url = "https://api.open-meteo.com/v1/forecast?latitude=" + g_lat + "&longitude=" + g_lon +
-               "&current=temperature_2m,weather_code,is_day&temperature_unit=" + (g_wunit ? "celsius" : "fahrenheit") +
+  String url = String("https://api.open-meteo.com/v1/forecast?latitude=") + job.lat + "&longitude=" + job.lon +
+               "&current=temperature_2m,weather_code,is_day&temperature_unit=" + (job.unit ? "celsius" : "fahrenheit") +
                "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto";
   if (!http.begin(cli, url)) return;
-  int rc = http.GET();
-  if (rc == 200) {
+  if (http.GET() == 200) {
     String p = http.getString();
     int cur = p.indexOf("\"current\":{");       // skip the current_units block
     int ti = p.indexOf("temperature_2m\":", cur < 0 ? 0 : cur);
     int ci = p.indexOf("weather_code\":", cur < 0 ? 0 : cur);
     if (ti > 0 && ci > 0) {
-      int temp = (int)lroundf(p.substring(ti + 16).toFloat());
+      r.temp = (int)lroundf(p.substring(ti + 16).toFloat());
       int code = p.substring(ci + 14).toInt();
-      wxCode = code <= 1 ? 1 : (code == 2 || code == 3 || code == 45 || code == 48) ? 2 : 3;
+      r.code = code <= 1 ? 1 : (code == 2 || code == 3 || code == 45 || code == 48) ? 2 : 3;
       int di = p.indexOf("is_day\":", cur < 0 ? 0 : cur);
-      wxScene = grid::sceneFromWmo(code, di < 0 || p.substring(di + 8).toInt() != 0);
-      wxSceneTime = millis();
+      r.scene = grid::sceneFromWmo(code, di < 0 || p.substring(di + 8).toInt() != 0);
       const char *body = p.c_str(), *daily = strstr(body, "\"daily\":{");
       if (daily) {
         double hi[4], lo[4], wc[4];
@@ -1632,17 +1658,63 @@ static void netWeatherFetch() {       // fetch Open-Meteo directly over HTTPS
         n = min(n, extras::jsonArray(body, daily, "temperature_2m_min", lo, 4));
         n = min(n, extras::jsonArray(body, daily, "weather_code", wc, 4));
         if (n >= 2) {
-          for (int d = 0; d < n; d++) { fcHi[d] = (int)lround(hi[d]); fcLo[d] = (int)lround(lo[d]); fcCode[d] = (int)wc[d]; }
-          fcN = n;
-          fcTime = millis();
+          for (int d = 0; d < n; d++) { r.hi[d] = (int)lround(hi[d]); r.lo[d] = (int)lround(lo[d]); r.wc[d] = (int)wc[d]; }
+          r.n = n;
         }
       }
-      wxTemp = temp;
-      wxUnit = g_wunit;
-      wxTime = millis();
+      r.unit = job.unit;
+      r.ok = true;
     }
   }
   http.end();
+}
+
+static void weatherTask(void *) {
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);    // sleeps until netWeatherFetch() has a job
+    weatherFetch(wxJob, wxResult);
+    wxDone = true;
+  }
+}
+
+// Ask for a fetch. False if it can't start now (one is running, no WiFi or location, an update
+// is being written): the caller tries again on a later pass.
+static bool netWeatherFetch() {
+  if (wxBusy || WiFi.status() != WL_CONNECTED || g_lat.length() == 0 || Update.isRunning()) return false;
+  if (!wxTaskHandle &&       // core 1 with loop(): the mic task keeps core 0's timing to itself
+      xTaskCreatePinnedToCore(weatherTask, "weather", 12288, nullptr, 1, &wxTaskHandle, 1) != pdPASS) {
+    wxTaskHandle = nullptr;
+    return false;
+  }
+  strlcpy(wxJob.lat, g_lat.c_str(), sizeof wxJob.lat);
+  strlcpy(wxJob.lon, g_lon.c_str(), sizeof wxJob.lon);
+  wxJob.unit = g_wunit;
+  wxBusy = true;
+  xTaskNotifyGive(wxTaskHandle);
+  return true;
+}
+
+// In loop(): take over a finished fetch.
+static void weatherApply() {
+  if (!wxDone) return;
+  const WxResult &r = wxResult;
+  if (r.ok) {
+    wxCode = r.code;
+    wxScene = r.scene;
+    wxSceneTime = millis();
+    if (r.n >= 2) {
+      for (int d = 0; d < r.n; d++) { fcHi[d] = r.hi[d]; fcLo[d] = r.lo[d]; fcCode[d] = r.wc[d]; }
+      fcN = r.n;
+      fcTime = millis();
+    }
+    wxTemp = r.temp;
+    wxUnit = r.unit;
+    wxTime = millis();
+    wxHave = true;
+    dirty = true;
+  }
+  wxDone = false;
+  wxBusy = false;
 }
 
 static void wifiLoop() {
@@ -1668,15 +1740,26 @@ static void wifiLoop() {
       lastNtp = millis();
       ntpToRtc();
     }
+    weatherApply();
     if (ntpSynced && (lastWxFetch == 0 || millis() - lastWxFetch > 900000UL)) {  // weather every 15 min
-      lastWxFetch = millis();
-      netWeatherFetch();
+      if (netWeatherFetch()) lastWxFetch = millis() | 1;   // (not started: asked again next pass)
+      else if (g_lat.length() == 0) lastWxFetch = millis() | 1;   // no location: nothing to fetch
     }
   } else {
     static uint32_t lastTry = 0;        // not connected -> keep trying to reconnect
     if (millis() - lastTry > 8000) {
       lastTry = millis();
       WiFi.reconnect();
+    }
+    // Never joined since power-on and the network keeps rejecting us: the saved password is
+    // wrong. Open the setup network without waiting for someone to hold a button.
+    static uint32_t rejectedSince = 0;
+    if (ntpInit || !wifiRejected()) rejectedSince = 0;
+    else if (!rejectedSince) rejectedSince = millis() | 1;
+    else if (millis() - rejectedSince > REJECTED_MS) {
+      Serial.println("wifi: the saved network rejects us; opening WFD-Setup");
+      startAP(true);
+      showInfo("JOIN WFD-SETUP WIFI", 60000);
     }
   }
 }
@@ -1688,12 +1771,12 @@ static String statusPage() {
     snprintf(tm, sizeof tm, "20%02d-%02d-%02d %02d:%02d:%02d",
              bcd2dec(t[6]), bcd2dec(t[5] & 0x1F), bcd2dec(t[4]),
              bcd2dec(t[2] & 0x3F), bcd2dec(t[1]), bcd2dec(t[0] & 0x7F));
-  String s = "<h2>WFD Clock <small class=dim>fw: OTA-OK</small></h2>";
+  String s = "<h2>WFD Clock</h2><p class=dim>" + esc(FW_BUILD) + "</p>";
   s += "<p>Time: <b>" + String(tm) + "</b></p>";
   s += "<p>NTP: <b>" + String(ntpSynced ? "synced" : "waiting…") + "</b> &nbsp; WiFi: <b>" + esc(WiFi.SSID()) +
        "</b> (" + WiFi.localIP().toString() + ", " + String(WiFi.RSSI()) + " dBm)</p>";
   const char *cond = wxCode == 1 ? "Sunny" : wxCode == 2 ? "Cloudy" : wxCode == 3 ? "Rain" : "—";
-  bool wxfresh = millis() - wxTime < 1200000;
+  bool wxfresh = wxFresh();
   s += "<p>Weather: <b>" + (wxfresh ? String(wxTemp) + (wxUnit ? "C " : "F ") + cond : String("—")) +
        "</b> &nbsp; loc " + (g_lat.length() ? g_lat + "," + g_lon : String("unset")) + "</p>";
   s += "<p><a href=/ style=font-weight:600>⚙ Dashboard</a> &nbsp; <a href=/control>Basic controls</a></p>";

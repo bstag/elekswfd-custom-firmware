@@ -490,3 +490,13 @@ fn nothing_is_sent_while_the_clock_is_being_updated() {
     );
     assert!(s.sent().contains(&"BYE".to_string()), "the clock is told the app let go");
 }
+
+#[test]
+fn a_usb_clock_with_internet_time_keeps_its_own() {
+    let ctx = app();
+    let s = Sim::new(&ctx, 3.0);
+    s.st.borrow_mut().version.insert("_ntp".into(), json!(true));
+    s.run();
+    assert!(!s.commands(None).contains(&"SET".to_string()));
+    assert!(ctx.state().clock.as_ref().is_some_and(|c| !c.contains_key("_ntp")));
+}

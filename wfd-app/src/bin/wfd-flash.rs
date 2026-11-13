@@ -54,7 +54,7 @@ fn run() -> Result<(), String> {
     // 2. what it runs now (our firmware answers CFG)
     print!("Checking what the clock runs... ");
     flush();
-    let ours = ask_cfg(&port);
+    let mut ours = ask_cfg(&port);
     match &ours {
         Some(fw) if opts.restore.is_none() && !opts.backup_only => {
             println!("our firmware ({fw}). Your WiFi and settings will be kept.")
@@ -75,6 +75,13 @@ fn run() -> Result<(), String> {
         return Err(format!("the backup is {size} bytes, not 4 MB; nothing was written"));
     }
     println!("Backup done and checked (MD5 matches the clock's own).");
+    if ours.is_none() && opts.restore.is_none() && !opts.backup_only {
+        // it didn't answer, but is our firmware on it? Then its settings are worth keeping.
+        ours = std::fs::read(&backup).ok().and_then(|img| flashplan::firmware_in_image(&img));
+        if let Some(fw) = &ours {
+            println!("The backup shows our firmware on the clock ({fw}): your WiFi and settings will be kept.");
+        }
+    }
 
     if opts.backup_only {
         reset(flasher);

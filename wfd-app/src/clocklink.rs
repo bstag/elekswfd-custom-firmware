@@ -10,6 +10,7 @@
 //! the golden log). That means keeping the order of every `now()` / `sleep()` and the exact f64
 //! arithmetic of the Python code (e.g. `now - last > 1.0 / max(2, fps)`).
 
+use crate::applog;
 use crate::ctx::{Ctx, UploadJob};
 use crate::dsp::Levels;
 use crate::font14;
@@ -66,6 +67,17 @@ impl Platform {
 
 /// Drive the clock until `ctx.stop` is set (then say BYE).
 pub fn run(ctx: Arc<Ctx>) {
+    /// However the loop ends (also by a panic, after which main starts it again): the state
+    /// must not go on saying "connected".
+    struct NotConnected(Arc<Ctx>);
+    impl Drop for NotConnected {
+        fn drop(&mut self) {
+            let mut st = self.0.state();
+            st.connected = false;
+            st.link = None;
+        }
+    }
+    let _reset = NotConnected(Arc::clone(&ctx));
     ClockLink::new(ctx, Platform::real()).run();
 }
 
@@ -212,7 +224,8 @@ impl ClockLink {
                 None => Ok(()),
             });
             if let Err(e) = res {
-                eprintln!("clock link lost: {e}");
+                let name = self.link.as_ref().map(|l| l.name()).unwrap_or_default();
+                applog::log_once(&format!("clock link lost ({name}): {e}"));
                 self.drop_link();
             }
             self.clock.sleep(TICK);
@@ -253,7 +266,7 @@ impl ClockLink {
             self.drop_link();
         }
         let mode = {
-            let cfg = self.ctx.cfg.lock().unwrap();
+            let cfg = self.ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
             cfg.get("link")
                 .and_then(Value::as_str)
                 .unwrap_or("auto")
@@ -310,6 +323,7 @@ impl ClockLink {
     /// say so, and leave it alone for a while.
     fn set_not_clock(&mut self, port: String) {
         self.drop_link();
+        applog::log_once(&format!("{port} doesn't answer like the clock; leaving it alone for 5 minutes"));
         link::avoid_port(&port);
         self.ctx.state().link_problem = Some(format!(
             "{port} doesn't answer like the clock (another device with the same USB chip, or the stock firmware)"
@@ -336,7 +350,7 @@ impl ClockLink {
             st.link = self.link.as_ref().map(|l| l.kind().to_string());
         }
         self.link_cfg = {
-            let cfg = self.ctx.cfg.lock().unwrap();
+            let cfg = self.ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
             ["link", "clock_host", "clock_pass"].map(|k| cfg.get(k).cloned().unwrap_or_default())
         };
         self.sent.clear(); // a fresh (or power-cycled) clock needs everything again
@@ -349,11 +363,13 @@ impl ClockLink {
         if !answered {
             return Ok(false);
         }
-        let sync = truthy(self.ctx.cfg.lock().unwrap().get("time_sync"));
+        let sync = truthy(self.ctx.cfg.lock().unwrap_or_else(|e| e.into_inner()).get("time_sync"));
         if sync && !self.link().clock_ntp() {
             self.set_time()?;
         }
         self.last_sync = self.clock.now();
+        let (name, fw) = (self.link().name(), self.link().version().0.unwrap_or_default());
+        applog::log_once(&format!("clock connected: {name} ({fw})"));
         Ok(true)
     }
 
@@ -386,7 +402,7 @@ impl ClockLink {
 
     /// Answer the web server's CFGSET requests (then re-read the clock's settings).
     fn run_clock_requests(&mut self) -> Result<(), LinkLost> {
-        let reqs = std::mem::take(&mut *self.ctx.clock_requests.lock().unwrap());
+        let reqs = std::mem::take(&mut *self.ctx.clock_requests.lock().unwrap_or_else(|e| e.into_inner()));
         // On a lost link the rest are dropped unanswered: their senders go away, so
         // Ctx::set_clock reports "clock didn't answer" (app.py: after its 3 s timeout).
         for req in reqs {
@@ -434,7 +450,7 @@ impl ClockLink {
     /// that a clock_pass change normally triggers isn't needed here (it's the same clock).
     fn remember_clock_password(&mut self, pw: &str) {
         let cfg = {
-            let mut cfg = self.ctx.cfg.lock().unwrap();
+            let mut cfg = self.ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
             cfg.insert("clock_pass".into(), Value::String(pw.to_string()));
             cfg.clone()
         };
@@ -506,6 +522,7 @@ impl ClockLink {
                 // Only leave WiFi once the port has opened: a port another program holds would
                 // otherwise cost a reconnect every time we look.
                 let Some(serial) = (self.p.open_serial)() else {
+                    applog::log_once(&format!("{port} is there but can't be opened (another program has it); staying on WiFi"));
                     self.not_clock = Some((port, self.clock.now())); // look again in a few minutes
                     return Ok(());
                 };
@@ -587,7 +604,7 @@ impl ClockLink {
     /// Perform one queued upload to the clock's flash, if any. Either changes the clock's
     /// settings, so they're re-read on the next frame.
     fn run_upload(&mut self) -> Result<(), LinkLost> {
-        let job = self.ctx.uploads.lock().unwrap().pop_front();
+        let job = self.ctx.uploads.lock().unwrap_or_else(|e| e.into_inner()).pop_front();
         let saved = match job {
             None => return Ok(()),
             Some(UploadJob::Anim { name, fps, frame }) => {
@@ -606,7 +623,7 @@ impl ClockLink {
 
     /// 0..12 levels for output / mic (always computed: the spectrum and the icon row use them).
     fn audio_levels(&mut self, c: &Cfg) -> [u8; 2] {
-        let energy = self.ctx.audio.lock().unwrap().energy;
+        let energy = self.ctx.audio.lock().unwrap_or_else(|e| e.into_inner()).energy;
         let levels = self
             .levels
             .update(energy, [num(c, "gain_out"), num(c, "gain_mic")]);
@@ -730,7 +747,7 @@ impl ClockLink {
 
     fn send_grid(&mut self, c: &Cfg) -> Result<(), LinkLost> {
         let since = self.clock.now() - self.last_grid;
-        let preview = self.ctx.grid_preview.lock().unwrap().clone();
+        let preview = self.ctx.grid_preview.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let previewing = preview
             .at
             .is_some_and(|at| self.clock.now() - self.clock.epoch_of(at) < 2.0);
@@ -752,7 +769,7 @@ impl ClockLink {
                 let extra = {
                     let st = self.ctx.state();
                     Extra {
-                        bands: self.ctx.audio.lock().unwrap().bands,
+                        bands: self.ctx.audio.lock().unwrap_or_else(|e| e.into_inner()).bands,
                         cpu: f64::from(st.metrics.cpu),
                         gpu: f64::from(st.metrics.gpu),
                         ram: f64::from(st.metrics.ram),

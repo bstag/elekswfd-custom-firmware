@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
-use wfd_app::{audio, clocklink, config, ctx::Ctx, link, metrics, release::Release, usbdriver, weather, web};
+use wfd_app::{applog, audio, clocklink, config, ctx::Ctx, link, metrics, release::Release, usbdriver, weather, web};
 
 /// The firmware this app ships (wfd-firmware/releases, made by make_release.py).
 const VERSION_JSON: &str = include_str!("../../wfd-firmware/releases/version.json");
@@ -137,7 +137,7 @@ fn main() {
         }
     };
 
-    let _ = LOG.set(args.config.with_file_name("wfd-app.log"));
+    applog::init(args.config.with_file_name("wfd-app.log"));
     log(&format!("started: wfd-app {} (pid {})", env!("CARGO_PKG_VERSION"), std::process::id()));
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -159,21 +159,12 @@ fn main() {
 
     audio::start(Arc::clone(&ctx.audio), Arc::clone(&ctx.stop));
     metrics::start(Arc::clone(&ctx.metrics), Arc::clone(&ctx.stop));
-    spawn("readers", {
-        let ctx = Arc::clone(&ctx);
-        move || copy_readers(&ctx)
-    });
-    spawn("weather", {
-        let ctx = Arc::clone(&ctx);
-        move || weather_loop(&ctx)
-    });
+    spawn_supervised("readers", Arc::clone(&ctx), |ctx| copy_readers(ctx));
+    spawn_supervised("weather", Arc::clone(&ctx), |ctx| weather_loop(ctx));
     let (link_done_tx, link_done) = mpsc::channel::<()>();
-    spawn("clocklink", {
-        let ctx = Arc::clone(&ctx);
-        move || {
-            clocklink::run(ctx);
-            let _ = link_done_tx.send(());
-        }
+    spawn_supervised("clocklink", Arc::clone(&ctx), move |ctx| {
+        clocklink::run(Arc::clone(ctx));
+        let _ = link_done_tx.send(());
     });
 
     let server = match web::bind(&args.addr) {
@@ -202,6 +193,22 @@ fn main() {
     std::process::exit(0);
 }
 
+/// A worker the app can't do without: if it panics (the panic hook has logged why), start it
+/// again instead of leaving the app running with nothing driving the clock. Waits 2 s, then
+/// longer each time it keeps failing (up to a minute).
+fn spawn_supervised(name: &'static str, ctx: Arc<Ctx>, f: impl Fn(&Arc<Ctx>) + Send + 'static) {
+    spawn(name, move || {
+        wfd_app::supervise::run(
+            name,
+            Duration::from_secs(2),
+            || ctx.stopping(),
+            |wait| sleep_unless_stopped(&ctx, wait),
+            |name, wait| log(&format!("restarting {name} in {} s", wait.as_secs())),
+            || f(&ctx),
+        );
+    });
+}
+
 fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
     thread::Builder::new()
         .name(name.into())
@@ -220,9 +227,9 @@ fn copy_readers(ctx: &Ctx) {
             ctx.state().usb_problem = problem;
         }
         tick = tick.wrapping_add(1);
-        let m = ctx.metrics.lock().unwrap().clone();
+        let m = ctx.metrics.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let (out, mic) = {
-            let a = ctx.audio.lock().unwrap();
+            let a = ctx.audio.lock().unwrap_or_else(|e| e.into_inner());
             (a.out_name.clone(), a.mic_name.clone())
         };
         {
@@ -292,19 +299,10 @@ fn open_browser(url: &str) {
 }
 
 static STOP: OnceLock<Arc<AtomicBool>> = OnceLock::new();
-static LOG: OnceLock<PathBuf> = OnceLock::new();
 
-/// One line in wfd-app.log (next to the settings): starts, why it stopped, panics. Kept small:
-/// past 256 KB the old log is renamed to wfd-app.log.old.
+/// One line in wfd-app.log (see `applog`).
 fn log(msg: &str) {
-    use std::io::Write;
-    let Some(path) = LOG.get() else { return };
-    if std::fs::metadata(path).is_ok_and(|m| m.len() > 256 * 1024) {
-        let _ = std::fs::rename(path, path.with_extension("log.old"));
-    }
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{} {msg}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
-    }
+    applog::log(msg);
 }
 
 /// Ctrl-C / closing the console sets ctx.stop; the web loop then returns and main exits.

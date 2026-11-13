@@ -17,6 +17,7 @@ If you get "Failed to connect" / "Wrong boot mode", move the cable to a USB 2.0
 port (often the black ones, or on the back of the PC) and try again.
 """
 import json
+import re
 import struct
 import subprocess
 import sys
@@ -101,7 +102,13 @@ def main():
         print(f"The clock runs this firmware ({ours}): its WiFi and settings will be kept.")
     if "--no-backup" not in sys.argv:
         print("Backing up your current firmware first (so you can revert)...")
-        backup_usb.backup(port)        # read full flash before we overwrite it
+        saved = backup_usb.backup(port)        # read full flash before we overwrite it
+        if not ours and "--wipe-settings" not in sys.argv and saved:
+            # it didn't answer CFG (busy, mid-restart), but is our firmware on it?
+            stamp = re.search(rb"wfd-clock [A-Z][a-z]{2} [ 0-9]\d \d{4} \d\d:\d\d:\d\d", Path(saved).read_bytes())
+            if stamp:
+                ours = stamp.group().decode()
+                print(f"The backup shows this firmware on the clock ({ours}): its WiFi and settings will be kept.")
     segments = plan(MERGED.read_bytes(), keep_settings=bool(ours))
     print(f"\nFlashing {MERGED.name} to {port} (use a USB 2.0 port if this fails)...")
     with tempfile.TemporaryDirectory() as tmp:

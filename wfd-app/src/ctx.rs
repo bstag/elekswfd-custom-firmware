@@ -78,11 +78,11 @@ impl Ctx {
 
     /// A snapshot of the app settings (like `dict(cfg)` under cfg_lock).
     pub fn cfg(&self) -> Map<String, Value> {
-        self.cfg.lock().unwrap().clone()
+        self.cfg.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap()
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn stopping(&self) -> bool {
@@ -100,7 +100,7 @@ impl Ctx {
         }
         let (tx, rx) = mpsc::channel();
         let keys = per_key("clock didn't answer");
-        self.clock_requests.lock().unwrap().push(ClockRequest { patch, web_password: None, reply: tx });
+        self.clock_requests.lock().unwrap_or_else(|e| e.into_inner()).push(ClockRequest { patch, web_password: None, reply: tx });
         rx.recv_timeout(timeout).unwrap_or(Err(keys))
     }
 
@@ -117,7 +117,7 @@ impl Ctx {
         }
         drop(st);
         let (tx, rx) = mpsc::channel();
-        self.clock_requests.lock().unwrap().push(ClockRequest {
+        self.clock_requests.lock().unwrap_or_else(|e| e.into_inner()).push(ClockRequest {
             patch: Map::new(),
             web_password: Some(password.to_string()),
             reply: tx,

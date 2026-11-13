@@ -75,6 +75,36 @@ pub fn our_firmware(reply: &str) -> Option<String> {
     Some(cfg.get("_fw").and_then(|v| v.as_str()).unwrap_or("an older build").to_string())
 }
 
+/// Our firmware's build stamp ("wfd-clock Nov 13 2026 11:24:28") anywhere in a flash image.
+/// A clock that didn't answer `CFG` (busy, mid-restart) is still recognised from its backup,
+/// so its WiFi and settings aren't wiped as if it ran the stock firmware.
+pub fn firmware_in_image(image: &[u8]) -> Option<String> {
+    const MARK: &[u8] = b"wfd-clock ";
+    const LEN: usize = 20; // "Nov 13 2026 11:24:28"
+    let is_stamp = |s: &[u8]| {
+        s.len() == LEN
+            && s[0].is_ascii_uppercase()
+            && s[1].is_ascii_lowercase()
+            && s[2].is_ascii_lowercase()
+            && s[3] == b' '
+            && (s[4] == b' ' || s[4].is_ascii_digit())
+            && s[5].is_ascii_digit()
+            && s[6] == b' '
+            && s[7..11].iter().all(u8::is_ascii_digit)
+            && s[11] == b' '
+            && s[12..].iter().enumerate().all(|(i, c)| if i == 2 || i == 5 { *c == b':' } else { c.is_ascii_digit() })
+    };
+    let mut at = 0;
+    while let Some(i) = image[at..].windows(MARK.len()).position(|w| w == MARK) {
+        let start = at + i + MARK.len();
+        if let Some(stamp) = image.get(start..start + LEN).filter(|s| is_stamp(s)) {
+            return Some(format!("wfd-clock {}", String::from_utf8_lossy(stamp)));
+        }
+        at = start;
+    }
+    None
+}
+
 /// A backup's file name, from a local timestamp ("20261017-141500").
 pub fn backup_name(stamp: &str) -> String {
     format!("clock-backup-{stamp}.bin")

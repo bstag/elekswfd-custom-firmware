@@ -323,7 +323,7 @@ A healthy upload of the ~1.1 MB image is ~790 pieces in ~16 s with pauses under 
 ## Versions
 
 `/api/status` reports `state.fw` (the build stamp) and `state.protocol` (`WFD_PROTOCOL` in
-`main.cpp`); `CFG` reports them as `_fw` / `_protocol`, plus the clock's WiFi address as `_ip` (empty when it isn't on WiFi) and whether a web password is set as `_pw`, so the app sees them over USB too. Bump
+`main.cpp`); `CFG` reports them as `_fw` / `_protocol`, plus the clock's WiFi address as `_ip` (empty when it isn't on WiFi) whether a web password is set as `_pw` and whether it has internet time as `_ntp`, so the app sees them over USB too. Bump
 `WFD_PROTOCOL` together with `PROTOCOL` in `app.py` whenever commands, settings or the API
 change in a way the app depends on. A test fails if they, or `releases/version.json`, disagree.
 Protocol 4 added the `weather` animation and the `weather_scene` setting; protocol 5 the
