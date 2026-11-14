@@ -283,7 +283,12 @@ own recent fetch it falls back to the 3‑way code (sunny/cloudy/rain) and the l
 
 The clock has its own mic (GPIO32 / ADC1_CH4, behind an op‑amp). A task on core 0 samples it
 at 8 kHz in 32 ms frames while the app is off and something uses it, and `mic_dsp.h` turns each
-frame into:
+frame into the numbers below. The sample clock is hardware timer group 0 / timer 0: its alarm
+wakes the task every 125 µs for one `analogRead`, and the task sleeps in between instead of
+spinning on `micros()`, so core 0 stays free for WiFi and the idle task. (The I2S driver's
+built‑in‑ADC DMA mode would avoid even the per‑sample wake‑ups, but whether its readings match
+`analogRead`'s scale, polarity and sample order, which `mic_dsp.h` is tuned on, depends on code
+that ships only precompiled; it needs checking on the hardware first.) Each frame gives:
 
 - **loudness**, in dB above an adaptive noise floor. The floor settles near the room's quiet
   level (it rises 0.3 dB/s and falls 1.5 dB/s). Nothing shows until a sound is 12 dB above it,

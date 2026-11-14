@@ -1,6 +1,7 @@
 // The microphone: sampled on core 0 by micTask, plus the MIC / MICLOG diagnostics.
 #include <Arduino.h>
 #include <Update.h>
+#include <driver/timer.h>
 #include "clock_state.h"
 #include "mic_dsp.h"
 #include "microphone.h"
@@ -8,12 +9,45 @@
 MicState micState;
 static mic::Dsp micDsp;               // runs in micTask on core 0
 
+// The sample clock: hardware timer group 0 / timer 0 at 1 MHz (APB 80 MHz / 80), an alarm every
+// 1/RATE s that wakes micTask, which takes one analogRead per tick and sleeps in between. Its
+// interrupt is allocated on core 0 (the timer is set up from micTask), and it runs only while
+// a frame is being taken.
+static const timer_group_t MIC_TG = TIMER_GROUP_0;
+static const timer_idx_t MIC_TIMER = TIMER_0;
+static TaskHandle_t micTaskHandle = nullptr;
+
+static bool IRAM_ATTR micTick(void *) {
+  BaseType_t woken = pdFALSE;
+  vTaskNotifyGiveFromISR(micTaskHandle, &woken);
+  return woken == pdTRUE;                       // the driver yields at the end of the ISR
+}
+
+static bool micClockBegin() {
+  timer_config_t cfg = {};
+  cfg.alarm_en = TIMER_ALARM_EN;
+  cfg.counter_en = TIMER_PAUSE;
+  cfg.intr_type = TIMER_INTR_LEVEL;
+  cfg.counter_dir = TIMER_COUNT_UP;
+  cfg.auto_reload = TIMER_AUTORELOAD_EN;
+  cfg.divider = 80;                             // 1 tick = 1 us
+  return timer_init(MIC_TG, MIC_TIMER, &cfg) == ESP_OK &&
+         timer_set_counter_value(MIC_TG, MIC_TIMER, 0) == ESP_OK &&
+         timer_set_alarm_value(MIC_TG, MIC_TIMER, 1000000UL / mic::RATE) == ESP_OK &&
+         timer_enable_intr(MIC_TG, MIC_TIMER) == ESP_OK &&
+         timer_isr_callback_add(MIC_TG, MIC_TIMER, micTick, nullptr, 0) == ESP_OK;
+}
+
 // ---- microphone: sampled on core 0 while the app is off and something uses it ----
 void micTask(void *) {
   static uint16_t buf[mic::N];
-  const uint32_t period = 1000000UL / mic::RATE;
+  micTaskHandle = xTaskGetCurrentTaskHandle();
+  if (!micClockBegin()) {
+    Serial.println("mic: sample timer failed; mic off");
+    vTaskDelete(nullptr);
+  }
   for (;;) {
-    // Pause during an OTA update: this task busy-waits on core 0, which the WiFi stack needs then.
+    // Pause during an OTA update: leave core 0 to the WiFi stack then.
     bool want = !live.appTime.within(APP_ON_MS) && (standalone.micAuto || (standalone.gaAuto && grid::usesMic(standalone.gaAnim))) && !Update.isRunning();
     if (!want || micState.pause) {
       micState.bass = micState.treble = micState.level = 0;
@@ -21,12 +55,17 @@ void micTask(void *) {
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
     }
-    uint32_t next = micros();
-    for (int i = 0; i < mic::N; i++) {          // 256 samples at 8 kHz = 32 ms
-      while ((int32_t)(micros() - next) < 0) {}
-      buf[i] = analogRead(MIC_PIN);
-      next += period;
-    }
+    // 256 samples at 8 kHz = 32 ms: the first now, then one per timer tick. A tick that arrives
+    // while the task can't run (a higher-priority task on core 0) is counted, and taken late.
+    ulTaskNotifyTake(pdTRUE, 0);                // no ticks left over from the last frame
+    timer_set_counter_value(MIC_TG, MIC_TIMER, 0);
+    timer_start(MIC_TG, MIC_TIMER);
+    int got = 0;
+    buf[got++] = analogRead(MIC_PIN);
+    while (got < mic::N && ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(50)))
+      buf[got++] = analogRead(MIC_PIN);
+    timer_pause(MIC_TG, MIC_TIMER);
+    if (got < mic::N) continue;                 // no tick for 50 ms (can't happen with a working timer)
     micDsp.process(buf);
     micState.bass = micDsp.colBass;
     micState.treble = micDsp.colTreble;
