@@ -24,6 +24,16 @@
 
 static Preferences prefs;
 
+// When something last happened, starting out as "never": a millis() of 0 isn't "long ago" in
+// the first seconds after boot. within() compares with unsigned subtraction (wrap-safe).
+struct Stamp {
+  uint32_t at = 0;
+  bool set = false;
+  void mark() { at = millis(); set = true; }
+  void clear() { set = false; }
+  bool within(uint32_t ms) const { return set && millis() - at < ms; }
+};
+
 // What the PC app checks before talking to this firmware. Bump WFD_PROTOCOL whenever commands,
 // settings or the JSON API change in a way the app must know about (app.py PROTOCOL).
 //   1 serial display commands   2 settings over USB (CFG/CFGSET) + JSON API   3 WiFi link (UDP, BYE, /api/frames)
@@ -91,13 +101,12 @@ static const Day DAYS[7] = {
 
 static uint8_t curT[7] = {0};        // last RTC reading
 static int specA = 0, specB = 0;      // spectrum column levels 0..12
-static uint32_t specTime = 0;         // millis of last SPEC frame
+static Stamp specTime;                // last SPEC frame
 static int barCpu = 0, barGpu = 0, barRam = 0;   // 0..100 percent
-static uint32_t barsTime = 0;
+static Stamp barsTime;
 static int wxCode = 0, wxTemp = 0, wxUnit = 0;   // code 0=none 1=sunny 2=cloud 3=rains; unit 0=F 1=C
-static uint32_t wxTime = 0;
-static bool wxHave = false;           // some weather has arrived since boot (wxTime 0 isn't "fresh")
-static bool wxFresh() { return wxHave && millis() - wxTime < 1200000; }   // PC every 60 s, own fetch every 15 min
+static Stamp wxTime;                  // last weather (WX from the PC or our own fetch)
+static bool wxFresh() { return wxTime.within(1200000); }   // PC every 60 s, own fetch every 15 min
 static int wxScene = -1;              // grid::Scene from our own fetch (WMO code + day/night), -1 = none yet
 static uint32_t wxSceneTime = 0;
 static int wxScenePick = -1;          // "weather_scene" setting: a grid::Scene, or -1 = auto
@@ -122,7 +131,7 @@ static int infoPos = 0;
 static bool infoOn() { return infoText.length() && (int32_t)(infoUntil - millis()) > 0; }
 
 static uint8_t msgRam[12] = {0};      // raw glyphs for the 6 message chars (lo,hi x6 = bytes 0..11)
-static uint32_t msgTime = 0;
+static Stamp msgTime;
 
 // on-device message line (runs when the app isn't driving the message chars)
 enum { SRC_TEMP = 0, SRC_TEXT = 1, SRC_DATE = 2, MODE_ROTATE = 3, SRC_FORECAST = 4, N_SRC = 5 };   // 3 = rotate (a mode, not a source; kept for saved settings)
@@ -140,11 +149,13 @@ static void setMsgText(String t);
 static void setMsgCfg(int mode, int rot, int dwell, int scroll);
 static uint8_t gridRows[7] = {0};     // bit c (0..6) of row r = cell (r,c)
 static uint8_t gridFrame = 0;
-static uint32_t gridTime = 0;
-static uint32_t appTime = 0;          // last time any serial command arrived (app alive)
-static uint32_t iconMask = 0, iconTime = 0;   // top-row icons bitmask
+static Stamp gridTime;
+static Stamp appTime;                 // last time any serial command arrived (app alive)
+static const uint32_t APP_ON_MS = 2000;   // the app counts as on this long after a command
+static uint32_t iconMask = 0;         // top-row icons bitmask
+static Stamp iconTime;
 static int logoOn = 0;
-static uint32_t logoTime = 0;
+static Stamp logoTime;
 
 // stored standalone animation (plays from flash when the app isn't driving the grid)
 #define GA_MAX 80
@@ -282,35 +293,35 @@ static void draw() {
   for (int i = 0; i < 2; i++) ram[COLON_BYTE[i]] |= COLON_MASK[i];
   int dow = t[3] & 0x07;
   if (dow >= 1 && dow <= 7) ram[DAYS[dow - 1].byte] |= DAYS[dow - 1].mask;
-  bool live = (millis() - specTime) < 600;          // PC audio (clears if the PC went quiet)
-  bool micLive = !live && micAuto && millis() - appTime > 2000 && millis() - micFrameAt < 500;
+  bool live = specTime.within(600);                 // PC audio (clears if the PC went quiet)
+  bool appOn = appTime.within(APP_ON_MS);
+  bool micLive = !live && micAuto && !appOn && millis() - micFrameAt < 500;
   drawCol(SPEC_C1_BYTE, SPEC_C1_MASK, live ? specA : micLive ? micBass : 0, 0);      // mic: bass
   drawCol(SPEC_C2_BYTE, SPEC_C2_MASK, live ? specB : micLive ? micTreble : 0, 1);    // mic: treble
-  if (millis() - barsTime < 3000) {                 // bars when the PC is sending them
+  if (barsTime.within(3000)) {                      // bars when the PC is sending them
     drawBar(BAR_CPU_BYTE, BAR_CPU_MASK, barCpu, LBL_CPU_BYTE, LBL_CPU_MASK, PCT_CPU_BYTE, PCT_CPU_MASK);
     drawBar(BAR_GPU_BYTE, BAR_GPU_MASK, barGpu, LBL_GPU_BYTE, LBL_GPU_MASK, PCT_GPU_BYTE, PCT_GPU_MASK);
     drawBar(BAR_RAM_BYTE, BAR_RAM_MASK, barRam, LBL_RAM_BYTE, LBL_RAM_MASK, PCT_RAM_BYTE, PCT_RAM_MASK);
   }
-  bool appOn = millis() - appTime < 2000;
   bool wxLive = wxFresh();
   if (wxLive) drawWeatherWord();
-  if (millis() - msgTime < 1500) {                  // live scrolling text from the app
+  if (msgTime.within(1500)) {                       // live scrolling text from the app
     for (int i = 0; i < 12; i++) ram[i] = msgRam[i];
   } else if (!appOn && omAuto && !engTemp) {        // app off -> on-device message engine
     for (int i = 0; i < 12; i++) ram[i] = engRam[i];
   } else if (wxLive) {
     drawTemp();                                     // live temperature
   }
-  if (millis() - gridTime < 1500) drawGrid(gridRows, gridFrame);    // live grid from the app
+  if (gridTime.within(1500)) drawGrid(gridRows, gridFrame);    // live grid from the app
   else if (!appOn && gaAuto && gridReady())                         // app off -> own animation
     drawGrid(gaAnim == grid::CUSTOM ? &gaFrames[gaIdx * 7] : gEngRows, gaFlag);
-  if (millis() - iconTime < 1500)                    // top-row status icons
+  if (iconTime.within(1500))                         // top-row status icons
     for (int i = 0; i < N_ICONS; i++)
       if (iconMask & (1UL << i)) {
         ram[ICON_B0[i]] |= ICON_M0[i];
         if (ICON_M1[i]) ram[ICON_B1[i]] |= ICON_M1[i];
       }
-  if (logoOn && millis() - logoTime < 1500)          // ELEKSMAKER logo
+  if (logoOn && logoTime.within(1500))               // ELEKSMAKER logo
     for (int i = 0; i < N_LOGO; i++) ram[LOGO_BYTE[i]] |= LOGO_MASK[i];
   if (cdEnd) {                                    // countdown on the message line (bytes 0..11)
     char buf[8];
@@ -379,7 +390,7 @@ static int parseInts(const String &s, int *out, int n) {
 }
 
 static void handle(const String &s) {
-  appTime = millis();                 // any command means the app is alive
+  appTime.mark();                     // any command means the app is alive
   int sp = s.indexOf(' ');
   String cmd = sp < 0 ? s : s.substring(0, sp);
   String arg = sp < 0 ? String() : s.substring(sp + 1);
@@ -392,7 +403,7 @@ static void handle(const String &s) {
     parseInts(arg, v, 2);
     specA = constrain(v[0], 0, 12);
     specB = constrain(v[1], 0, 12);
-    specTime = millis();
+    specTime.mark();
     dirty = true;
   } else if (cmd == "BARS") {
     int v[3] = {0, 0, 0};
@@ -400,20 +411,20 @@ static void handle(const String &s) {
     barCpu = constrain(v[0], 0, 100);
     barGpu = constrain(v[1], 0, 100);
     barRam = constrain(v[2], 0, 100);
-    barsTime = millis();
+    barsTime.mark();
     dirty = true;
   } else if (cmd == "MSG") {
     int v[12] = {0};
     parseInts(arg, v, 12);
     for (int k = 0; k < 12; k++) msgRam[k] = (uint8_t)v[k];
-    msgTime = millis();
+    msgTime.mark();
     dirty = true;
   } else if (cmd == "GRID") {
     int v[8] = {0};
     parseInts(arg, v, 8);
     for (int k = 0; k < 7; k++) gridRows[k] = (uint8_t)(v[k] & 0x7F);
     gridFrame = v[7] ? 1 : 0;
-    gridTime = millis();
+    gridTime.mark();
     dirty = true;
   } else if (cmd == "GCLR") {
     upN = 0;
@@ -468,7 +479,7 @@ static void handle(const String &s) {
     micPause = false;
   } else if (cmd == "MICTRACE") {               // "MICTRACE <s>": per frame "T ms rms low high level% bass treble"
     micTraceUntil = millis() + 1000UL * constrain(arg.toInt(), 1, 120);
-    appTime = millis() - 3000;                  // this command shouldn't count as the app being on
+    appTime.clear();                            // this command shouldn't count as the app being on
   } else if (cmd == "MICLOG") {                 // "MICLOG <s>": level bar every 100 ms
     micPause = true; delay(40);
     micLog(constrain(arg.toInt(), 1, 60));
@@ -519,8 +530,8 @@ static void handle(const String &s) {
     Serial.println("OK ssid updated, restarting");
     delay(300); ESP.restart();
   } else if (cmd == "BYE") {                    // the app is quitting: take over now, not in 2 s
-    appTime = millis() - 10000;
-    specTime = barsTime = msgTime = gridTime = iconTime = logoTime = 0;
+    appTime.clear();
+    specTime.clear(); barsTime.clear(); msgTime.clear(); gridTime.clear(); iconTime.clear(); logoTime.clear();
     Serial.println("OK bye");
   } else if (cmd == "WEBPASS") {                // web password for the pages + WiFi stream ("" = open)
     // USB only on purpose: not a setting (/api/set), not in the UDP whitelist. Physical access
@@ -540,11 +551,11 @@ static void handle(const String &s) {
     delay(300); ESP.restart();
   } else if (cmd == "ICON") {
     iconMask = (uint32_t)arg.toInt();
-    iconTime = millis();
+    iconTime.mark();
     dirty = true;
   } else if (cmd == "LOGO") {
     logoOn = arg.toInt() ? 1 : 0;
-    logoTime = millis();
+    logoTime.mark();
     dirty = true;
   } else if (cmd == "CLK24") {
     clock24 = arg.toInt() ? 1 : 0;
@@ -559,8 +570,7 @@ static void handle(const String &s) {
     wxCode = constrain(v[0], 0, 3);
     wxTemp = constrain(v[1], -99, 199);
     wxUnit = v[2] ? 1 : 0;
-    wxTime = millis();
-    wxHave = true;
+    wxTime.mark();
     dirty = true;
   } else if (cmd == "STYLE") {
     int v = arg.toInt();
@@ -722,7 +732,7 @@ static void micTask(void *) {
   const uint32_t period = 1000000UL / mic::RATE;
   for (;;) {
     // Pause during an OTA update: this task busy-waits on core 0, which the WiFi stack needs then.
-    bool want = millis() - appTime > 2000 && (micAuto || (gaAuto && grid::usesMic(gaAnim))) && !Update.isRunning();
+    bool want = !appTime.within(APP_ON_MS) && (micAuto || (gaAuto && grid::usesMic(gaAnim))) && !Update.isRunning();
     if (!want || micPause) {
       micBass = micTreble = micLevel = 0;
       for (int b = 0; b < mic::NBANDS; b++) micBands[b] = 0;
@@ -1254,7 +1264,7 @@ static void stateJson(JsonObject s) {
   }
   s["timer"] = timerLeft();
   s["alert"] = alertKind == ALERT_TIMER ? "timer" : alertKind == ALERT_ALARM ? "alarm" : "";
-  s["app_connected"] = millis() - appTime < 2000;
+  s["app_connected"] = appTime.within(APP_ON_MS);
   s["message"] = msgShown;
   s["stored_frames"] = gaN;
   if (otaLogValid) {                               // the last firmware upload (see OtaLog)
@@ -1535,7 +1545,7 @@ static void startWebRoutes() {
     for (JsonVariantConst v : in["rows"].as<JsonArrayConst>()) if (r < 7) gridRows[r++] = v.as<int>() & 0x7F;
     while (r < 7) gridRows[r++] = 0;
     gridFrame = in["frame"].as<int>() ? 1 : 0;
-    gridTime = millis();                           // shows like a live GRID for 1.5 s
+    gridTime.mark();                               // shows like a live GRID for 1.5 s
     dirty = true;
     out["ok"] = true;
     sendJson(200, out);
@@ -1709,8 +1719,7 @@ static void weatherApply() {
     }
     wxTemp = r.temp;
     wxUnit = r.unit;
-    wxTime = millis();
-    wxHave = true;
+    wxTime.mark();
     dirty = true;
   }
   wxDone = false;
@@ -1877,7 +1886,7 @@ void loop() {
   checkButtons();
   // advance stored animations only when the app is off
   bool redraw = false;
-  bool appOff = millis() - appTime > 2000;
+  bool appOff = !appTime.within(APP_ON_MS);
   if (appOff && gaAuto && gridReady() &&
       millis() - gaStep > (uint32_t)(1000 / (gaFps < 1 ? 1 : gaFps))) {
     gaStep = millis();
