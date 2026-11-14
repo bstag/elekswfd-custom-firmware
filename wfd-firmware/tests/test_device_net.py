@@ -35,8 +35,19 @@ def send(payload: bytes, n=1):
     time.sleep(0.4)
 
 
+def our_address_towards_the_clock():
+    """This PC's address on the clock's network (a VPN adapter may hold the default route)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((CLOCK, 9))      # no packet is sent: it only picks the route
+        return s.getsockname()[0]
+    finally:
+        s.close()
+
+
 def test_clock_answers_mdns():
-    assert mdns.resolve("wfd-clock.local") == socket.gethostbyname(CLOCK)
+    found = mdns.resolve("wfd-clock.local", timeout=3, source=our_address_towards_the_clock())
+    assert found == socket.gethostbyname(CLOCK)
 
 
 def test_good_packets_are_counted():
@@ -47,6 +58,9 @@ def test_good_packets_are_counted():
 
 
 def test_packets_without_the_header_are_rejected():
+    state = json.load(urllib.request.urlopen(f"http://{CLOCK}/api/status", timeout=5))["state"]
+    if state["app_connected"]:
+        pytest.skip("the PC app is streaming to the clock over WiFi (its packets are counted too): stop it first")
     before = net()
     send(b"HELLO\nSPEC 12 12", 2)
     after = net()

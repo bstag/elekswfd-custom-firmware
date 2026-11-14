@@ -263,7 +263,8 @@ impl ClockLink {
         if self.link.as_ref().is_some_and(|l| l.alive()) {
             return true;
         }
-        if self.link.is_some() {
+        if let Some(l) = &self.link {
+            applog::log_once(&format!("clock link dropped ({}): it stopped answering", l.name()));
             self.drop_link();
         }
         let mode = {
@@ -513,6 +514,7 @@ impl ClockLink {
             let wrong_kind =
                 (want[0] == "usb" && kind == "wifi") || (want[0] == "wifi" && kind == "usb");
             if wrong_kind || (kind == "wifi" && want[1..] != self.link_cfg[1..]) {
+                applog::log_once("clock link dropped: the connection settings changed");
                 self.drop_link();
                 return Ok(());
             }
@@ -532,6 +534,7 @@ impl ClockLink {
                     self.not_clock = Some((port, self.clock.now())); // look again in a few minutes
                     return Ok(());
                 };
+                applog::log_once(&format!("clock plugged in on {port}: switching from WiFi to USB"));
                 self.drop_link();
                 let usb: Box<dyn Link> = Box::new(UsbLink::new(serial, Rc::clone(&self.clock)));
                 match self.start_link(usb) {

@@ -50,13 +50,14 @@ def parse_a_records(data: bytes) -> list[str]:
         return []
 
 
-def resolve(name: str, timeout: float = 1.5) -> str | None:
-    """IP of name.local via mDNS, or None."""
+def resolve(name: str, timeout: float = 1.5, source: str = "") -> str | None:
+    """IP of name.local via mDNS, or None. `source`: this PC's address on the network to ask on
+    (on a PC with a VPN or virtual adapters, the default route may not be the LAN)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     try:
         s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
         s.settimeout(0.3)
-        s.bind(("", 0))
+        s.bind((source, 0))
         deadline = time.monotonic() + timeout
         s.sendto(build_query(name), MDNS_ADDR)
         while time.monotonic() < deadline:
