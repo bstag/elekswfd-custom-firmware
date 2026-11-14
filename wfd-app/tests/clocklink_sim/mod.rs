@@ -47,7 +47,7 @@ pub fn app() -> Arc<Ctx> {
         .join("wfd-clocklink-test-does-not-exist")
         .join("wfd_config.json");
     let ctx = Ctx::new(path, None, &[]);
-    *ctx.cfg.lock().unwrap() = wfd_app::config::defaults();
+    *ctx.settings_mut() = wfd_app::config::Settings::default();
     ctx.audio.lock().unwrap().energy = [0.02, 0.004];
     {
         let mut st = ctx.state();
@@ -76,12 +76,9 @@ pub fn app() -> Arc<Ctx> {
     Arc::new(ctx)
 }
 
-/// Set app settings like `app.cfg.update(...)`.
+/// Change app settings (as `POST /api/set` would; every value must be valid).
 pub fn set_cfg(ctx: &Ctx, v: Value) {
-    let mut cfg = ctx.cfg.lock().unwrap();
-    for (k, x) in v.as_object().unwrap() {
-        cfg.insert(k.clone(), x.clone());
-    }
+    ctx.settings_mut().apply(v.as_object().unwrap()).unwrap();
 }
 
 /// Queue a clock request like the web server does; the receiver gets the link's answer.

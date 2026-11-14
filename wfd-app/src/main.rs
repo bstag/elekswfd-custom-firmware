@@ -8,8 +8,8 @@
 //! ```
 //!
 //! Settings live in `wfd_config.json` next to the exe (written with defaults on first run);
-//! `--config <path>` uses another file. The format is the one the retired Python app wrote, so
-//! its settings file still loads (install.ps1 copies it on a first install).
+//! `--config <path>` uses another file. The retired Python app's settings file still loads
+//! (install.ps1 copies it on a first install).
 
 // Release builds are a windowed app: no console window pops up at login. When started from a
 // terminal, attach_parent_console() still shows --help and errors there.
@@ -146,7 +146,7 @@ fn main() {
 
     let ctx = Arc::new(Ctx::new(args.config.clone(), embedded_release(), FIRMWARE));
     if !args.config.exists()
-        && let Err(e) = config::save(&args.config, &ctx.cfg())
+        && let Err(e) = config::save(&args.config, &ctx.settings())
     {
         // (stderr still reaches a terminal that started us; the log is what a windowed run has)
         eprintln!("can't write {}: {e}", args.config.display());

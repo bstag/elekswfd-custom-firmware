@@ -5,7 +5,7 @@
 use regex::Regex;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use wfd_app::config::{CLOCK_KEYS, PROTOCOL, defaults};
+use wfd_app::config::{CLOCK_KEYS, PROTOCOL, Settings};
 use wfd_app::icons::ICON_NAMES;
 use wfd_app::web::BUILTIN_GRID;
 
@@ -70,8 +70,7 @@ fn clock_owned_settings_match_the_firmware() {
     let fw = all(r#"\bc\["(\w+)"\]"#, &src);
     let app: BTreeSet<&str> = CLOCK_KEYS.into_iter().collect();
     assert_eq!(app, fw);
-    let own = defaults();
-    let both: Vec<&&str> = CLOCK_KEYS.iter().filter(|k| own.contains_key(**k)).collect();
+    let both: Vec<&&str> = CLOCK_KEYS.iter().filter(|k| Settings::NAMES.contains(k)).collect();
     assert!(both.is_empty(), "a setting has one owner: {both:?}");
 }
 
@@ -123,7 +122,7 @@ fn sent_keys(html: &str) -> BTreeSet<String> {
 fn shared_pages_only_send_known_settings() {
     // the dashboard and the animator talk to the clock and to the app: every setting they send
     // must have an owner (an app setting, or one of the clock's)
-    let mut known: BTreeSet<String> = defaults().keys().cloned().collect();
+    let mut known: BTreeSet<String> = Settings::NAMES.iter().map(|k| k.to_string()).collect();
     known.extend(CLOCK_KEYS.iter().map(|k| k.to_string()));
     for name in ["dashboard.html", "draw.html"] {
         let sent = sent_keys(&page(name));

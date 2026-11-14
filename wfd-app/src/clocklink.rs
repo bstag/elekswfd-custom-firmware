@@ -12,6 +12,7 @@
 //! of the Python code (e.g. `now - last > 1.0 / max(2, fps)`); change either only on purpose.
 
 use crate::applog;
+use crate::config::{LinkMode, MessageMode, Settings};
 use crate::ctx::{Ctx, UploadJob};
 use crate::dsp::Levels;
 use crate::font14;
@@ -22,7 +23,7 @@ use crate::link::{
 };
 use crate::state::LevelsOut;
 use chrono::{Datelike, NaiveDateTime, Timelike};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -31,7 +32,6 @@ use std::sync::atomic::Ordering;
 /// One frame (app.py `ClockLink.TICK`).
 pub const TICK: f64 = 1.0 / 30.0;
 
-type Cfg = Map<String, Value>;
 /// Opens the clock's serial port (app.py `open_serial`).
 pub type OpenSerial = Box<dyn Fn() -> Option<Box<dyn SerialIo>>>;
 /// Finds and checks the clock on WiFi (app.py `open_wifi`).
@@ -82,44 +82,23 @@ pub fn run(ctx: Arc<Ctx>) {
     ClockLink::new(ctx, Platform::real()).run();
 }
 
-// cfg accessors with app.py's semantics (`c["key"]`, truthiness, numbers as floats)
-fn flag(c: &Cfg, key: &str) -> bool {
-    truthy(c.get(key))
-}
-
-fn num(c: &Cfg, key: &str) -> f64 {
-    match c.get(key) {
-        Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0),
-        Some(Value::Bool(b)) => f64::from(u8::from(*b)),
-        _ => 0.0,
-    }
-}
-
-fn text<'a>(c: &'a Cfg, key: &str) -> &'a str {
-    c.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
 /// `{temp}C` / `{temp}F`.
 fn temp_text(temp: i32, unit: u8) -> String {
     format!("{temp}{}", if unit != 0 { 'C' } else { 'F' })
 }
 
-/// `grid_custom` frames as row bytes (each padded / cut to 7 rows).
-fn custom_frames(c: &Cfg) -> Vec<[u8; 7]> {
-    let Some(Value::Array(frames)) = c.get("grid_custom") else {
-        return Vec::new();
-    };
-    frames
-        .iter()
-        .filter_map(Value::as_array)
-        .map(|f| {
-            let mut rows = [0u8; 7];
-            for (r, v) in rows.iter_mut().zip(f) {
-                *r = (v.as_u64().unwrap_or(0) & 0x7F) as u8;
-            }
-            rows
-        })
-        .collect()
+/// The settings a link was made with: a change to them may need a new link.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct LinkSettings {
+    mode: LinkMode,
+    host: String,
+    pass: String,
+}
+
+impl LinkSettings {
+    fn of(s: &Settings) -> Self {
+        LinkSettings { mode: s.link, host: s.clock_host.clone(), pass: s.clock_pass.clone() }
+    }
 }
 
 pub struct ClockLink {
@@ -143,8 +122,8 @@ pub struct ClockLink {
     rot_until: f64,
     last_cfg: f64,
     last_usb_check: f64,
-    /// (link, clock_host, clock_pass) the link was made with
-    link_cfg: [Value; 3],
+    /// link, clock_host and clock_pass as the link was made with them
+    link_cfg: LinkSettings,
     /// a CH340 port that didn't answer like the clock, and when we found out
     not_clock: Option<(String, f64)>,
     grid: GridEngine,
@@ -218,7 +197,7 @@ impl ClockLink {
                 self.clock.sleep(2.0);
                 continue;
             }
-            let c = self.ctx.cfg();
+            let c = self.ctx.settings();
             // tick() may have dropped the link (settings changed / USB plugged in): no flush then
             let res = self.tick(&c).and_then(|()| match self.link.as_mut() {
                 Some(l) => l.flush(),
@@ -267,18 +246,12 @@ impl ClockLink {
             applog::log_once(&format!("clock link dropped ({}): it stopped answering", l.name()));
             self.drop_link();
         }
-        let mode = {
-            let cfg = self.ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
-            cfg.get("link")
-                .and_then(Value::as_str)
-                .unwrap_or("auto")
-                .to_string()
-        };
+        let mode = self.ctx.settings_mut().link;
         // In auto mode, a CH340 port that just turned out not to be the clock is left alone
         // for a while (WiFi serves meanwhile) instead of being probed again on every connect.
         let port = (self.p.find_port)();
-        let skip_usb = mode == "auto" && self.is_not_clock(port.as_deref());
-        let serial = if (mode == "auto" || mode == "usb") && !skip_usb {
+        let skip_usb = mode == LinkMode::Auto && self.is_not_clock(port.as_deref());
+        let serial = if mode != LinkMode::Wifi && !skip_usb {
             (self.p.open_serial)()
         } else {
             None
@@ -297,7 +270,7 @@ impl ClockLink {
                 }
             }
         }
-        if (mode == "auto" || mode == "wifi")
+        if mode != LinkMode::Usb
             && let Some(link) = (self.p.open_wifi)(&self.ctx)
         {
             return match self.start_link(link) {
@@ -312,7 +285,7 @@ impl ClockLink {
         if port.is_none() {
             self.ctx.state().link_problem = None; // nothing plugged in: no USB complaint to show
         }
-        if let Some(port) = port.filter(|_| mode != "wifi" && self.ctx.state().link_problem.is_none()) {
+        if let Some(port) = port.filter(|_| mode != LinkMode::Wifi && self.ctx.state().link_problem.is_none()) {
             // (reached only when the port didn't open: a silent one set its own message above)
             self.ctx.state().link_problem = Some(format!(
                 "{port} is the clock's USB port, but another program has it open (a serial monitor, or a second copy of this app)"
@@ -351,10 +324,7 @@ impl ClockLink {
             st.port = self.link.as_ref().map(|l| l.name());
             st.link = self.link.as_ref().map(|l| l.kind().to_string());
         }
-        self.link_cfg = {
-            let cfg = self.ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
-            ["link", "clock_host", "clock_pass"].map(|k| cfg.get(k).cloned().unwrap_or_default())
-        };
+        self.link_cfg = LinkSettings::of(&self.ctx.settings_mut());
         self.sent.clear(); // a fresh (or power-cycled) clock needs everything again
         // First the clock's settings: they also tell whether it has NTP time.
         // (app.py lets an error here escape and end the thread; here it just drops the link)
@@ -365,7 +335,7 @@ impl ClockLink {
         if !answered {
             return Ok(false);
         }
-        let sync = truthy(self.ctx.cfg.lock().unwrap_or_else(|e| e.into_inner()).get("time_sync"));
+        let sync = self.ctx.settings_mut().time_sync;
         if sync && !self.link().clock_ntp() {
             self.set_time()?;
         }
@@ -451,18 +421,18 @@ impl ClockLink {
     /// link and "Update clock" authenticate without the user typing it twice. The link reconnect
     /// that a clock_pass change normally triggers isn't needed here (it's the same clock).
     fn remember_clock_password(&mut self, pw: &str) {
-        let cfg = {
-            let mut cfg = self.ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
-            cfg.insert("clock_pass".into(), Value::String(pw.to_string()));
-            cfg.clone()
+        let settings = {
+            let mut s = self.ctx.settings_mut();
+            s.clock_pass = pw.to_string();
+            s.clone()
         };
-        if let Err(e) = crate::config::save(&self.ctx.cfg_path, &cfg) {
+        if let Err(e) = crate::config::save(&self.ctx.cfg_path, &settings) {
             crate::applog::log(&format!(
                 "can't save the clock password to {}: {e}",
                 self.ctx.cfg_path.display()
             ));
         }
-        self.link_cfg[2] = Value::String(pw.to_string()); // [link, clock_host, clock_pass]
+        self.link_cfg.pass = pw.to_string();
     }
 
     fn send(&mut self, line: &str) -> Result<(), LinkLost> {
@@ -497,23 +467,24 @@ impl ClockLink {
 
     // ---------------------------------------------------------------- one frame
 
-    fn tick(&mut self, c: &Cfg) -> Result<(), LinkLost> {
+    fn tick(&mut self, c: &Settings) -> Result<(), LinkLost> {
         let ntp = self.link().clock_ntp();
-        let due = flag(c, "time_sync") && self.clock.now() - self.last_sync > 600.0 && !ntp;
+        let due = c.time_sync && self.clock.now() - self.last_sync > 600.0 && !ntp;
         if due || self.ctx.sync_now.load(Ordering::Relaxed) {
             // a WiFi clock keeps its own time (NTP)
             self.set_time()?;
             self.last_sync = self.clock.now();
             self.ctx.sync_now.store(false, Ordering::Relaxed);
         }
-        let want =
-            ["link", "clock_host", "clock_pass"].map(|k| c.get(k).cloned().unwrap_or_default());
+        let want = LinkSettings::of(c);
         if want != self.link_cfg {
             // connection settings changed: reconnect if they concern this link
             let kind = self.link().kind();
-            let wrong_kind =
-                (want[0] == "usb" && kind == "wifi") || (want[0] == "wifi" && kind == "usb");
-            if wrong_kind || (kind == "wifi" && want[1..] != self.link_cfg[1..]) {
+            let wrong_kind = (want.mode == LinkMode::Usb && kind == "wifi")
+                || (want.mode == LinkMode::Wifi && kind == "usb");
+            let wifi_target_changed =
+                want.host != self.link_cfg.host || want.pass != self.link_cfg.pass;
+            if wrong_kind || (kind == "wifi" && wifi_target_changed) {
                 applog::log_once("clock link dropped: the connection settings changed");
                 self.drop_link();
                 return Ok(());
@@ -521,7 +492,7 @@ impl ClockLink {
             self.link_cfg = want;
         }
         if self.link().kind() == "wifi"
-            && text(c, "link") == "auto"
+            && c.link == LinkMode::Auto
             && self.clock.now() - self.last_usb_check > 10.0
         {
             self.last_usb_check = self.clock.now(); // plugged in meanwhile? USB is the better link
@@ -561,13 +532,13 @@ impl ClockLink {
         self.push_location()?;
         self.run_upload()?;
         let levels = self.audio_levels(c);
-        let vals = if flag(c, "spectrum") { levels } else { [0, 0] };
+        let vals = if c.spectrum { levels } else { [0, 0] };
         self.send(&format!("SPEC {} {}", vals[0], vals[1]))?;
         let icons = {
             let st = self.ctx.state();
             let m = &st.metrics;
             compute_icons(
-                text(c, "icon_mode"),
+                c.icon_mode.as_str(),
                 levels[0],
                 levels[1],
                 f64::from(m.cpu),
@@ -579,7 +550,7 @@ impl ClockLink {
             )
         };
         self.send(&format!("ICON {icons}"))?;
-        self.send(&format!("LOGO {}", u8::from(flag(c, "logo"))))?;
+        self.send(&format!("LOGO {}", u8::from(c.logo)))?;
         let now = self.clock.local_now();
         self.ctx.state().time = Some(now.format("%a %H:%M:%S").to_string());
         self.send_bars_weather(c)?;
@@ -631,11 +602,9 @@ impl ClockLink {
     }
 
     /// 0..12 levels for output / mic (always computed: the spectrum and the icon row use them).
-    fn audio_levels(&mut self, c: &Cfg) -> [u8; 2] {
+    fn audio_levels(&mut self, c: &Settings) -> [u8; 2] {
         let energy = self.ctx.audio.lock().unwrap_or_else(|e| e.into_inner()).energy;
-        let levels = self
-            .levels
-            .update(energy, [num(c, "gain_out"), num(c, "gain_mic")]);
+        let levels = self.levels.update(energy, [c.gain_out, c.gain_mic]);
         self.ctx.state().levels = LevelsOut {
             out: levels[0],
             mic: levels[1],
@@ -643,15 +612,15 @@ impl ClockLink {
         levels
     }
 
-    fn send_bars_weather(&mut self, c: &Cfg) -> Result<(), LinkLost> {
-        if flag(c, "bars") && self.clock.now() - self.last_bars > 1.0 {
+    fn send_bars_weather(&mut self, c: &Settings) -> Result<(), LinkLost> {
+        if c.bars && self.clock.now() - self.last_bars > 1.0 {
             let m = self.ctx.state().metrics.clone();
             self.send(&format!("BARS {} {} {}", m.cpu, m.gpu, m.ram))?;
             self.last_bars = self.clock.now();
         }
         let w = self.ctx.state().weather.clone();
         // only once real weather has loaded
-        if flag(c, "weather") && !w.label.is_empty() && self.clock.now() - self.last_wx > 60.0 {
+        if c.weather && !w.label.is_empty() && self.clock.now() - self.last_wx > 60.0 {
             self.send(&format!("WX {} {} {}", w.code, w.temp, w.unit))?;
             self.last_wx = self.clock.now();
         }
@@ -659,37 +628,44 @@ impl ClockLink {
     }
 
     /// Which source the message line shows now, or None to let the firmware show the temp.
-    fn message_source(&mut self, c: &Cfg) -> Option<&'static str> {
-        match text(c, "message_mode") {
-            "window" => return Some("window"),
-            "text" => return Some("text"),
-            "date" => return Some("date"),
+    fn message_source(&mut self, c: &Settings) -> Option<&'static str> {
+        match c.message_mode {
+            MessageMode::Window => return Some("window"),
+            MessageMode::Text => return Some("text"),
+            MessageMode::Date => return Some("date"),
             // the forecast once two days are known; until then the firmware shows the temp
-            "forecast" => return (self.ctx.state().weather.forecast.len() >= 2).then_some("forecast"),
-            "rotate" => {}
-            _ => return None, // "weather": the firmware draws the temperature itself
+            MessageMode::Forecast => {
+                return (self.ctx.state().weather.forecast.len() >= 2).then_some("forecast");
+            }
+            MessageMode::Rotate => {}
+            MessageMode::Weather => return None, // the firmware draws the temperature itself
         }
-        let srcs: Vec<&'static str> = ["weather", "window", "text", "date"]
-            .into_iter()
-            .filter(|x| flag(c, &format!("rotate_{x}")))
-            .collect();
+        let srcs: Vec<&'static str> = [
+            ("weather", c.rotate_weather),
+            ("window", c.rotate_window),
+            ("text", c.rotate_text),
+            ("date", c.rotate_date),
+        ]
+        .into_iter()
+        .filter_map(|(src, on)| on.then_some(src))
+        .collect();
         if srcs.is_empty() {
             return None;
         }
         let n = srcs.len() as i64;
         if self.clock.now() >= self.rot_until {
             self.rot_idx = (self.rot_idx + 1).rem_euclid(n);
-            self.rot_until = self.clock.now() + num(c, "rotate_dwell").max(2.0);
+            self.rot_until = self.clock.now() + f64::from(c.rotate_dwell).max(2.0);
             self.cur_src = None;
             self.scroll_pos = 0;
         }
         Some(srcs[self.rot_idx.rem_euclid(n) as usize])
     }
 
-    fn send_message(&mut self, c: &Cfg, now: NaiveDateTime) -> Result<(), LinkLost> {
+    fn send_message(&mut self, c: &Settings, now: NaiveDateTime) -> Result<(), LinkLost> {
         let cur = self.message_source(c);
         let Some(cur) = cur else { return Ok(()) };
-        if self.clock.now() - self.last_scroll <= num(c, "scroll_ms") / 1000.0 {
+        if self.clock.now() - self.last_scroll <= f64::from(c.scroll_ms) / 1000.0 {
             return Ok(());
         }
         let w = self.ctx.state().weather.clone();
@@ -731,7 +707,7 @@ impl ClockLink {
                         ),
                     ];
                     fill.iter()
-                        .fold(text(c, "custom_text").to_string(), |t, (k, v)| {
+                        .fold(c.custom_text.clone(), |t, (k, v)| {
                             t.replace(&format!("{{{k}}}"), v)
                         })
                 }
@@ -754,13 +730,13 @@ impl ClockLink {
         Ok(())
     }
 
-    fn send_grid(&mut self, c: &Cfg) -> Result<(), LinkLost> {
+    fn send_grid(&mut self, c: &Settings) -> Result<(), LinkLost> {
         let since = self.clock.now() - self.last_grid;
         let preview = self.ctx.grid_preview.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let previewing = preview
             .at
             .is_some_and(|at| self.clock.now() - self.clock.epoch_of(at) < 2.0);
-        let (enable, framed) = (flag(c, "grid_enable"), flag(c, "grid_frame"));
+        let (enable, framed) = (c.grid_enable, c.grid_frame);
         if previewing {
             // the drawing tool's live preview wins
             if since > 1.0 / 20.0 {
@@ -772,7 +748,7 @@ impl ClockLink {
                 self.ctx.state().grid_rows = Some(preview.rows);
                 self.last_grid = self.clock.now();
             }
-        } else if (enable || framed) && since > 1.0 / num(c, "grid_fps").max(2.0) {
+        } else if (enable || framed) && since > 1.0 / f64::from(c.grid_fps).max(2.0) {
             let rows = if enable {
                 let scene = self.weather_scene();
                 let extra = {
@@ -782,11 +758,11 @@ impl ClockLink {
                         cpu: f64::from(st.metrics.cpu),
                         gpu: f64::from(st.metrics.gpu),
                         ram: f64::from(st.metrics.ram),
-                        custom: custom_frames(c),
+                        custom: c.grid_custom.clone(),
                         scene,
                     }
                 };
-                self.grid.frame(text(c, "grid_anim"), &extra)
+                self.grid.frame(&c.grid_anim, &extra)
             } else {
                 [0; 7]
             };

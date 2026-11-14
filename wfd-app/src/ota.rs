@@ -192,14 +192,7 @@ fn job(ctx: &Ctx, hooks: &OtaHooks) -> Result<String, String> {
         "uploading",
         format!("sending {} KB to {ip}…", data.len() / 1024),
     );
-    let pw = ctx
-        .cfg
-        .lock()
-        .unwrap()
-        .get("clock_pass")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let pw = ctx.settings_mut().clock_pass.clone();
     for attempt in 1..=2 {
         // a stalled upload (busy WiFi) is worth one more try
         if attempt == 2 {

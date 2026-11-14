@@ -1,9 +1,9 @@
 //! The shared context every thread holds (an `Arc<Ctx>`): settings, state, the background
 //! readers' data, and the queues the web server uses to ask the clock link to do things.
 //!
-//! Mirrors the module-level globals of legacy/python-app/app.py (cfg + cfg_lock, state + state_lock,
-//! clock_requests, uploads, grid_preview, sync_now, stop).
-use crate::{audio::AudioShared, metrics::Metrics, release::Release, state::State};
+//! Grew out of the module-level globals of legacy/python-app/app.py (cfg, state, clock_requests,
+//! uploads, grid_preview, sync_now, stop).
+use crate::{audio::AudioShared, config::Settings, metrics::Metrics, release::Release, state::State};
 use serde_json::{Map, Value};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -42,7 +42,8 @@ pub struct GridPreview {
 
 pub struct Ctx {
     pub cfg_path: PathBuf,
-    pub cfg: Mutex<Map<String, Value>>,
+    /// the app's own settings (saved in `cfg_path`)
+    pub settings: Mutex<Settings>,
     pub state: Mutex<State>,
     pub audio: Arc<Mutex<AudioShared>>,
     pub metrics: Arc<Mutex<Metrics>>,
@@ -58,11 +59,11 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn new(cfg_path: PathBuf, release: Option<Release>, firmware: &'static [u8]) -> Self {
-        let cfg = crate::config::load(&cfg_path);
+        let settings = crate::config::load(&cfg_path);
         let state = State { release: release.clone(), ..State::default() };
         Ctx {
             cfg_path,
-            cfg: Mutex::new(cfg),
+            settings: Mutex::new(settings),
             state: Mutex::new(state),
             audio: Arc::default(),
             metrics: Arc::default(),
@@ -76,9 +77,14 @@ impl Ctx {
         }
     }
 
-    /// A snapshot of the app settings (like `dict(cfg)` under cfg_lock).
-    pub fn cfg(&self) -> Map<String, Value> {
-        self.cfg.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    /// A snapshot of the app settings.
+    pub fn settings(&self) -> Settings {
+        self.settings_mut().clone()
+    }
+
+    /// The app settings, locked (to read a field or two, or to change them).
+    pub fn settings_mut(&self) -> MutexGuard<'_, Settings> {
+        self.settings.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn state(&self) -> MutexGuard<'_, State> {

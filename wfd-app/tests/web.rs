@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use wfd_app::config;
+use wfd_app::config::{self, Settings};
 use wfd_app::ctx::{ClockReply, Ctx, UploadJob};
 use wfd_app::release::Release;
 
@@ -94,12 +94,13 @@ fn post(app: &App, path: &str, body: Value) -> (u16, Value) {
     post_raw(app, path, &body.to_string(), true)
 }
 
+/// An app setting as `/api/status` shows it.
 fn cfg(app: &App, key: &str) -> Value {
-    app.ctx.cfg().get(key).cloned().unwrap_or(Value::Null)
+    app.ctx.settings().to_json().get(key).cloned().unwrap_or(Value::Null)
 }
 
 fn default(key: &str) -> Value {
-    config::defaults()[key].clone()
+    Settings::default().to_json()[key].clone()
 }
 
 /// A fake link thread: records each patch and answers with `reply`.
@@ -162,17 +163,45 @@ fn set_normalizes_values() {
         post(
             &app,
             "/api/set",
-            json!({"grid_fps": "9", "logo": true, "gain_out": 2})
+            json!({"grid_fps": 9.7, "logo": true, "gain_out": 2, "scroll_ms": 99999})
         ),
         (200, json!({"ok": true}))
     );
     assert_eq!(cfg(&app, "grid_fps"), json!(9));
+    assert_eq!(cfg(&app, "scroll_ms"), json!(5000), "clamped");
     assert_eq!(cfg(&app, "logo"), json!(true));
     let g = cfg(&app, "gain_out");
     assert!(g.is_f64() && g.as_f64() == Some(2.0), "{g}");
     // and it was saved
     let saved = config::load(&app.ctx.cfg_path);
-    assert_eq!(saved["grid_fps"], json!(9));
+    assert_eq!(saved, app.ctx.settings());
+    assert_eq!(saved.grid_fps, 9);
+}
+
+#[test]
+fn set_accepts_what_the_pages_send() {
+    // the value shapes dashboard.html and draw.html send for app settings
+    let app = start();
+    let patch = json!({
+        "time_sync": false, "spectrum": false, "bars": false, "weather": false, "logo": true,
+        "grid_enable": true, "grid_frame": true, "rotate_weather": false, "rotate_window": false,
+        "rotate_text": true, "rotate_date": true,
+        "gain_out": 0.2, "gain_mic": 4, "scroll_ms": 450, "grid_fps": 25, "rotate_dwell": 2,
+        "message_mode": "forecast", "icon_mode": "all", "grid_anim": "custom",
+        "custom_text": "HI {time}", "link": "wifi", "clock_host": "10.0.0.9", "clock_pass": "pw",
+        "grid_custom": [[1, 2, 4, 8, 16, 32, 64], [127, 0, 0, 0, 0, 0, 0]],
+    });
+    assert_eq!(post(&app, "/api/set", patch.clone()), (200, json!({"ok": true})));
+    let (_, body) = get(&app, "/api/status");
+    for (k, v) in patch.as_object().unwrap() {
+        let want = match k.as_str() {
+            "clock_pass" => json!(""), // never sent back
+            "gain_mic" => json!(4.0),
+            _ => v.clone(),
+        };
+        assert_eq!(body["config"][k], want, "{k}");
+    }
+    assert_eq!(body["state"]["clock_pass_set"], json!(true));
 }
 
 #[test]
@@ -204,11 +233,7 @@ fn status_returns_state_and_config() {
         clock.insert("style".into(), json!(2));
         st.clock = Some(clock);
     }
-    app.ctx
-        .cfg
-        .lock()
-        .unwrap()
-        .insert("clock_pass".into(), json!("secret"));
+    app.ctx.settings_mut().clock_pass = "secret".into();
     let (status, body) = get(&app, "/api/status");
     assert_eq!(status, 200);
     let st = &body["state"];
@@ -321,7 +346,7 @@ fn clock_settings_go_to_the_clock() {
     );
     assert_eq!(cfg(&app, "logo"), json!(true));
     assert!(
-        !app.ctx.cfg().contains_key("brightness"),
+        !app.ctx.settings().to_json().contains_key("brightness"),
         "the app keeps no copy"
     );
 }
@@ -432,10 +457,10 @@ fn grid_save_queues_validated_frames() {
 fn grid_save_builtin_sends_name_not_frames() {
     let app = start();
     {
-        let mut c = app.ctx.cfg.lock().unwrap();
-        c.insert("grid_anim".into(), json!("rain"));
-        c.insert("grid_fps".into(), json!(14));
-        c.insert("grid_frame".into(), json!(true));
+        let mut c = app.ctx.settings_mut();
+        c.grid_anim = "rain".into();
+        c.grid_fps = 14;
+        c.grid_frame = true;
     }
     assert_eq!(
         post(&app, "/api/grid_save", json!({})),
@@ -466,15 +491,12 @@ fn grid_save_builtin_sends_name_not_frames() {
 fn grid_save_custom_needs_frames() {
     let app = start();
     {
-        let mut c = app.ctx.cfg.lock().unwrap();
-        c.insert("grid_anim".into(), json!("custom"));
-        c.insert("grid_custom".into(), json!([]));
+        let mut c = app.ctx.settings_mut();
+        c.grid_anim = "custom".into();
+        c.grid_custom = Vec::new();
     }
     assert_eq!(post(&app, "/api/grid_save", json!({})).0, 400);
-    app.ctx.cfg.lock().unwrap().insert(
-        "grid_custom".into(),
-        json!([[1, 1, 1, 1, 1, 1, 1], [2, 2, 2, 2, 2, 2, 2]]),
-    );
+    app.ctx.settings_mut().grid_custom = vec![[1; 7], [2; 7]];
     assert_eq!(
         post(&app, "/api/grid_save", json!({})),
         (200, json!({"queued": 2}))
@@ -539,9 +561,9 @@ fn old_config_files_dont_bring_back_clock_settings() {
     )
     .unwrap();
     let loaded = config::load(&path);
-    assert_eq!(loaded["logo"], json!(true));
+    assert_eq!(loaded, Settings { logo: true, ..Settings::default() });
     for k in ["brightness", "style", "_comment"] {
-        assert!(!loaded.contains_key(k), "{k}");
+        assert!(!loaded.to_json().contains_key(k), "{k}");
     }
     let _ = std::fs::remove_dir_all(dir);
 }

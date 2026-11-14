@@ -15,7 +15,7 @@
 //! Each request runs on its own thread (like ThreadingHTTPServer), so a slow trip to the clock
 //! in `/api/set` doesn't hold up status polling.
 
-use crate::config::{self, CLOCK_KEYS, PROTOCOL, py};
+use crate::config::{self, CLOCK_KEYS, PROTOCOL};
 use crate::ctx::{Ctx, UploadJob};
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
@@ -158,9 +158,9 @@ fn get(ctx: &Ctx, path: &str) -> Reply {
 /// GET /api/status: state (+ clock_pass_set, app_protocol, compat, update_available) and
 /// config = app settings + the clock's own, with the password blanked.
 pub fn status(ctx: &Ctx) -> Value {
-    let cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
+    let settings = ctx.settings();
     let st = ctx.state();
-    let mut shown = cfg.clone();
+    let mut shown = settings.to_json();
     if let Some(clock) = &st.clock {
         shown.extend(clock.clone());
     }
@@ -185,8 +185,7 @@ pub fn status(ctx: &Ctx) -> Value {
     if let Some(Value::Object(m)) = state.get_mut("metrics") {
         m.remove("battery");
     }
-    let pass_set = cfg.get("clock_pass").is_some_and(truthy);
-    state.insert("clock_pass_set".into(), json!(pass_set));
+    state.insert("clock_pass_set".into(), json!(!settings.clock_pass.is_empty()));
     state.insert("app_protocol".into(), json!(PROTOCOL));
     state.insert("compat".into(), json!(compat));
     state.insert("update_available".into(), json!(update_available));
@@ -243,25 +242,10 @@ fn post(ctx: &Arc<Ctx>, req: &mut Request) -> Reply {
 /// POST /api/set: app settings are validated and saved here, clock settings go to the clock
 /// (which validates its own). All-or-nothing: an error anywhere applies nothing.
 fn api_set(ctx: &Ctx, body: Map<String, Value>) -> Reply {
-    let mut clean = Map::new();
-    let mut errors = Map::new();
-    let mut clock = Map::new();
-    for (k, v) in body {
-        if CLOCK_KEYS.contains(&k.as_str()) {
-            clock.insert(k, v);
-            continue;
-        }
-        match config::coerce(&k, &v) {
-            Ok(v) => {
-                clean.insert(k, v);
-            }
-            Err(e) => {
-                errors.insert(k, json!(e));
-            }
-        }
-    }
-    if !errors.is_empty() {
-        // nothing reaches the clock unless the app part is valid
+    let (clock, own): (Map<String, Value>, Map<String, Value>) =
+        body.into_iter().partition(|(k, _)| CLOCK_KEYS.contains(&k.as_str()));
+    // nothing reaches the clock unless the app part is valid
+    if let Err(errors) = ctx.settings().apply(&own) {
         return json_reply(400, json!({"error": errors}));
     }
     let mut warning = None;
@@ -274,9 +258,12 @@ fn api_set(ctx: &Ctx, body: Map<String, Value>) -> Reply {
         }
     }
     {
-        let mut cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
-        cfg.extend(clean);
-        if let Err(e) = config::save(&ctx.cfg_path, &cfg) {
+        let mut settings = ctx.settings_mut();
+        // (checked above, and validation doesn't depend on the current values: this can't fail)
+        if let Err(errors) = settings.apply(&own) {
+            return json_reply(400, json!({"error": errors}));
+        }
+        if let Err(e) = config::save(&ctx.cfg_path, &settings) {
             crate::applog::log(&format!(
                 "can't save settings to {}: {e}",
                 ctx.cfg_path.display()
@@ -299,8 +286,8 @@ fn grid_preview(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
     };
     let mut rows = [0u8; 7];
     for (slot, x) in rows.iter_mut().zip(given.iter()) {
-        match py::int_low7(x) {
-            Ok(v) => *slot = v as u8,
+        match config::grid_row(x) {
+            Ok(v) => *slot = v,
             Err(e) => return json_reply(400, json!({"error": format!("rows: {e}")})),
         }
     }
@@ -318,41 +305,25 @@ fn grid_preview(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
 fn grid_save(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
     let mut drawn = None;
     if let Some(f) = body.get("frames").filter(|f| truthy(f)) {
-        match config::coerce("grid_custom", f) {
+        match config::grid_frames(f) {
             Ok(v) => drawn = Some(v),
             Err(e) => return json_reply(400, json!({"error": format!("frames: {e}")})),
         }
     }
-    let drawn = drawn.filter(truthy);
-    let (anim, custom, fps, frame) = {
-        let cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
-        let anim = body
-            .get("anim")
-            .or(cfg.get("grid_anim"))
-            .cloned()
-            .unwrap_or(Value::Null);
-        let custom = drawn.clone().or_else(|| cfg.get("grid_custom").cloned());
-        let fps = body
-            .get("fps")
-            .or(cfg.get("grid_fps"))
-            .cloned()
-            .unwrap_or(Value::Null);
-        let frame = body
-            .get("frame")
-            .or(cfg.get("grid_frame"))
-            .is_some_and(truthy);
-        (anim, custom, fps, frame)
+    let drawn = drawn.filter(|d| !d.is_empty());
+    let settings = ctx.settings();
+    let anim = body.get("anim").cloned().unwrap_or_else(|| json!(settings.grid_anim));
+    let fps = match body.get("fps").map(fps_value) {
+        None => settings.grid_fps,
+        Some(Ok(f)) => f,
+        Some(Err(e)) => return json_reply(400, json!({"error": format!("fps: {e}")})),
     };
-    let fps = match py_int(&fps) {
-        Ok(f) => f.clamp(0, u32::MAX as i64) as u32,
-        Err(e) => return json_reply(400, json!({"error": format!("fps: {e}")})),
-    };
+    let frame = body.get("frame").map_or(settings.grid_frame, truthy);
     let job = if drawn.is_some() || anim == "custom" {
-        let frames = match custom.as_ref().filter(|c| truthy(c)).map(to_frames) {
-            None => return json_reply(400, json!({"error": "no frames drawn yet"})),
-            Some(Err(e)) => return json_reply(400, json!({"error": format!("frames: {e}")})),
-            Some(Ok(f)) => f,
-        };
+        let frames = drawn.unwrap_or(settings.grid_custom);
+        if frames.is_empty() {
+            return json_reply(400, json!({"error": "no frames drawn yet"}));
+        }
         UploadJob::Frames { frames, fps, frame }
     } else if let Some(name) = anim.as_str().filter(|a| BUILTIN_GRID.contains(a)) {
         UploadJob::Anim {
@@ -361,7 +332,10 @@ fn grid_save(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
             frame,
         }
     } else {
-        let name = py::str_value(&anim);
+        let name = match &anim {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
         return json_reply(
             400,
             json!({"error": format!("'{name}' needs live data; can't store it standalone")}),
@@ -375,23 +349,10 @@ fn grid_save(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
     json_reply(200, json!({"queued": queued}))
 }
 
-/// Validated grid frames (grid_custom format) as row arrays.
-fn to_frames(v: &Value) -> Result<Vec<[u8; 7]>, String> {
-    let v = config::coerce("grid_custom", v)?;
-    Ok(v.as_array()
-        .map(|frames| {
-            frames
-                .iter()
-                .map(|f| {
-                    let mut rows = [0u8; 7];
-                    for (slot, x) in rows.iter_mut().zip(f.as_array().into_iter().flatten()) {
-                        *slot = x.as_u64().unwrap_or(0) as u8;
-                    }
-                    rows
-                })
-                .collect()
-        })
-        .unwrap_or_default())
+/// An upload's frames per second: a JSON number, cut to a whole number (the clock clamps it).
+fn fps_value(v: &Value) -> Result<u32, String> {
+    let x = v.as_f64().ok_or("expected a number")?;
+    Ok(x.trunc().clamp(0.0, f64::from(u32::MAX)) as u32)
 }
 
 /// POST /api/om_save (kept for older pages): same as setting the clock's offline_text.
@@ -427,29 +388,7 @@ fn clock_password(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
     }
 }
 
-/// Python truthiness of a JSON value.
+/// Is a JSON value "set"? (false, 0, "", [], {} and null are not)
 fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|x| x != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
-/// Python `int(x)` of a JSON value.
-fn py_int(v: &Value) -> Result<i64, String> {
-    match v {
-        Value::Bool(b) => Ok(*b as i64),
-        Value::Number(n) => match n.as_i64() {
-            Some(i) => Ok(i),
-            None => py::int_from_float(n.as_f64().unwrap_or(f64::NAN)),
-        },
-        Value::String(s) => py::int_str(s)
-            .and_then(|(neg, d)| d.parse::<i64>().ok().map(|x| if neg { -x } else { x }))
-            .ok_or_else(|| format!("invalid literal for int() with base 10: '{s}'")),
-        _ => Err("expected a number".into()),
-    }
+    crate::link::truthy(Some(v))
 }

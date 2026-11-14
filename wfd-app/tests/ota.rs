@@ -130,10 +130,7 @@ fn a_refused_upload_is_logged_too() {
 #[test]
 fn update_uploads_the_shipped_firmware() {
     let ctx = ctx_with_release();
-    ctx.cfg
-        .lock()
-        .unwrap()
-        .insert("clock_pass".into(), "pw".into());
+    ctx.settings_mut().clock_pass = "pw".into();
     let (h, calls) = hooks(
         Some("10.0.0.9"),
         || Ok(()),

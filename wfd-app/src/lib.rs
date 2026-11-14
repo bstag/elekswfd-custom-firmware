@@ -3,7 +3,8 @@
 //! that code, and tests/ hold regression tests of this app's own behaviour.
 //!
 //! Modules, roughly in the order data flows:
-//! - `config`    app settings (wfd_config.json), validation, which settings the clock owns
+//! - `config`    typed app settings (`Settings`, saved in wfd_config.json), their validation,
+//!   which settings the clock owns
 //! - `audio`     PC output (WASAPI loopback) + mic capture  -> energies + 7 FFT bands
 //! - `dsp`       audio levels (0..12 meters) and band tracking
 //! - `metrics`   CPU / GPU / RAM / battery

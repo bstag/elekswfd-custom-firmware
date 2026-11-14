@@ -37,7 +37,7 @@ fn set_over_usb_and_the_app_remembers_it() {
     assert_eq!(rx.try_recv().unwrap(), Ok(None));
     assert!(sent(&s).contains(&"WEBPASS hunter2".to_string()));
     assert_eq!(ctx.state().clock_pw_set, Some(true));
-    assert_eq!(ctx.cfg()["clock_pass"], json!("hunter2"), "WiFi and updates keep working");
+    assert_eq!(ctx.settings().clock_pass, "hunter2", "WiFi and updates keep working");
     let saved: Value = serde_json::from_str(&std::fs::read_to_string(&ctx.cfg_path).unwrap()).unwrap();
     assert_eq!(saved["clock_pass"], json!("hunter2"), "and it's saved");
 }
@@ -51,7 +51,7 @@ fn remove_it() {
     s.run();
     assert_eq!(rx.try_recv().unwrap(), Ok(None));
     assert_eq!(ctx.state().clock_pw_set, Some(false));
-    assert_eq!(ctx.cfg()["clock_pass"], json!(""));
+    assert_eq!(ctx.settings().clock_pass, "");
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn the_clock_rejects_a_bad_one_and_nothing_changes() {
     s.run();
     let err = rx.try_recv().unwrap().unwrap_err();
     assert!(err["password"].as_str().unwrap().contains("no spaces"), "{err}");
-    assert_eq!(ctx.cfg()["clock_pass"], json!(""), "app setting untouched");
+    assert_eq!(ctx.settings().clock_pass, "", "app setting untouched");
 }
 
 #[test]

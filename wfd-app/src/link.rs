@@ -930,14 +930,7 @@ fn is_dotted_quad(host: &str) -> bool {
 /// The clock's IP for WiFi: a configured IP; else the address the clock itself reported (over
 /// USB, `_ip`) or last answered on; else the configured name / wfd-clock.local via DNS or mDNS.
 pub fn find_clock_ip(ctx: &Ctx) -> Option<String> {
-    let host = {
-        let cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
-        cfg.get("clock_host")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string()
-    };
+    let host = ctx.settings_mut().clock_host.trim().to_string();
     let host = if host.is_empty() {
         CLOCK_NAME.to_string()
     } else {
@@ -1029,9 +1022,8 @@ fn try_wifi(ctx: &Ctx, ip: &str, pw: &str, clock: &Rc<dyn Clock>) -> Option<Box<
 pub fn open_wifi(ctx: &Ctx, clock: Rc<dyn Clock>) -> Option<Box<dyn Link>> {
     let ip = find_clock_ip(ctx)?;
     let (pw, host) = {
-        let cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
-        let text = |k: &str| cfg.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        (text("clock_pass"), text("clock_host").trim().to_string())
+        let s = ctx.settings_mut();
+        (s.clock_pass.clone(), s.clock_host.trim().to_string())
     };
     if let Some(link) = try_wifi(ctx, &ip, &pw, &clock) {
         return Some(link);
