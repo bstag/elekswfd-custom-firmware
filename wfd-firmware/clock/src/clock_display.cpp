@@ -2,6 +2,10 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include "clock_state.h"
+#include "buttons_alerts.h"
+#include "microphone.h"
+#include "nvs_store.h"
+#include "weather_fetch.h"
 #include "clock_panel.h"
 #include "font14_table.h"
 #include "clock_display.h"
@@ -63,13 +67,13 @@ static void drawGrid(const uint8_t *rows, bool frame) {   // rows[r] bit c = cel
 }
 
 static void drawWeatherWord() {
-  const uint8_t *w = wxCode == 1 ? WORD_SUNNY : wxCode == 2 ? WORD_CLOUD : wxCode == 3 ? WORD_RAINS : nullptr;
+  const uint8_t *w = wx.code == 1 ? WORD_SUNNY : wx.code == 2 ? WORD_CLOUD : wx.code == 3 ? WORD_RAINS : nullptr;
   if (w) { ram[w[0]] |= w[1]; if (w[2] || w[3]) ram[w[2]] |= w[3]; }
 }
 
 static void drawTemp() {
-  int t = wxTemp, neg = t < 0; if (neg) t = -t;
-  ram[ALNUM_LO[5]] = wxUnit ? CH_C : CH_F;         // rightmost char: F or C
+  int t = wx.temp, neg = t < 0; if (neg) t = -t;
+  ram[ALNUM_LO[5]] = wx.unit ? CH_C : CH_F;         // rightmost char: F or C
   ram[ALNUM_LO[4]] = DIGIT_FONT[t % 10];           // units
   if (t >= 10) ram[ALNUM_LO[3]] = DIGIT_FONT[(t / 10) % 10];   // tens
   if (t >= 100) ram[ALNUM_LO[2]] = DIGIT_FONT[(t / 100) % 10]; // hundreds
@@ -87,14 +91,14 @@ static void drawBar(const uint8_t *BY, const uint8_t *MK, int pct,
 
 void setStyle(int v) {
   if (v < 1 || v > N_STYLES) return;
-  if (v != specStyle) { specStyle = v; prefs.putInt("style", specStyle); }  // remember across power-off
+  if (v != disp.style) { disp.style = v; prefSave(P_STYLE); }  // remember across power-off
 }
 
 void setBrightness(int v) {
   if (v < 1) v = 1; if (v > 16) v = 16;
-  brightness = v;
+  disp.brightness = v;
   tmCmd(0xB0 | ((v - 1) & 0x0F));
-  prefs.putInt("bright", brightness);
+  prefSave(P_BRIGHT);
 }
 
 static int peakVal[2] = {0, 0};
@@ -108,7 +112,7 @@ static void drawCol(const uint8_t *BY, const uint8_t *MK, int level, int col) {
   else if (millis() - peakAt[col] > 90) { peakVal[col]--; peakAt[col] = millis(); }
   for (int i = 0; i < 12; i++) {                       // i=0 bottom .. i=11 top
     bool on = false;
-    switch (specStyle) {
+    switch (disp.style) {
       case 1: on = i < level; break;                   // bars from bottom
       case 2: on = i >= 12 - level; break;             // bars from top
       case 3: on = (i >= lo && i < hi); break;         // grow from center
@@ -135,10 +139,11 @@ void render6(const String &s, int start, uint8_t *out) {   // out[12]
 
 void draw() {
   memset(ram, 0, sizeof ram);
-  const uint8_t *t = curT;
+  const Standalone &sa = standalone;
+  const uint8_t *t = disp.now;
   int hh = bcd2dec(t[2] & 0x3F), mi = bcd2dec(t[1]), ss = bcd2dec(t[0] & 0x7F);
   bool blankTens = false;
-  if (!clock24) {                       // 12-hour display
+  if (!disp.clock24) {                  // 12-hour display
     hh %= 12; if (hh == 0) hh = 12;
     blankTens = (hh < 10);              // drop the leading zero (e.g. 1:23 not 01:23)
   }
@@ -148,56 +153,56 @@ void draw() {
   for (int i = 0; i < 2; i++) ram[COLON_BYTE[i]] |= COLON_MASK[i];
   int dow = t[3] & 0x07;
   if (dow >= 1 && dow <= 7) ram[DAYS[dow - 1].byte] |= DAYS[dow - 1].mask;
-  bool live = specTime.within(600);                 // PC audio (clears if the PC went quiet)
-  bool appOn = appTime.within(APP_ON_MS);
-  bool micLive = !live && micAuto && !appOn && millis() - micFrameAt < 500;
-  drawCol(SPEC_C1_BYTE, SPEC_C1_MASK, live ? specA : micLive ? micBass : 0, 0);      // mic: bass
-  drawCol(SPEC_C2_BYTE, SPEC_C2_MASK, live ? specB : micLive ? micTreble : 0, 1);    // mic: treble
-  if (barsTime.within(3000)) {                      // bars when the PC is sending them
-    drawBar(BAR_CPU_BYTE, BAR_CPU_MASK, barCpu, LBL_CPU_BYTE, LBL_CPU_MASK, PCT_CPU_BYTE, PCT_CPU_MASK);
-    drawBar(BAR_GPU_BYTE, BAR_GPU_MASK, barGpu, LBL_GPU_BYTE, LBL_GPU_MASK, PCT_GPU_BYTE, PCT_GPU_MASK);
-    drawBar(BAR_RAM_BYTE, BAR_RAM_MASK, barRam, LBL_RAM_BYTE, LBL_RAM_MASK, PCT_RAM_BYTE, PCT_RAM_MASK);
+  bool specLive = live.specTime.within(600);        // PC audio (clears if the PC went quiet)
+  bool appOn = live.appTime.within(APP_ON_MS);
+  bool micLive = !specLive && sa.micAuto && !appOn && millis() - micState.frameAt < 500;
+  drawCol(SPEC_C1_BYTE, SPEC_C1_MASK, specLive ? live.specA : micLive ? micState.bass : 0, 0);      // mic: bass
+  drawCol(SPEC_C2_BYTE, SPEC_C2_MASK, specLive ? live.specB : micLive ? micState.treble : 0, 1);    // mic: treble
+  if (live.barsTime.within(3000)) {                 // bars when the PC is sending them
+    drawBar(BAR_CPU_BYTE, BAR_CPU_MASK, live.barCpu, LBL_CPU_BYTE, LBL_CPU_MASK, PCT_CPU_BYTE, PCT_CPU_MASK);
+    drawBar(BAR_GPU_BYTE, BAR_GPU_MASK, live.barGpu, LBL_GPU_BYTE, LBL_GPU_MASK, PCT_GPU_BYTE, PCT_GPU_MASK);
+    drawBar(BAR_RAM_BYTE, BAR_RAM_MASK, live.barRam, LBL_RAM_BYTE, LBL_RAM_MASK, PCT_RAM_BYTE, PCT_RAM_MASK);
   }
   bool wxLive = wxFresh();
   if (wxLive) drawWeatherWord();
-  if (msgTime.within(1500)) {                       // live scrolling text from the app
-    for (int i = 0; i < 12; i++) ram[i] = msgRam[i];
-  } else if (!appOn && omAuto && !engTemp) {        // app off -> on-device message engine
-    for (int i = 0; i < 12; i++) ram[i] = engRam[i];
+  if (live.msgTime.within(1500)) {                  // live scrolling text from the app
+    for (int i = 0; i < 12; i++) ram[i] = live.msgRam[i];
+  } else if (!appOn && sa.omAuto && !sa.engTemp) {  // app off -> on-device message engine
+    for (int i = 0; i < 12; i++) ram[i] = sa.engRam[i];
   } else if (wxLive) {
     drawTemp();                                     // live temperature
   }
-  if (gridTime.within(1500)) drawGrid(gridRows, gridFrame);    // live grid from the app
-  else if (!appOn && gaAuto && gridReady())                         // app off -> own animation
-    drawGrid(gaAnim == grid::CUSTOM ? &gaFrames[gaIdx * 7] : gEngRows, gaFlag);
-  if (iconTime.within(1500))                         // top-row status icons
+  if (live.gridTime.within(1500)) drawGrid(live.gridRows, live.gridFrame);    // live grid from the app
+  else if (!appOn && sa.gaAuto && gridReady())                               // app off -> own animation
+    drawGrid(sa.gaAnim == grid::CUSTOM ? &sa.gaFrames[sa.gaIdx * 7] : sa.gEngRows, sa.gaFlag);
+  if (live.iconTime.within(1500))                    // top-row status icons
     for (int i = 0; i < N_ICONS; i++)
-      if (iconMask & (1UL << i)) {
+      if (live.iconMask & (1UL << i)) {
         ram[ICON_B0[i]] |= ICON_M0[i];
         if (ICON_M1[i]) ram[ICON_B1[i]] |= ICON_M1[i];
       }
-  if (logoOn && logoTime.within(1500))               // ELEKSMAKER logo
+  if (live.logoOn && live.logoTime.within(1500))     // ELEKSMAKER logo
     for (int i = 0; i < N_LOGO; i++) ram[LOGO_BYTE[i]] |= LOGO_MASK[i];
-  if (cdEnd) {                                    // countdown on the message line (bytes 0..11)
+  if (alerts.cdEnd) {                             // countdown on the message line (bytes 0..11)
     char buf[8];
     extras::timerText(timerLeft(), buf);
     render6(String(buf), 0, ram);
   }
   if (infoOn()) {                                 // notice from a held button, over the message line
-    if (infoText.length() <= 6) render6(infoText, 0, ram);
-    else { String d = infoText + "   "; render6(d + d, infoPos % d.length(), ram); }
+    if (disp.infoText.length() <= 6) render6(disp.infoText, 0, ram);
+    else { String d = disp.infoText + "   "; render6(d + d, disp.infoPos % d.length(), ram); }
   }
-  if (alertKind) {                                 // flash: everything on, then the reason
+  if (alerts.kind) {                               // flash: everything on, then the reason
     if ((millis() / 400) % 2) memset(ram, 0xFF, sizeof ram);
-    else render6(String(alertKind == ALERT_TIMER ? " TIMER" : " ALARM"), 0, ram);
+    else render6(String(alerts.kind == ALERT_TIMER ? " TIMER" : " ALARM"), 0, ram);
   }
   tmFlush();
 }
 
 void showInfo(const String &text, uint32_t ms) {
-  infoText = text;
-  infoUntil = millis() + ms;
-  infoStepAt = millis();
-  infoPos = 0;
-  dirty = true;
+  disp.infoText = text;
+  disp.infoUntil = millis() + ms;
+  disp.infoStepAt = millis();
+  disp.infoPos = 0;
+  disp.dirty = true;
 }

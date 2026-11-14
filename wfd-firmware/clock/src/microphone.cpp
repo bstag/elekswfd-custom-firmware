@@ -5,6 +5,7 @@
 #include "mic_dsp.h"
 #include "microphone.h"
 
+MicState micState;
 static mic::Dsp micDsp;               // runs in micTask on core 0
 
 // ---- microphone: sampled on core 0 while the app is off and something uses it ----
@@ -13,10 +14,10 @@ void micTask(void *) {
   const uint32_t period = 1000000UL / mic::RATE;
   for (;;) {
     // Pause during an OTA update: this task busy-waits on core 0, which the WiFi stack needs then.
-    bool want = !appTime.within(APP_ON_MS) && (micAuto || (gaAuto && grid::usesMic(gaAnim))) && !Update.isRunning();
-    if (!want || micPause) {
-      micBass = micTreble = micLevel = 0;
-      for (int b = 0; b < mic::NBANDS; b++) micBands[b] = 0;
+    bool want = !live.appTime.within(APP_ON_MS) && (standalone.micAuto || (standalone.gaAuto && grid::usesMic(standalone.gaAnim))) && !Update.isRunning();
+    if (!want || micState.pause) {
+      micState.bass = micState.treble = micState.level = 0;
+      for (int b = 0; b < mic::NBANDS; b++) micState.bands[b] = 0;
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
     }
@@ -27,14 +28,14 @@ void micTask(void *) {
       next += period;
     }
     micDsp.process(buf);
-    micBass = micDsp.colBass;
-    micTreble = micDsp.colTreble;
-    micLevel = (int)(micDsp.level * 100);
-    for (int b = 0; b < mic::NBANDS; b++) micBands[b] = micDsp.bands[b];
-    micFrameAt = millis();
-    if ((int32_t)(micTraceUntil - micFrameAt) > 0)
-      Serial.printf("T %lu %d %d %d %d %d %d\n", (unsigned long)micFrameAt, (int)micDsp.rms, (int)micDsp.lowAmp,
-                    (int)micDsp.highAmp, micLevel, micBass, micTreble);
+    micState.bass = micDsp.colBass;
+    micState.treble = micDsp.colTreble;
+    micState.level = (int)(micDsp.level * 100);
+    for (int b = 0; b < mic::NBANDS; b++) micState.bands[b] = micDsp.bands[b];
+    micState.frameAt = millis();
+    if ((int32_t)(micState.traceUntil - micState.frameAt) > 0)
+      Serial.printf("T %lu %d %d %d %d %d %d\n", (unsigned long)micState.frameAt, (int)micDsp.rms, (int)micDsp.lowAmp,
+                    (int)micDsp.highAmp, micState.level, micState.bass, micState.treble);
     vTaskDelay(1);                              // let core 0's idle task run
   }
 }

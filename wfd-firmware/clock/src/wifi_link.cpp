@@ -7,6 +7,7 @@
 #include <time.h>
 #include "clock_state.h"
 #include "clock_display.h"
+#include "nvs_store.h"
 #include "serial_cmds.h"
 #include "weather_fetch.h"
 #include "web_routes.h"
@@ -23,7 +24,7 @@ static WiFiUDP udp;
 static uint32_t apSince = 0;
 static const uint32_t AP_GIVE_UP_MS = 600000;
 void startAP(bool byButton) {
-  apMode = true;
+  net.apMode = true;
   if (byButton) {
     apSince = millis() | 1;
     WiFi.setAutoReconnect(false);       // the retries would keep pulling the AP off its channel
@@ -57,9 +58,7 @@ static volatile bool wifiAssoc = false;        // associated (STA_CONNECTED), ma
 static const uint32_t WIFI_STUCK_MS = 20000;
 
 void wifiBegin() {
-  g_tz = prefs.getString("tz", "CST6CDT,M3.2.0,M11.1.0");   // US Central w/ DST (default)
-  g_lat = prefs.getString("lat", ""); g_lon = prefs.getString("lon", ""); g_wunit = prefs.getInt("wunit", 0);
-  String ssid = prefs.getString("ssid", "");
+  String ssid = prefString(P_SSID);
   if (ssid.length()) {
     WiFi.mode(WIFI_STA);
     WiFi.setHostname("wfd-clock");
@@ -73,7 +72,7 @@ void wifiBegin() {
     WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { wifiAssoc = true; wifiProgressAt = millis(); },
                  ARDUINO_EVENT_WIFI_STA_CONNECTED);
     wifiProgressAt = millis();
-    WiFi.begin(ssid.c_str(), prefs.getString("pass", "").c_str());
+    WiFi.begin(ssid.c_str(), prefString(P_PASS).c_str());
   } else {
     startAP();
   }
@@ -84,11 +83,11 @@ static void ntpToRtc() {
   if (!getLocalTime(&t, 50)) return;
   rtcSet(t.tm_year % 100, t.tm_mon + 1, t.tm_mday, t.tm_wday == 0 ? 7 : t.tm_wday,
          t.tm_hour, t.tm_min, t.tm_sec);
-  ntpSynced = true;
+  net.ntpSynced = true;
 }
 
 void wifiLoop() {
-  if (apMode) {
+  if (net.apMode) {
     dns.processNextRequest();
     web.handleClient();
     if (apSince && millis() - apSince > AP_GIVE_UP_MS) ESP.restart();
@@ -97,24 +96,24 @@ void wifiLoop() {
   if (WiFi.status() == WL_CONNECTED) {
     wifiProgressAt = millis();          // a drop starts the WIFI_STUCK_MS wait from here
     if (!ntpInit) {
-      configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov", "time.google.com");
+      configTzTime(net.tz.c_str(), "pool.ntp.org", "time.nist.gov", "time.google.com");
       startWebRoutes();
       ntpInit = true;
       if (MDNS.begin(HOSTNAME)) {
         MDNS.addService("http", "tcp", 80);
         MDNS.addService("wfd", "udp", UDP_PORT);
       }
-      netUp = udp.begin(UDP_PORT);
+      net.up = udp.begin(UDP_PORT);
     }
     web.handleClient();
-    if (millis() - lastNtp > (ntpSynced ? 3600000UL : 4000UL)) {   // re-sync hourly once locked
+    if (millis() - lastNtp > (net.ntpSynced ? 3600000UL : 4000UL)) {   // re-sync hourly once locked
       lastNtp = millis();
       ntpToRtc();
     }
     weatherApply();
-    if (ntpSynced && (lastWxFetch == 0 || millis() - lastWxFetch > 900000UL)) {  // weather every 15 min
-      if (netWeatherFetch()) lastWxFetch = millis() | 1;   // (not started: asked again next pass)
-      else if (g_lat.length() == 0) lastWxFetch = millis() | 1;   // no location: nothing to fetch
+    if (net.ntpSynced && (wx.lastFetch == 0 || millis() - wx.lastFetch > 900000UL)) {  // weather every 15 min
+      if (netWeatherFetch()) wx.lastFetch = millis() | 1;   // (not started: asked again next pass)
+      else if (wx.lat.length() == 0) wx.lastFetch = millis() | 1;   // no location: nothing to fetch
     }
   } else {
     // Not connected, and the WiFi task hasn't reported anything for a while: no attempt is in
@@ -152,8 +151,8 @@ void netPoll() {
     bool magic = head.startsWith("WFD1");
     String key = magic ? head.substring(4) : String();
     key.trim();
-    if (!magic || (webPass.length() && key != webPass)) { udpRejected++; continue; }
-    udpPackets++;
+    if (!magic || (net.webPass.length() && key != net.webPass)) { net.udpRejected++; continue; }
+    net.udpPackets++;
     while ((ln = strtok_r(nullptr, "\n", &save))) {
       String line = ln;
       line.trim();

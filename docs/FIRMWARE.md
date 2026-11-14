@@ -28,12 +28,19 @@ cuts into an attempt that is still running.
 ## Source layout
 
 All in `wfd-firmware/clock/src/`. Each `.cpp` has a header of the same name with what the
-other files call; state used by more than one file is declared in `clock_state.h`.
+other files call. State used by more than one file is grouped into structs by what owns it,
+one instance each: `disp` (the panel and its settings), `live` (the frame the app sends),
+`standalone` (what runs when the app is off) and `net` (WiFi, the UDP stream, the web password)
+in `clock_state.h`; `wx` (weather and forecast) in `weather_fetch.h`, `alerts` (alarms, timer,
+alert) in `buttons_alerts.h`, `micState` (what the mic task hands over; `volatile`) in
+`microphone.h`, `otaLog` in `ota_update.h` and the `web` server in `web_routes.h`, so a file
+sees only the groups whose headers it includes.
 
 | File | Holds |
 |---|---|
 | `main.cpp` | `setup()`, `loop()`, `WFD_PROTOCOL` and the `FW_BUILD` stamp |
-| `clock_state.h/.cpp` | shared state (`extern` declarations / definitions), `Stamp`, `OtaLog` |
+| `clock_state.h/.cpp` | the shared groups above, `Stamp` |
+| `nvs_store.h/.cpp` | every value saved in flash: one table of NVS key, type and default, used to load them all at boot (`prefsLoad`) and to save one (`prefSave`) |
 | `clock_display.h/.cpp` | TM1680 and DS3231 over I2C, `draw()`, 14‑seg text rendering, brightness/style, the info notice |
 | `serial_cmds.h/.cpp` | the serial command set, `handle()` |
 | `clock_settings.h/.cpp` | the settings table (`setting`/`applySettings`), `configJson`, `stateJson`, `CFG`/`CFGSET` |
@@ -294,8 +301,26 @@ room, record a new trace and adjust `Loudness` in `mic_dsp.h` until the tests pa
 
 ## Persistent storage (NVS namespace `wfd`)
 
-`style`, `bright`, `clk24`, `webpass`, `micauto`; grid `gaid/gfps/gflag/gauto` + drawn frames `gn` + `ganim` (blob); message line
-`omauto/mmode/mrot/mdwell/mscroll` + `omtext`; WiFi/location `ssid/pass/tz/lat/lon/wunit/zip`.
+All of them are in one table in `src/nvs_store.cpp` (key, type, default, and the range a
+value is clamped to when loaded); clocks in the field depend on these, so they don't change:
+
+| Key | Type | Default | Key | Type | Default |
+|---|---|---|---|---|---|
+| `style` | int | 4 | `micauto` | int | 1 |
+| `bright` | int | 6 | `omauto` | int | 0 |
+| `clk24` | int | 1 | `mmode` | int | 1 (text), clamped 0–4 |
+| `gn` | int | 0, clamped 0–80 | `mrot` | int | 7 |
+| `gfps` | int | 8 | `mdwell` | int | 8 |
+| `gflag` | int | 0 | `mscroll` | int | 350 |
+| `gauto` | int | 0 | `omtext` | string | `WFD CLOCK` |
+| `ganim` | bytes | `gn` × 7 (`gn` → 0 if short) | `tz` | string | `CST6CDT,M3.2.0,M11.1.0` |
+| `gaid` | int | `custom` if frames loaded, else `spin`; clamped | `lat`, `lon` | string | empty |
+| `webpass` | string | empty | `wunit` | int | 0 |
+| `wxsc` | int | −1 (auto), clamped | `zip` | string | empty |
+| `alarms` | bytes | 4 × 4 (all off if short) | `ssid`, `pass` | string | empty |
+| `otalog` | bytes | the last upload's log | | | |
+
+`zip`, `ssid` and `pass` are read from flash when needed; the rest are loaded once at boot.
 Settings survive OTA updates, `wfd-flash.exe` and `flash_usb.py` (the `nvs` partition offset
 is unchanged and they leave it alone on a clock that already runs this firmware). Writing the
 whole `wfd-clock-merged.bin` at 0x0 by hand (esptool, or `flash_usb.py --wipe-settings`)

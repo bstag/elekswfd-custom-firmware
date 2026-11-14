@@ -12,6 +12,7 @@
 #include "clock_display.h"
 #include "clock_settings.h"
 #include "microphone.h"
+#include "nvs_store.h"
 #include "serial_cmds.h"
 #include "standalone.h"
 #include "wifi_link.h"
@@ -38,36 +39,15 @@ void setup() {
   Wire.begin(SDA_PIN, SCL_PIN, 100000);
   delay(100);
   tmInit(6);
-  prefs.begin("wfd", false);
-  specStyle = prefs.getInt("style", 4);   // restore saved style, default = peak dot
-  brightness = prefs.getInt("bright", 6);
-  clock24 = prefs.getInt("clk24", 1);
-  tmCmd(0xB0 | ((brightness - 1) & 0x0F));
-  gaN = constrain(prefs.getInt("gn", 0), 0, GA_MAX);   // restore stored standalone animation
-  gaFps = prefs.getInt("gfps", 8);
-  gaFlag = prefs.getInt("gflag", 0);
-  gaAuto = prefs.getInt("gauto", 0);
-  if (gaN > 0 && prefs.getBytes("ganim", gaFrames, gaN * 7) != (size_t)gaN * 7) gaN = 0;
-  // stored frames keep playing after the upgrade; otherwise default to a built-in animation
-  gaAnim = constrain(prefs.getInt("gaid", gaN > 0 ? grid::CUSTOM : grid::SPIN), 0, grid::N_ANIM - 1);
-  webPass = prefs.getString("webpass", "");
-  wxScenePick = constrain(prefs.getInt("wxsc", -1), -1, grid::N_SCENE - 1);
-  if (prefs.getBytes("alarms", alarms, sizeof alarms) != sizeof alarms) memset(alarms, 0, sizeof alarms);
-  otaLogValid = prefs.getBytes("otalog", &otaLog, sizeof otaLog) == sizeof otaLog;   // last upload
-  micAuto = prefs.getInt("micauto", 1);
+  prefsLoad();                          // every saved setting (nvs_store.cpp)
+  tmCmd(0xB0 | ((disp.brightness - 1) & 0x0F));
   analogSetPinAttenuation(MIC_PIN, ADC_11db);   // dead zone hides the room's hum (see mic_dsp.h)
-  gEng.bands = micBands;
+  gEng.bands = micState.bands;
   xTaskCreatePinnedToCore(micTask, "mic", 4096, nullptr, 1, nullptr, 0);
-  omAuto = prefs.getInt("omauto", 0);    // restore the message-line engine
-  msgMode = constrain(prefs.getInt("mmode", SRC_TEXT), 0, N_SRC - 1);
-  msgRot = prefs.getInt("mrot", 0b111);
-  msgDwell = prefs.getInt("mdwell", 8);
-  msgScroll = prefs.getInt("mscroll", 350);
-  msgText = prefs.getString("omtext", "WFD CLOCK");
-  prefs.remove("om"); prefs.remove("omn"); prefs.remove("omfps");   // pre-rendered frames: no longer used
   wifiBegin();
   Serial.printf("wfd-clock ready, style %d, bright %d, grid %d auto %d, msg mode %d auto %d, wifi %s\n",
-                specStyle, brightness, gaN, gaAuto, msgMode, omAuto, apMode ? "setup-AP" : "connecting");
+                disp.style, disp.brightness, standalone.gaN, standalone.gaAuto, standalone.msgMode,
+                standalone.omAuto, net.apMode ? "setup-AP" : "connecting");
 }
 
 void loop() {
@@ -78,38 +58,39 @@ void loop() {
     else if (line.length() < 1024) line += c;   // room for CFGSET {json}
   }
   wifiLoop();
-  if (netUp) netPoll();
+  if (net.up) netPoll();
   checkButtons();
   // advance stored animations only when the app is off
   bool redraw = false;
-  bool appOff = !appTime.within(APP_ON_MS);
-  if (appOff && gaAuto && gridReady() &&
-      millis() - gaStep > (uint32_t)(1000 / (gaFps < 1 ? 1 : gaFps))) {
+  bool appOff = !live.appTime.within(APP_ON_MS);
+  Standalone &sa = standalone;
+  if (appOff && sa.gaAuto && gridReady() &&
+      millis() - gaStep > (uint32_t)(1000 / (sa.gaFps < 1 ? 1 : sa.gaFps))) {
     gaStep = millis();
-    if (gaAnim == grid::CUSTOM) gaIdx = (gaIdx + 1) % gaN;
-    else { gEng.scene = currentScene(); gEng.frame(gaAnim, gEngRows); }
+    if (sa.gaAnim == grid::CUSTOM) sa.gaIdx = (sa.gaIdx + 1) % sa.gaN;
+    else { gEng.scene = currentScene(); gEng.frame(sa.gaAnim, sa.gEngRows); }
     redraw = true;
   }
-  if (appOff && omAuto && (msgStepAt == 0 || millis() - msgStepAt >= (uint32_t)msgScroll)) {
+  if (appOff && sa.omAuto && (msgStepAt == 0 || millis() - msgStepAt >= (uint32_t)sa.msgScroll)) {
     msgStepAt = millis();
     msgStep();
     redraw = true;
   }
   if (millis() - last >= 250) {
     last = millis();
-    if (rtcRead(curT)) redraw = true;
+    if (rtcRead(disp.now)) redraw = true;
   }
   static uint32_t extrasAt = 0;
   if (millis() - extrasAt >= 200) {
     extrasAt = millis();
     if (extrasTick()) redraw = true;
   }
-  if (infoText.length()) {             // the notice: scroll it, drop it when its time is up
-    if (!infoOn()) { infoText = ""; redraw = true; }
-    else if (infoText.length() > 6 && millis() - infoStepAt >= 350) { infoStepAt = millis(); infoPos++; redraw = true; }
+  if (disp.infoText.length()) {        // the notice: scroll it, drop it when its time is up
+    if (!infoOn()) { disp.infoText = ""; redraw = true; }
+    else if (disp.infoText.length() > 6 && millis() - disp.infoStepAt >= 350) { disp.infoStepAt = millis(); disp.infoPos++; redraw = true; }
   }
-  if (redraw || dirty) {               // one I2C flush per pass, however many commands arrived
-    dirty = false;
+  if (redraw || disp.dirty) {          // one I2C flush per pass, however many commands arrived
+    disp.dirty = false;
     draw();
   }
 }
