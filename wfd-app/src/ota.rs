@@ -7,12 +7,14 @@
 //! the settings file, with the app's side (seconds sending, the error) and the clock's own report
 //! of that upload (`state.ota`: bytes, pieces, longest pause and where, signal, memory, result).
 
+use crate::applog;
 use crate::ctx::Ctx;
 use crate::link::basic_auth;
 use crate::release::multipart;
 use crate::state::Update;
 use serde_json::Value;
 use std::io;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -171,12 +173,38 @@ pub fn update_clock_with(ctx: &Arc<Ctx>, hooks: OtaHooks) -> bool {
             last: st.update.last.take(),
         };
     }
-    let ctx = Arc::clone(ctx);
-    thread::spawn(move || match job(&ctx, &hooks) {
-        Ok(msg) => set_update(&ctx, "done", msg),
-        Err(msg) => set_update(&ctx, "failed", msg),
-    });
+    let job_ctx = Arc::clone(ctx);
+    let spawned = thread::Builder::new()
+        .name("update-clock".into())
+        .spawn(move || {
+            let ctx = job_ctx;
+            // A panic must not leave the dashboard on "uploading" for good (which would also
+            // keep the clock link waiting): it ends the update as failed, and is logged.
+            match catch_unwind(AssertUnwindSafe(|| job(&ctx, &hooks))) {
+                Ok(Ok(msg)) => set_update(&ctx, "done", msg),
+                Ok(Err(msg)) => set_update(&ctx, "failed", msg),
+                Err(panic) => {
+                    let why = panic_text(panic.as_ref());
+                    applog::log(&format!("Update clock stopped by a panic: {why}"));
+                    set_update(&ctx, "failed", format!("the update stopped unexpectedly ({why})"));
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        // (rare: the system is out of threads) the update is over before it began
+        applog::log(&format!("Update clock: can't start its thread: {e}"));
+        set_update(ctx, "failed", format!("couldn't start the update ({e})"));
+    }
     true
+}
+
+/// The message a panic was raised with.
+fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown error".into())
 }
 
 fn job(ctx: &Ctx, hooks: &OtaHooks) -> Result<String, String> {
@@ -195,7 +223,7 @@ fn job(ctx: &Ctx, hooks: &OtaHooks) -> Result<String, String> {
     let pw = ctx
         .cfg
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .get("clock_pass")
         .and_then(Value::as_str)
         .unwrap_or("")

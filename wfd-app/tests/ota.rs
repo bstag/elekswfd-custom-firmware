@@ -215,6 +215,40 @@ fn update_reports_failures() {
 }
 
 #[test]
+fn a_panic_during_the_update_fails_it_instead_of_hanging() {
+    let ctx = ctx_with_release();
+    let (h, _) = hooks(
+        Some("10.0.0.9"),
+        || panic!("upload hook blew up"),
+        |_, _| true,
+    );
+    assert!(update_clock_with(&ctx, h));
+    let up = wait_update(&ctx);
+    assert_eq!(up.state, "failed", "not stuck on uploading");
+    assert!(up.message.contains("upload hook blew up"), "{}", up.message);
+    // and the next click can start another one
+    assert!(update_clock_with(&ctx, hooks(Some("10.0.0.9"), || Ok(()), |_, _| true).0));
+    assert_eq!(wait_update(&ctx).state, "done");
+}
+
+#[test]
+fn a_poisoned_settings_lock_does_not_stop_the_update() {
+    let ctx = ctx_with_release();
+    ctx.cfg.lock().unwrap().insert("clock_pass".into(), "pw".into());
+    let c2 = Arc::clone(&ctx);
+    let _ = std::thread::spawn(move || {
+        let _held = c2.cfg.lock().unwrap();
+        panic!("poison the settings lock");
+    })
+    .join();
+    assert!(ctx.cfg.is_poisoned());
+    let (h, calls) = hooks(Some("10.0.0.9"), || Ok(()), |_, _| true);
+    assert!(update_clock_with(&ctx, h));
+    assert_eq!(wait_update(&ctx).state, "done");
+    assert_eq!(calls.lock().unwrap()[0].2, "pw");
+}
+
+#[test]
 fn no_release_no_update() {
     let path = std::env::temp_dir()
         .join("wfd-ota-test-does-not-exist")
