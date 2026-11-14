@@ -1,4 +1,5 @@
-//! Parity with wfd-control/grid_anim.py.
+//! Regression tests against frames generated from legacy/python-app/grid_anim.py
+//! (see fixtures/gen_font14_grid_icons.py).
 //! Deterministic animations are compared frame by frame with tests/fixtures/grid_frames.json
 //! (regenerate with gen_font14_grid_icons.py); random ones are checked for their properties.
 

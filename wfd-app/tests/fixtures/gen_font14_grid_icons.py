@@ -1,8 +1,10 @@
-"""Regenerate the font14 / grid_anim / icons parity fixtures from the Python reference.
+"""Generate the font14 / grid_anim / icons fixtures from the retired Python app
+(legacy/python-app/), which the Rust modules were ported from.
 
-Run from the repo root (app.py needs its dependencies for compute_icons/scroll_frame):
-    cd wfd-control && uv run -q --with-requirements requirements.txt python -I \
-        ../wfd-app/tests/fixtures/gen_font14_grid_icons.py
+The fixtures are regression snapshots of the Rust app's behaviour now; this script shows how they
+were made. Run from the repo root (app.py needs its dependencies for compute_icons/scroll_frame):
+    uv run -q --with-requirements legacy/python-app/requirements.txt python -I \
+        wfd-app/tests/fixtures/gen_font14_grid_icons.py
 Writes font14_cases.json, grid_frames.json and icons_cases.json next to this script.
 """
 import json
@@ -13,8 +15,8 @@ import types
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-WFD_CONTROL = HERE.parent.parent.parent / "wfd-control"
-sys.path.insert(0, str(WFD_CONTROL))
+PYTHON_APP = HERE.parent.parent.parent / "legacy" / "python-app"
+sys.path.insert(0, str(PYTHON_APP))
 
 import font14  # noqa: E402
 import grid_anim  # noqa: E402

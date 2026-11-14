@@ -1,14 +1,18 @@
-"""Generate dsp parity fixtures for wfd-app/tests/dsp.rs from the Python reference (app.py).
+"""Generate the dsp fixtures for wfd-app/tests/dsp.rs from the retired Python app
+(legacy/python-app/app.py), which the Rust dsp code was ported from.
 
-Writes dsp_blocks.bin (raw int16 LE samples of every block, concatenated) and dsp_expected.json.
-Run from wfd-control: uv run -q --with-requirements requirements.txt python -I <this> <fixtures dir>
+The fixtures are regression snapshots of the Rust app's behaviour now; this script shows how they
+were made. Writes dsp_blocks.bin (raw int16 LE samples of every block, concatenated) and
+dsp_expected.json. Run from the repo root:
+    uv run -q --with-requirements legacy/python-app/requirements.txt python -I \
+        wfd-app/tests/fixtures/dsp_gen.py wfd-app/tests/fixtures
 """
 import json
 import sys
 import types
 from pathlib import Path
 
-sys.path.insert(0, str(Path.cwd()))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "legacy" / "python-app"))
 import numpy as np  # noqa: E402
 
 import app  # noqa: E402

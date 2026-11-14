@@ -1,5 +1,6 @@
-//! WFD Control in Rust: a port of wfd-control/app.py (the Python app stays the reference until
-//! this one reproduces its behaviour; see each module's notes and the parity tests in tests/).
+//! WFD Control in Rust: the PC app, and the source of truth for its behaviour. It was ported from
+//! the Python app, now retired to legacy/python-app/; module notes say where it still follows
+//! that code, and tests/ hold regression tests of this app's own behaviour.
 //!
 //! Modules, roughly in the order data flows:
 //! - `config`    app settings (wfd_config.json), validation, which settings the clock owns

@@ -1,4 +1,4 @@
-//! Port of wfd-control/tests/conftest.py: a simulated clock (fake serial port answering
+//! Port of legacy/python-app/tests/conftest.py: a simulated clock (fake serial port answering
 //! CFG / CFGSET / GANIM / GCOMMIT, fake UDP socket, fake HTTP API) and simulated time, so
 //! ClockLink runs exactly like app.py does under the Python harness. Nothing here touches real
 //! hardware, the network or a real config file.

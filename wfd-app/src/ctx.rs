@@ -1,7 +1,7 @@
 //! The shared context every thread holds (an `Arc<Ctx>`): settings, state, the background
 //! readers' data, and the queues the web server uses to ask the clock link to do things.
 //!
-//! Mirrors the module-level globals of wfd-control/app.py (cfg + cfg_lock, state + state_lock,
+//! Mirrors the module-level globals of legacy/python-app/app.py (cfg + cfg_lock, state + state_lock,
 //! clock_requests, uploads, grid_preview, sync_now, stop).
 use crate::{audio::AudioShared, metrics::Metrics, release::Release, state::State};
 use serde_json::{Map, Value};

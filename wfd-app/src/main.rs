@@ -1,4 +1,4 @@
-//! wfd-app: the Rust WFD Control (port of `main()` in wfd-control/app.py).
+//! wfd-app: the Rust WFD Control (ported from `main()` in legacy/python-app/app.py).
 //!
 //! Starts the background readers (audio, metrics, weather), the clock link and the local web
 //! UI, then opens the dashboard in the browser.
@@ -7,10 +7,9 @@
 //! wfd-app [--no-browser] [--config <path>] [--addr <host:port>]
 //! ```
 //!
-//! Settings live in `wfd_config.json` next to the exe (written with defaults on first run).
-//! To share the Python app's settings instead, point at its file, e.g. from the repo root:
-//! `wfd-app --config wfd-control\wfd_config.json` (or `..\wfd-control\wfd_config.json` from
-//! inside wfd-app\). Both apps read and write the same format.
+//! Settings live in `wfd_config.json` next to the exe (written with defaults on first run);
+//! `--config <path>` uses another file. The format is the one the retired Python app wrote, so
+//! its settings file still loads (install.ps1 copies it on a first install).
 
 // Release builds are a windowed app: no console window pops up at login. When started from a
 // terminal, attach_parent_console() still shows --help and errors there.
@@ -34,8 +33,7 @@ const WEATHER_EVERY: Duration = Duration::from_secs(900);
 const USAGE: &str = "usage: wfd-app [--no-browser] [--config <path>] [--addr <host:port>] [--version]
 
   --no-browser       don't open the dashboard in the browser
-  --config <path>    settings file (default: wfd_config.json next to wfd-app.exe);
-                     use ..\\wfd-control\\wfd_config.json to share the Python app's settings
+  --config <path>    settings file (default: wfd_config.json next to wfd-app.exe)
   --addr <host:port> where to serve the dashboard (default: 127.0.0.1:8737)
   --version          print the app version and the clock firmware it ships";
 

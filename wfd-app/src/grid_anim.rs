@@ -1,4 +1,4 @@
-//! 7x7 grid animations for the EleksWFD, a port of wfd-control/grid_anim.py.
+//! 7x7 grid animations for the EleksWFD, a port of legacy/python-app/grid_anim.py.
 //!
 //! [`GridEngine::frame`] returns 7 row bytes; bit `c` of row `r` lights cell (r, c).
 //! Deterministic animations produce exactly the Python frames. The random ones (rain,

@@ -1,4 +1,5 @@
-//! Parity with the Python reference: fixtures from tests/fixtures/dsp_gen.py (runs app.py's code).
+//! Regression tests against fixtures from tests/fixtures/dsp_gen.py (generated once from the
+//! retired Python app's code, legacy/python-app/app.py).
 
 use serde_json::Value;
 use wfd_app::dsp::{BandTracker, Levels, NLEV, rms_mono, to_mono};

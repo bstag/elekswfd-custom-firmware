@@ -1,4 +1,4 @@
-//! The local HTTP API the dashboard and drawing tool use (port of wfd-control/tests/test_api.py).
+//! The local HTTP API the dashboard and drawing tool use (port of legacy/python-app/tests/test_api.py).
 //!
 //! Each test starts `web::run` on a free port with its own Ctx and config file. Routes that
 //! change clock settings get a fake link thread that answers `ctx.clock_requests`.

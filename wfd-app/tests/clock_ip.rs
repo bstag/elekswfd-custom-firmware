@@ -1,5 +1,5 @@
 //! The clock's WiFi address, learned over USB (CFG `_ip`) and used before any mDNS lookup.
-//! Port of wfd-control/tests/test_clock_ip.py.
+//! Port of legacy/python-app/tests/test_clock_ip.py.
 
 #[path = "clocklink_sim/mod.rs"]
 mod sim;

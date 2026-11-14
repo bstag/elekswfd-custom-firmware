@@ -2,7 +2,7 @@
 //!
 //! Windows can't always resolve .local names itself (it depends on the network profile and
 //! policy), so the app asks the network directly: one multicast query, the first A record wins.
-//! Port of wfd-control/mdns.py.
+//! Port of legacy/python-app/mdns.py.
 
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::time::{Duration, Instant};

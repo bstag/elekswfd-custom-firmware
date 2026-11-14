@@ -1,5 +1,5 @@
 //! ota: "Update clock" (port of `update_clock` / `upload_firmware` / `wait_for_build` in
-//! wfd-control/app.py). Finds the clock on WiFi, POSTs the firmware the app ships to its
+//! legacy/python-app/app.py). Finds the clock on WiFi, POSTs the firmware the app ships to its
 //! `/update` page and waits until it reports the new build, with one retry. Progress goes to
 //! `state.update` (idle | uploading | done | failed) for the dashboard.
 //!

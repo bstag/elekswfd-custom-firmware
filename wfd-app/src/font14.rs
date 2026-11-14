@@ -7,7 +7,7 @@
 //! g middle, h TL->C diag, i top-center vert, j TR->C diag, k BL->C diag, l C->bottom vert,
 //! m BR->C diag.
 //!
-//! Port of wfd-control/font14.py (`glyph`, `render6`, `c_header`) and app.py
+//! Port of legacy/python-app/font14.py (`glyph`, `render6`, `c_header`) and app.py
 //! (`scroll_frame`, `clean_omtext`).
 
 /// Segments lit for each known character (font14.py `_F`).

@@ -1,5 +1,5 @@
 //! "Update clock" (OTA from the app): port of the update tests in
-//! wfd-control/tests/test_firmware_update.py, plus the real upload / status poll against a
+//! legacy/python-app/tests/test_firmware_update.py, plus the real upload / status poll against a
 //! local HTTP server.
 
 use std::sync::{Arc, Mutex};
