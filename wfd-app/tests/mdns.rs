@@ -1,11 +1,12 @@
 //! The app's own mDNS lookup (port of legacy/python-app/tests/test_mdns.py, plus regression
 //! fixtures of fuzzed packets first answered by legacy/python-app/mdns.py, tests/fixtures/mdns_*).
 
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-use wfd_app::mdns::{build_query, parse_a_records, resolve};
+use std::time::{Duration, Instant};
+use wfd_app::mdns::{MdnsSocket, build_query, parse_a_records, resolve, resolve_on};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -128,21 +129,86 @@ fn parse_matches_python_on_fuzzed_packets() {
     assert!(found > 10, "fixture should include real answers");
 }
 
-/// Asks the real network for the user's clock (192.168.0.152). Run with `cargo test -- --ignored`.
+/// Sends a real mDNS query on the LAN and expects a clock to answer. Needs the clock on the
+/// same network as this PC: `cargo test --test mdns -- --ignored`.
 #[test]
 #[ignore]
 fn resolves_the_real_clock() {
-    let ip = resolve("wfd-clock.local", Duration::from_millis(1500));
+    let ip = resolve("wfd-clock.local", Duration::from_millis(2500));
     println!("wfd-clock.local -> {ip:?}");
-    assert_eq!(ip, Some(Ipv4Addr::new(192, 168, 0, 152)));
+    assert!(ip.is_some(), "no clock answered wfd-clock.local");
+}
+
+// ------------------------------------------------------------------ the query loop, with fakes
+
+/// A socket that records each query it sends and, after the `answer_after`-th one, has the
+/// packets `replies` waiting (once).
+struct FakeSock {
+    sent: Cell<usize>,
+    answer_after: usize,
+    replies: RefCell<Vec<Vec<u8>>>,
+}
+
+impl FakeSock {
+    fn new(answer_after: usize, replies: Vec<Vec<u8>>) -> Self {
+        FakeSock { sent: Cell::new(0), answer_after, replies: RefCell::new(replies) }
+    }
+}
+
+impl MdnsSocket for FakeSock {
+    fn send_query(&self, query: &[u8]) {
+        assert_eq!(query, build_query("wfd-clock.local"));
+        self.sent.set(self.sent.get() + 1);
+    }
+
+    fn try_recv(&self, buf: &mut [u8]) -> Option<usize> {
+        if self.sent.get() < self.answer_after || self.replies.borrow().is_empty() {
+            return None;
+        }
+        let p = self.replies.borrow_mut().remove(0);
+        buf[..p.len()].copy_from_slice(&p);
+        Some(p.len())
+    }
 }
 
 #[test]
-fn unresolvable_name_times_out() {
-    let t = std::time::Instant::now();
-    assert_eq!(
-        resolve("no-such-host-wfd-test.local", Duration::from_millis(400)),
-        None
+fn the_first_a_record_on_any_socket_wins() {
+    let quiet = FakeSock::new(1, vec![]);
+    let clock = FakeSock::new(
+        1,
+        vec![b"junk".to_vec(), answer("wfd-clock.local", [10, 1, 2, 3], true, true)],
     );
-    assert!(t.elapsed() < Duration::from_secs(2));
+    let t = Instant::now();
+    let socks = [quiet, clock];
+    let ip = resolve_on(&socks, "wfd-clock.local", Duration::from_secs(2));
+    assert_eq!(ip, Some(Ipv4Addr::new(10, 1, 2, 3)), "garbage first is skipped");
+    assert!(t.elapsed() < Duration::from_millis(400), "no waiting once it answered");
+    assert_eq!((socks[0].sent.get(), socks[1].sent.get()), (1, 1), "sent on every socket");
+}
+
+#[test]
+fn a_lost_query_is_sent_again() {
+    let socks = [FakeSock::new(2, vec![answer("wfd-clock.local", [10, 0, 0, 9], false, false)])];
+    let ip = resolve_on(&socks, "wfd-clock.local", Duration::from_secs(2));
+    assert_eq!(ip, Some(Ipv4Addr::new(10, 0, 0, 9)));
+    assert_eq!(socks[0].sent.get(), 2, "answered the second query");
+}
+
+#[test]
+fn nobody_answering_times_out() {
+    let socks = [FakeSock::new(1, vec![])];
+    let t = Instant::now();
+    assert_eq!(resolve_on(&socks, "wfd-clock.local", Duration::from_millis(300)), None);
+    assert!(t.elapsed() < Duration::from_secs(1));
+    assert_eq!(socks[0].sent.get(), 1, "the repeat is due at 0.5 s");
+    let none: [FakeSock; 0] = [];
+    assert_eq!(resolve_on(&none, "wfd-clock.local", Duration::from_secs(5)), None, "no adapter");
+}
+
+#[test]
+fn an_overlong_label_is_refused_without_a_query() {
+    let name = format!("{}.local", "x".repeat(300));
+    let t = Instant::now();
+    assert_eq!(resolve(&name, Duration::from_secs(5)), None);
+    assert!(t.elapsed() < Duration::from_secs(1));
 }

@@ -15,7 +15,10 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 use wfd_app::clocklink::{ClockLink, Platform};
 use wfd_app::ctx::{ClockReply, ClockRequest, Ctx};
-use wfd_app::link::{Clock, Datagram, HttpApi, Link, LinkLost, SerialIo, WifiLink};
+use wfd_app::link::{
+    Clock, Datagram, HttpApi, Link, LinkLost, Net, NotReached, Reach, SerialIo, WifiLink,
+    open_wifi_with,
+};
 use wfd_app::metrics::Metrics;
 use wfd_app::weather::{Geo, Weather};
 
@@ -115,6 +118,18 @@ pub struct SimState {
     pub status_state: Map<String, Value>,
     /// the USB device never answers (another board with the same chip)
     pub usb_silent: bool,
+    /// the next this many UDP sends fail (Windows: "no buffer space", os error 10055)
+    pub udp_fail_next: usize,
+    /// every UDP send fails until the socket is replaced (`Datagram::reopen`)...
+    pub udp_broken: bool,
+    /// ...or even then
+    pub udp_broken_for_good: bool,
+    pub udp_reopens: usize,
+    /// the clock's web password ("" = none): its HTTP API answers 401 to anything else
+    pub clock_web_pass: String,
+    /// connect over WiFi through the app's real `open_wifi_with` (finding the clock, the
+    /// password check) over [`SimNet`], with the app's `clock_pass`, instead of a ready link
+    pub real_find: bool,
 }
 
 /// Drives ClockLink on simulated time. wifi: no USB (until usb_present), the clock answers over
@@ -148,6 +163,12 @@ impl Sim {
             version: version.as_object().unwrap().clone(),
             status_state: Map::new(),
             usb_silent: false,
+            udp_fail_next: 0,
+            udp_broken: false,
+            udp_broken_for_good: false,
+            udp_reopens: 0,
+            clock_web_pass: String::new(),
+            real_find: false,
         };
         Sim {
             ctx: Arc::clone(ctx),
@@ -214,11 +235,14 @@ impl Sim {
                 Some(Box::new(FakeSerial::new(b.clone(), n)) as Box<dyn SerialIo>)
             }),
             find_port: Box::new(move || c.st.borrow().usb_present.then(|| "COM9".to_string())),
-            open_wifi: Box::new(move |_ctx| {
+            open_wifi: Box::new(move |ctx| {
+                if d.st.borrow().real_find {
+                    return open_wifi_with(ctx, Rc::new(d.clone()), &SimNet(d.clone()));
+                }
                 let password = {
                     let mut s = d.st.borrow_mut();
                     if !s.wifi || s.wifi_down {
-                        return None; // tests never touch the real network
+                        return Err(NotReached::NotFound); // tests never touch the real network
                     }
                     s.wifi_opens += 1;
                     s.password.clone()
@@ -227,10 +251,10 @@ impl Sim {
                     "10.0.0.9",
                     &password,
                     Box::new(FakeUdp(d.clone())),
-                    Box::new(FakeHttp(d.clone())),
+                    Box::new(FakeHttp::new(&d, &password)),
                     Rc::new(d.clone()),
                 );
-                Some(Box::new(link) as Box<dyn Link>)
+                Ok(Box::new(link) as Box<dyn Link>)
             }),
             grid_seed: 0,
         }
@@ -426,6 +450,16 @@ pub struct FakeUdp(Sim);
 
 impl Datagram for FakeUdp {
     fn send_to(&mut self, data: &[u8], _ip: &str, _port: u16) -> io::Result<()> {
+        {
+            let mut s = self.0.st.borrow_mut();
+            if s.udp_broken || s.udp_broken_for_good {
+                return Err(io::Error::other("no buffer space (simulated)"));
+            }
+            if s.udp_fail_next > 0 {
+                s.udp_fail_next -= 1;
+                return Err(io::Error::other("no buffer space (simulated)"));
+            }
+        }
         let text = String::from_utf8_lossy(data).to_string();
         let mut parts = text.split('\n');
         let head = parts.next().unwrap_or("").to_string();
@@ -436,10 +470,27 @@ impl Datagram for FakeUdp {
         self.0.st.borrow_mut().packets.push((head, lines));
         Ok(())
     }
+
+    fn reopen(&mut self) -> io::Result<()> {
+        let mut s = self.0.st.borrow_mut();
+        s.udp_reopens += 1;
+        s.udp_broken = false;
+        Ok(())
+    }
 }
 
-/// The clock's HTTP API over the same simulated settings as FakeSerial.
-pub struct FakeHttp(Sim);
+/// The clock's HTTP API over the same simulated settings as FakeSerial, called with `password`
+/// (what the app sends as HTTP Basic auth; "" = none).
+pub struct FakeHttp {
+    sim: Sim,
+    password: String,
+}
+
+impl FakeHttp {
+    pub fn new(sim: &Sim, password: &str) -> Self {
+        FakeHttp { sim: sim.clone(), password: password.into() }
+    }
+}
 
 impl HttpApi for FakeHttp {
     fn call(
@@ -448,12 +499,15 @@ impl HttpApi for FakeHttp {
         path: &str,
         body: Option<&Value>,
     ) -> Result<(u16, Value), LinkLost> {
-        let now = (self.0.now_rel() * 1000.0).round() / 1000.0;
-        let mut s = self.0.st.borrow_mut();
+        let now = (self.sim.now_rel() * 1000.0).round() / 1000.0;
+        let mut s = self.sim.st.borrow_mut();
         s.http_calls
             .push((now, method.into(), path.into(), body.cloned()));
         if s.wifi_down {
             return Err(LinkLost("timed out".into()));
+        }
+        if !s.clock_web_pass.is_empty() && self.password != s.clock_web_pass {
+            return Ok((401, Value::Null)); // the clock's whole API, its status included
         }
         Ok(match (method, path) {
             ("GET", "/api/status") => {
@@ -477,5 +531,48 @@ impl HttpApi for FakeHttp {
             }
             _ => (404, json!({"error": "not found"})),
         })
+    }
+}
+
+/// The simulated network for the app's own clock finder (`real_find`): the clock is
+/// "wfd-clock.local" at 10.0.0.9 while it is on WiFi and up.
+pub struct SimNet(pub Sim);
+
+impl SimNet {
+    fn up(&self) -> bool {
+        let s = self.0.st.borrow();
+        s.wifi && !s.wifi_down
+    }
+}
+
+impl Net for SimNet {
+    fn dns(&self, _host: &str) -> Option<String> {
+        None // like Windows without .local resolution
+    }
+
+    fn mdns(&self, _name: &str) -> Option<String> {
+        self.up().then(|| "10.0.0.9".to_string())
+    }
+
+    fn status(&self, ip: &str, password: &str) -> Reach {
+        if ip != "10.0.0.9" {
+            return Reach::Silent;
+        }
+        match FakeHttp::new(&self.0, password).call("GET", "/api/status", None) {
+            Ok((200, _)) => Reach::Answers,
+            Ok((401, _)) => Reach::Locked,
+            _ => Reach::Silent,
+        }
+    }
+
+    fn wifi_link(&self, ip: &str, password: &str, clock: Rc<dyn Clock>) -> io::Result<WifiLink> {
+        self.0.st.borrow_mut().wifi_opens += 1;
+        Ok(WifiLink::with(
+            ip,
+            password,
+            Box::new(FakeUdp(self.0.clone())),
+            Box::new(FakeHttp::new(&self.0, password)),
+            clock,
+        ))
     }
 }

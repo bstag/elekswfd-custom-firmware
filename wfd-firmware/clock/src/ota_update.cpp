@@ -3,8 +3,12 @@
 #include <WiFi.h>
 #include <Update.h>
 #include "clock_state.h"
+#include "nvs_store.h"
+#include "web_routes.h"
 #include "ota_update.h"
 
+OtaLog otaLog = {};
+bool otaLogValid = false;
 bool otaOk = false;
 
 static void otaResult(const char *what, const char *detail = nullptr) {
@@ -17,7 +21,7 @@ static void otaFinish() {
   otaLog.rssiEnd = WiFi.RSSI();
   otaLog.heapEnd = ESP.getFreeHeap();
   otaLogValid = true;
-  prefs.putBytes("otalog", &otaLog, sizeof otaLog);
+  prefSave(P_OTALOG);
   Serial.printf("OTA %s bytes=%u chunks=%u ms=%u maxgap=%ums@%u rssi=%d..%d heap=%u..%u\n", otaLog.result,
                 otaLog.bytes, otaLog.chunks, otaLog.ms, otaLog.maxGapMs, otaLog.gapAt, otaLog.rssiStart,
                 otaLog.rssiEnd, otaLog.heapStart, otaLog.heapEnd);
@@ -32,7 +36,7 @@ void handleUpdateUpload() {
     otaLog.startMs = otaLog.lastMs = millis();
     otaLog.rssiStart = WiFi.RSSI();
     otaLog.heapStart = ESP.getFreeHeap();
-    if (webPass.length() && !web.authenticate("admin", webPass.c_str())) {   // POST handler sends the 401
+    if (net.webPass.length() && !web.authenticate("admin", net.webPass.c_str())) {   // POST handler sends the 401
       otaResult("no auth");
       otaFinish();
       return;

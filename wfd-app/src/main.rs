@@ -21,7 +21,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
-use wfd_app::{applog, audio, clocklink, config, ctx::Ctx, link, metrics, release::{self, Release}, usbdriver, weather, web};
+use wfd_app::ctx::{Ctx, sleep_unless_stopped};
+use wfd_app::{applog, audio, clocklink, config, link, metrics, release::{self, Release}, usbdriver, weather, web};
 
 /// The firmware this app ships (wfd-firmware/releases, made by make_release.py).
 const VERSION_JSON: &str = include_str!("../../wfd-firmware/releases/version.json");
@@ -193,7 +194,7 @@ fn spawn_supervised(name: &'static str, ctx: Arc<Ctx>, f: impl Fn(&Arc<Ctx>) + S
             name,
             Duration::from_secs(2),
             || ctx.stopping(),
-            |wait| sleep_unless_stopped(&ctx, wait),
+            |wait| sleep_unless_stopped(&ctx.stop, wait),
             |name, wait| log(&format!("restarting {name} in {} s", wait.as_secs())),
             || f(&ctx),
         );
@@ -230,7 +231,7 @@ fn copy_readers(ctx: &Ctx) {
             st.audio.out = out;
             st.audio.mic = mic;
         }
-        sleep_unless_stopped(ctx, Duration::from_secs(1));
+        sleep_unless_stopped(&ctx.stop, Duration::from_secs(1));
     }
 }
 
@@ -257,19 +258,8 @@ fn weather_loop(ctx: &Ctx) {
         }
         let next = Instant::now() + WEATHER_EVERY;
         while !ctx.stopping() && Instant::now() < next && wanted(ctx) == (loc.clone(), units.clone()) {
-            sleep_unless_stopped(ctx, Duration::from_secs(30));
+            sleep_unless_stopped(&ctx.stop, Duration::from_secs(30));
         }
-    }
-}
-
-fn sleep_unless_stopped(ctx: &Ctx, d: Duration) {
-    let end = Instant::now() + d;
-    while !ctx.stopping() {
-        let left = end.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            break;
-        }
-        thread::sleep(left.min(Duration::from_millis(200)));
     }
 }
 

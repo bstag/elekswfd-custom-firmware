@@ -12,6 +12,19 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+/// Sleep up to `d`, waking within 100 ms when `stop` is set (the app is quitting).
+pub fn sleep_unless_stopped(stop: &AtomicBool, d: Duration) {
+    const POLL: Duration = Duration::from_millis(100);
+    let end = Instant::now() + d;
+    while !stop.load(Ordering::Relaxed) {
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        std::thread::sleep(left.min(POLL));
+    }
+}
+
 /// A flash upload for the clock (app.py `uploads` jobs).
 #[derive(Clone, Debug, PartialEq)]
 pub enum UploadJob {
@@ -134,5 +147,22 @@ impl Ctx {
     /// The setting the clock reports for `key` (state.clock), else `default`.
     pub fn clock_setting(&self, key: &str, default: Value) -> Value {
         self.state().clock.as_ref().and_then(|c| c.get(key).cloned()).unwrap_or(default)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sleep_unless_stopped_waits_or_returns_at_once() {
+        let stop = AtomicBool::new(false);
+        let t = Instant::now();
+        sleep_unless_stopped(&stop, Duration::from_millis(150));
+        assert!(t.elapsed() >= Duration::from_millis(150));
+        stop.store(true, Ordering::Relaxed);
+        let t = Instant::now();
+        sleep_unless_stopped(&stop, Duration::from_secs(10));
+        assert!(t.elapsed() < Duration::from_secs(1), "the app is stopping: no wait");
     }
 }

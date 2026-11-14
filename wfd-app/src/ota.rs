@@ -7,12 +7,14 @@
 //! the settings file, with the app's side (seconds sending, the error) and the clock's own report
 //! of that upload (`state.ota`: bytes, pieces, longest pause and where, signal, memory, result).
 
+use crate::applog;
 use crate::ctx::Ctx;
-use crate::link::basic_auth;
+use crate::link::{NotReached, basic_auth};
 use crate::release::multipart;
 use crate::state::Update;
 use serde_json::Value;
 use std::io;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -69,16 +71,22 @@ pub fn upload_firmware(host: &str, data: &[u8], password: &str) -> Result<(), Ot
 }
 
 /// Poll the clock's /api/status until it reports build `fw` (true) or `timeout` runs out.
-pub fn wait_for_build(host: &str, fw: &str, timeout: Duration) -> bool {
+/// `password` ("" = none) goes along: a clock with a web password needs it for its status.
+pub fn wait_for_build(host: &str, fw: &str, password: &str, timeout: Duration) -> bool {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(STATUS_TIMEOUT))
         .build()
         .into();
     let url = format!("http://{host}/api/status");
+    let auth = (!password.is_empty()).then(|| basic_auth(password));
     let end = Instant::now() + timeout;
     while Instant::now() < end {
+        let mut req = agent.get(&url);
+        if let Some(a) = &auth {
+            req = req.header("Authorization", a);
+        }
         // errors are normal here: the clock is restarting / rejoining WiFi
-        if let Ok(mut r) = agent.get(&url).call()
+        if let Ok(mut r) = req.call()
             && let Ok(v) = r.body_mut().read_json::<Value>()
             && v["state"]["fw"].as_str() == Some(fw)
         {
@@ -89,12 +97,12 @@ pub fn wait_for_build(host: &str, fw: &str, timeout: Duration) -> bool {
     false
 }
 
-/// `find_clock_ip(ctx)`
-pub type FindIp = Box<dyn Fn(&Ctx) -> Option<String> + Send>;
+/// `find_answering_clock_ip(ctx)`: the address, or why there is none.
+pub type FindIp = Box<dyn Fn(&Ctx) -> Result<String, NotReached> + Send>;
 /// `upload_firmware(host, data, password)`
 pub type Upload = Box<dyn Fn(&str, &[u8], &str) -> Result<(), OtaError> + Send>;
-/// `wait_for_build(host, fw, timeout)`
-pub type WaitForBuild = Box<dyn Fn(&str, &str, Duration) -> bool + Send>;
+/// `wait_for_build(host, fw, password, timeout)`
+pub type WaitForBuild = Box<dyn Fn(&str, &str, &str, Duration) -> bool + Send>;
 
 /// `clock_report(host, password)`: the clock's report of its last upload (`state.ota`), if any.
 pub type ClockReport = Box<dyn Fn(&str, &str) -> Option<Value> + Send>;
@@ -171,17 +179,46 @@ pub fn update_clock_with(ctx: &Arc<Ctx>, hooks: OtaHooks) -> bool {
             last: st.update.last.take(),
         };
     }
-    let ctx = Arc::clone(ctx);
-    thread::spawn(move || match job(&ctx, &hooks) {
-        Ok(msg) => set_update(&ctx, "done", msg),
-        Err(msg) => set_update(&ctx, "failed", msg),
-    });
+    let job_ctx = Arc::clone(ctx);
+    let spawned = thread::Builder::new()
+        .name("update-clock".into())
+        .spawn(move || {
+            let ctx = job_ctx;
+            // A panic must not leave the dashboard on "uploading" for good (which would also
+            // keep the clock link waiting): it ends the update as failed, and is logged.
+            match catch_unwind(AssertUnwindSafe(|| job(&ctx, &hooks))) {
+                Ok(Ok(msg)) => set_update(&ctx, "done", msg),
+                Ok(Err(msg)) => set_update(&ctx, "failed", msg),
+                Err(panic) => {
+                    let why = panic_text(panic.as_ref());
+                    applog::log(&format!("Update clock stopped by a panic: {why}"));
+                    set_update(&ctx, "failed", format!("the update stopped unexpectedly ({why})"));
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        // (rare: the system is out of threads) the update is over before it began
+        applog::log(&format!("Update clock: can't start its thread: {e}"));
+        set_update(ctx, "failed", format!("couldn't start the update ({e})"));
+    }
     true
 }
 
+/// The message a panic was raised with.
+fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown error".into())
+}
+
 fn job(ctx: &Ctx, hooks: &OtaHooks) -> Result<String, String> {
-    let ip = (hooks.find_clock_ip)(ctx)
-        .ok_or("clock not found on WiFi (updates go over the network)")?;
+    let ip = (hooks.find_clock_ip)(ctx).map_err(|why| match why {
+        NotReached::NotFound => "clock not found on WiFi (updates go over the network)".to_string(),
+        // the clock is there but wants its web password: the same reason the dashboard shows
+        locked => locked.to_string(),
+    })?;
     let data = ctx.firmware;
     let want = match &ctx.release {
         Some(r) if !data.is_empty() => r.fw.clone(),
@@ -205,7 +242,7 @@ fn job(ctx: &Ctx, hooks: &OtaHooks) -> Result<String, String> {
             Err(OtaError::Refused(_)) => false,
             _ => {
                 set_update(ctx, "uploading", "waiting for the clock to restart…");
-                (hooks.wait_for_build)(&ip, &want, RESTART_WAIT)
+                (hooks.wait_for_build)(&ip, &want, &pw, RESTART_WAIT)
             }
         };
         let entry = serde_json::json!({

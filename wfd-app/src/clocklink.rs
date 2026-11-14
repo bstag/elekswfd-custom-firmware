@@ -19,7 +19,8 @@ use crate::font14;
 use crate::grid_anim::{Extra, GridEngine, scene_from_name};
 use crate::icons::compute_icons;
 use crate::link::{
-    self, Clock, Link, LinkLost, RealClock, SerialIo, UsbLink, frame_cmd, per_key, truthy,
+    self, Clock, Link, LinkLost, NotReached, RealClock, SerialIo, UsbLink, frame_cmd, per_key,
+    truthy,
 };
 use crate::state::LevelsOut;
 use chrono::{Datelike, NaiveDateTime, Timelike};
@@ -34,8 +35,8 @@ pub const TICK: f64 = 1.0 / 30.0;
 
 /// Opens the clock's serial port (app.py `open_serial`).
 pub type OpenSerial = Box<dyn Fn() -> Option<Box<dyn SerialIo>>>;
-/// Finds and checks the clock on WiFi (app.py `open_wifi`).
-pub type OpenWifi = Box<dyn Fn(&Ctx) -> Option<Box<dyn Link>>>;
+/// Finds and checks the clock on WiFi (app.py `open_wifi`); Err says why it can't be used.
+pub type OpenWifi = Box<dyn Fn(&Ctx) -> Result<Box<dyn Link>, NotReached>>;
 
 /// The outside world the loop talks to; `Platform::real()` in the app, fakes in tests.
 pub struct Platform {
@@ -126,6 +127,9 @@ pub struct ClockLink {
     link_cfg: LinkSettings,
     /// a CH340 port that didn't answer like the clock, and when we found out
     not_clock: Option<(String, f64)>,
+    /// what's wrong with the USB port while nothing is connected (it doesn't answer like the
+    /// clock, or another program holds it); shown unless WiFi has a more pressing reason
+    usb_problem: Option<String>,
     grid: GridEngine,
 }
 
@@ -177,6 +181,7 @@ impl ClockLink {
             last_usb_check: 0.0,
             link_cfg: Default::default(),
             not_clock: None,
+            usb_problem: None,
             grid,
         }
     }
@@ -224,6 +229,7 @@ impl ClockLink {
         if let Some(mut l) = self.link.take() {
             l.close();
         }
+        self.usb_problem = None;
         let mut st = self.ctx.state();
         st.connected = false;
         st.link = None;
@@ -270,27 +276,38 @@ impl ClockLink {
                 }
             }
         }
-        if mode != LinkMode::Usb
-            && let Some(link) = (self.p.open_wifi)(&self.ctx)
-        {
-            return match self.start_link(link) {
-                Ok(_) => true,
-                Err(_) => {
-                    self.drop_link();
-                    false
+        let mut wifi_problem = None;
+        if mode != LinkMode::Usb {
+            match (self.p.open_wifi)(&self.ctx) {
+                Ok(link) => {
+                    return match self.start_link(link) {
+                        Ok(_) => true,
+                        Err(_) => {
+                            self.drop_link();
+                            false
+                        }
+                    };
                 }
-            };
+                // the clock is there but wants its web password: say so (not "not found")
+                Err(why @ NotReached::Password { .. }) => {
+                    let why = why.to_string();
+                    applog::log_once(&format!("the clock on WiFi refused the app: {why}"));
+                    wifi_problem = Some(why);
+                }
+                Err(NotReached::NotFound) => {}
+            }
         }
         self.not_clock = None; // nothing else to use: probe that USB port again next time
         if port.is_none() {
-            self.ctx.state().link_problem = None; // nothing plugged in: no USB complaint to show
-        }
-        if let Some(port) = port.filter(|_| mode != LinkMode::Wifi && self.ctx.state().link_problem.is_none()) {
+            self.usb_problem = None; // nothing plugged in: no USB complaint to show
+        } else if let Some(port) = port.filter(|_| mode != LinkMode::Wifi && self.usb_problem.is_none()) {
             // (reached only when the port didn't open: a silent one set its own message above)
-            self.ctx.state().link_problem = Some(format!(
+            self.usb_problem = Some(format!(
                 "{port} is the clock's USB port, but another program has it open (a serial monitor, or a second copy of this app)"
             ));
         }
+        // Worked out again on every attempt, so a reason shows while it lasts and goes with it.
+        self.ctx.state().link_problem = wifi_problem.or_else(|| self.usb_problem.clone());
         false
     }
 
@@ -300,9 +317,11 @@ impl ClockLink {
         self.drop_link();
         applog::log_once(&format!("{port} doesn't answer like the clock; leaving it alone for 5 minutes"));
         link::avoid_port(&port);
-        self.ctx.state().link_problem = Some(format!(
+        let problem = format!(
             "{port} doesn't answer like the clock (another device with the same USB chip, or the stock firmware)"
-        ));
+        );
+        self.usb_problem = Some(problem.clone());
+        self.ctx.state().link_problem = Some(problem);
         self.not_clock = Some((port, self.clock.now()));
     }
 
@@ -567,7 +586,7 @@ impl ClockLink {
             let st = self.ctx.state();
             match (&st.geo, &st.clock) {
                 // `{:?}` keeps a whole number's ".0" (31.0, as the golden log has it)
-                (Some(g), Some(clk)) if !truthy(clk.get("location")) => {
+                (Some(g), Some(clk)) if !clk.get("location").is_some_and(truthy) => {
                     Some(format!("{:?} {:?} {}", g.lat, g.lon, g.unit))
                 }
                 _ => None,

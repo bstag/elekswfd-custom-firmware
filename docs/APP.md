@@ -125,9 +125,23 @@ name lookup goes out on every network adapter and is repeated, so a VPN or virtu
 the name, since the router may have given the clock a new address.
 
 Once connected over WiFi, one missed answer doesn't drop the link (the clock is busy for a few
-seconds when it fetches the weather); 15 s of silence does. If the clock answers but isn't
-taking the live display, the dashboard says why: a wrong or missing clock password, or UDP
+seconds when it fetches the weather); 15 s of silence does. A display packet that Windows
+fails to send (say "no buffer space", os error 10055) drops only that frame: the link stays up
+while the clock answers, and if sends keep failing for about a second the app opens a new
+socket (and says so on the dashboard if that doesn't help either). If the clock answers but
+isn't taking the live display, the dashboard says why: a wrong or missing clock password, or UDP
 port 4210 blocked. The display stream stops while "Update clock" uploads firmware.
+
+Every request to the clock's web API, its status (`/api/status`) included, carries the app's
+clock password (`clock_pass`) as HTTP Basic auth `admin:<password>` when one is set: a clock
+with a web password answers its status with 401 without it (older firmware, and a clock in its
+setup‑AP mode, answer either way). A 401 doesn't count as "clock not found": the app keeps the
+clock's address and the dashboard says "the clock has a web password: enter it under
+Connection (App uses password)" when the app has no password, or "wrong clock password
+(Connection, App uses password)" when the one it sent was refused. That reason stays while
+connecting keeps getting a 401 and goes once the right password connects (or the clock drops
+its password). **Update clock** fails with the same reason, and checks the new build with the
+password too.
 
 If the clock is plugged in but Windows has no driver for its USB chip (no COM port), the
 dashboard says so and links to the driver (see
@@ -183,7 +197,10 @@ The PC app replaces it with the full UI and feature set.
 ## Tests
 
 The app: `cd wfd-app && cargo test` (see [wfd-app/README.md](../wfd-app/README.md)). No
-clock, network or audio device is needed. Its golden log
+clock, network or audio device is needed: finding the clock runs against a fake network (the
+`link::Net` seam, and `mdns::MdnsSocket` for the name query), and HTTP tests use a server on
+127.0.0.1. The few tests that use the real LAN are `#[ignore]`d; run them with
+`cargo test --test mdns --test clock_ip -- --ignored`. Its golden log
 (`wfd-app/tests/fixtures/clocklink_golden.log`) is a regression snapshot of every line the
 app sends in a busy simulated scenario. If you change what the app sends on purpose, the test
 fails with a diff: `WFD_UPDATE_GOLDEN=1 cargo test --test clocklink` writes the new output to

@@ -6,7 +6,10 @@
 #include <Update.h>
 #include <ArduinoJson.h>
 #include "clock_state.h"
+#include "nvs_store.h"
 #include "weather_fetch.h"
+
+Weather wx;
 
 bool setWeatherZip(const String &zip) {
   if (WiFi.status() != WL_CONNECTED) return false;
@@ -26,10 +29,10 @@ bool setWeatherZip(const String &zip) {
       lo = doc["places"][0]["longitude"];
     }
     if (la && lo) {                                // both present, as strings
-      g_lat = la;
-      g_lon = lo;
-      prefs.putString("lat", g_lat); prefs.putString("lon", g_lon); prefs.putString("zip", zip);
-      lastWxFetch = 0;
+      wx.lat = la;
+      wx.lon = lo;
+      prefSave(P_LAT); prefSave(P_LON); prefPutString(P_ZIP, zip);
+      wx.lastFetch = 0;
       ok = true;
     }
   }
@@ -116,15 +119,15 @@ static void weatherTask(void *) {
 // Ask for a fetch. False if it can't start now (one is running, no WiFi or location, an update
 // is being written): the caller tries again on a later pass.
 bool netWeatherFetch() {
-  if (wxBusy || WiFi.status() != WL_CONNECTED || g_lat.length() == 0 || Update.isRunning()) return false;
+  if (wxBusy || WiFi.status() != WL_CONNECTED || wx.lat.length() == 0 || Update.isRunning()) return false;
   if (!wxTaskHandle &&       // core 1 with loop(): the mic task keeps core 0's timing to itself
       xTaskCreatePinnedToCore(weatherTask, "weather", 12288, nullptr, 1, &wxTaskHandle, 1) != pdPASS) {
     wxTaskHandle = nullptr;
     return false;
   }
-  strlcpy(wxJob.lat, g_lat.c_str(), sizeof wxJob.lat);
-  strlcpy(wxJob.lon, g_lon.c_str(), sizeof wxJob.lon);
-  wxJob.unit = g_wunit;
+  strlcpy(wxJob.lat, wx.lat.c_str(), sizeof wxJob.lat);
+  strlcpy(wxJob.lon, wx.lon.c_str(), sizeof wxJob.lon);
+  wxJob.unit = wx.units;
   wxBusy = true;
   xTaskNotifyGive(wxTaskHandle);
   return true;
@@ -135,18 +138,18 @@ void weatherApply() {
   if (!wxDone) return;
   const WxResult &r = wxResult;
   if (r.ok) {
-    wxCode = r.code;
-    wxScene = r.scene;
-    wxSceneTime = millis();
+    wx.code = r.code;
+    wx.scene = r.scene;
+    wx.sceneTime = millis();
     if (r.n >= 2) {
-      for (int d = 0; d < r.n; d++) { fcHi[d] = r.hi[d]; fcLo[d] = r.lo[d]; fcCode[d] = r.wc[d]; }
-      fcN = r.n;
-      fcTime = millis();
+      for (int d = 0; d < r.n; d++) { wx.fcHi[d] = r.hi[d]; wx.fcLo[d] = r.lo[d]; wx.fcCode[d] = r.wc[d]; }
+      wx.fcN = r.n;
+      wx.fcTime = millis();
     }
-    wxTemp = r.temp;
-    wxUnit = r.unit;
-    wxTime.mark();
-    dirty = true;
+    wx.temp = r.temp;
+    wx.unit = r.unit;
+    wx.time.mark();
+    disp.dirty = true;
   }
   wxDone = false;
   wxBusy = false;

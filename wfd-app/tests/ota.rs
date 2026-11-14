@@ -5,6 +5,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use wfd_app::ctx::Ctx;
+use wfd_app::link::NotReached;
 use wfd_app::ota::{OtaError, OtaHooks, update_clock_with, upload_firmware, wait_for_build};
 use wfd_app::release::Release;
 use wfd_app::state::Update;
@@ -40,14 +41,14 @@ fn hooks(
     let calls: Calls = Arc::default();
     let c2 = Arc::clone(&calls);
     let h = OtaHooks {
-        find_clock_ip: Box::new(move |_| ip.map(str::to_string)),
+        find_clock_ip: Box::new(move |_| ip.map(str::to_string).ok_or(NotReached::NotFound)),
         upload_firmware: Box::new(move |ip, data, pw| {
             c2.lock()
                 .unwrap()
                 .push((ip.into(), data.to_vec(), pw.into()));
             upload()
         }),
-        wait_for_build: Box::new(move |ip, fw, _| built(ip, fw)),
+        wait_for_build: Box::new(move |ip, fw, _, _| built(ip, fw)),
         clock_report: Box::new(|_, _| None),
         log: Box::new(|_, _| {}),
     };
@@ -65,9 +66,9 @@ fn logged_hooks(
     let logged: Logged = Arc::default();
     let l2 = Arc::clone(&logged);
     let h = OtaHooks {
-        find_clock_ip: Box::new(|_| Some("10.0.0.9".into())),
+        find_clock_ip: Box::new(|_| Ok("10.0.0.9".into())),
         upload_firmware: Box::new(move |_, _, _| upload()),
-        wait_for_build: Box::new(move |_, _, _| built()),
+        wait_for_build: Box::new(move |_, _, _, _| built()),
         clock_report: Box::new(move |ip, _| (ip == "10.0.0.9").then(|| report.clone())),
         log: Box::new(move |_, e| l2.lock().unwrap().push(e.clone())),
     };
@@ -212,6 +213,72 @@ fn update_reports_failures() {
 }
 
 #[test]
+fn a_panic_during_the_update_fails_it_instead_of_hanging() {
+    let ctx = ctx_with_release();
+    let (h, _) = hooks(
+        Some("10.0.0.9"),
+        || panic!("upload hook blew up"),
+        |_, _| true,
+    );
+    assert!(update_clock_with(&ctx, h));
+    let up = wait_update(&ctx);
+    assert_eq!(up.state, "failed", "not stuck on uploading");
+    assert!(up.message.contains("upload hook blew up"), "{}", up.message);
+    // and the next click can start another one
+    assert!(update_clock_with(&ctx, hooks(Some("10.0.0.9"), || Ok(()), |_, _| true).0));
+    assert_eq!(wait_update(&ctx).state, "done");
+}
+
+#[test]
+fn a_poisoned_settings_lock_does_not_stop_the_update() {
+    let ctx = ctx_with_release();
+    ctx.settings_mut().clock_pass = "pw".into();
+    let c2 = Arc::clone(&ctx);
+    let _ = std::thread::spawn(move || {
+        let _held = c2.settings.lock().unwrap();
+        panic!("poison the settings lock");
+    })
+    .join();
+    assert!(ctx.settings.is_poisoned());
+    let (h, calls) = hooks(Some("10.0.0.9"), || Ok(()), |_, _| true);
+    assert!(update_clock_with(&ctx, h));
+    assert_eq!(wait_update(&ctx).state, "done");
+    assert_eq!(calls.lock().unwrap()[0].2, "pw");
+}
+
+#[test]
+fn a_clock_that_wants_its_password_is_not_reported_missing() {
+    for (sent, want) in [
+        (false, "the clock has a web password: enter it under Connection (App uses password)"),
+        (true, "wrong clock password (Connection, App uses password)"),
+    ] {
+        let ctx = ctx_with_release();
+        let (mut h, calls) = hooks(Some("10.0.0.9"), || Ok(()), |_, _| true);
+        h.find_clock_ip = Box::new(move |_| Err(NotReached::Password { sent }));
+        assert!(update_clock_with(&ctx, h));
+        let up = wait_update(&ctx);
+        assert_eq!((up.state.as_str(), up.message.as_str()), ("failed", want));
+        assert!(calls.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn waiting_for_the_build_sends_the_password() {
+    let ctx = ctx_with_release();
+    ctx.settings_mut().clock_pass = "pw".into();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let s2 = Arc::clone(&seen);
+    let (mut h, _) = hooks(Some("10.0.0.9"), || Ok(()), |_, _| true);
+    h.wait_for_build = Box::new(move |_, _, pw, _| {
+        s2.lock().unwrap().push(pw.to_string());
+        true
+    });
+    assert!(update_clock_with(&ctx, h));
+    assert_eq!(wait_update(&ctx).state, "done");
+    assert_eq!(*seen.lock().unwrap(), ["pw"]);
+}
+
+#[test]
 fn no_release_no_update() {
     let path = std::env::temp_dir()
         .join("wfd-ota-test-does-not-exist")
@@ -229,7 +296,7 @@ fn one_update_at_a_time() {
     let mut h = hooks(Some("10.0.0.9"), || Ok(()), |_, _| true).0;
     h.find_clock_ip = Box::new(|_| {
         std::thread::sleep(Duration::from_millis(300));
-        Some("10.0.0.9".into())
+        Ok("10.0.0.9".into())
     });
     assert!(update_clock_with(&ctx, h));
     assert!(!update_clock_with(
@@ -314,11 +381,14 @@ fn wait_for_build_polls_the_status() {
         for fw in ["OLD", "NEW"] {
             let req = s.recv().unwrap();
             assert_eq!(req.url(), "/api/status");
+            let auth = req.headers().iter().find(|h| h.field.equiv("Authorization"));
+            // a clock with a web password answers its status only with it
+            assert_eq!(auth.map(|h| h.value.to_string()).as_deref(), Some("Basic YWRtaW46cHc="));
             let body = format!(r#"{{"state":{{"fw":"{fw}"}},"config":{{}}}}"#);
             req.respond(tiny_http::Response::from_string(body)).unwrap();
         }
     });
-    assert!(wait_for_build(&addr, "NEW", Duration::from_secs(10)));
+    assert!(wait_for_build(&addr, "NEW", "pw", Duration::from_secs(10)));
     h.join().unwrap();
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -328,6 +398,7 @@ fn wait_for_build_polls_the_status() {
     assert!(!wait_for_build(
         &format!("127.0.0.1:{port}"),
         "NEW",
+        "",
         Duration::from_millis(50)
     ));
 }

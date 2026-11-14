@@ -3,8 +3,10 @@
     set WFD_CLOCK=192.168.0.152 && test.bat -m device
 
 Sends a few harmless UDP display packets and checks the counters; checks /api/frames rejects
-bad input. Never stores frames (that would replace your drawing).
+bad input. Never stores frames (that would replace your drawing). If the clock has a WEBPASS,
+also set WFD_CLOCK_PASS: every request sends it (and the reads are checked to need it).
 """
+import base64
 import json
 import os
 import socket
@@ -22,8 +24,19 @@ pytestmark = [pytest.mark.device,
               pytest.mark.skipif(not CLOCK, reason="set WFD_CLOCK=<clock ip> to run device tests")]
 
 
+def auth():
+    """The web password (WFD_CLOCK_PASS), if the clock has one: every page and API call needs it."""
+    if not PASS:
+        return {}
+    return {"Authorization": "Basic " + base64.b64encode(f"admin:{PASS}".encode()).decode()}
+
+
+def get(path):
+    return urllib.request.urlopen(urllib.request.Request(f"http://{CLOCK}{path}", headers=auth()), timeout=5)
+
+
 def net():
-    return json.load(urllib.request.urlopen(f"http://{CLOCK}/api/status", timeout=5))["state"]["net"]
+    return json.load(get("/api/status"))["state"]["net"]
 
 
 def send(payload: bytes, n=1):
@@ -58,7 +71,7 @@ def test_good_packets_are_counted():
 
 
 def test_packets_without_the_header_are_rejected():
-    state = json.load(urllib.request.urlopen(f"http://{CLOCK}/api/status", timeout=5))["state"]
+    state = json.load(get("/api/status"))["state"]
     if state["app_connected"]:
         pytest.skip("the PC app is streaming to the clock over WiFi (its packets are counted too): stop it first")
     before = net()
@@ -71,7 +84,7 @@ def test_packets_without_the_header_are_rejected():
 def test_frames_upload_rejects_bad_input():
     def post(body, header=True):
         req = urllib.request.Request(f"http://{CLOCK}/api/frames", json.dumps(body).encode(),
-                                     {"Content-Type": "application/json", **({"X-WFD": "1"} if header else {})})
+                                     {"Content-Type": "application/json", **({"X-WFD": "1"} if header else {}), **auth()})
         try:
             with urllib.request.urlopen(req, timeout=5) as r:
                 return r.status
@@ -84,7 +97,7 @@ def test_frames_upload_rejects_bad_input():
 
 
 def test_stored_frames_can_be_read_back():
-    d = json.load(urllib.request.urlopen(f"http://{CLOCK}/api/frames", timeout=5))
+    d = json.load(get("/api/frames"))
     assert set(d) == {"frames", "fps", "frame"}
     assert all(len(f) == 7 and all(0 <= r < 128 for r in f) for f in d["frames"])
 
@@ -92,7 +105,7 @@ def test_stored_frames_can_be_read_back():
 def test_live_preview_shows_a_frame_and_rejects_junk():
     def post(body):
         req = urllib.request.Request(f"http://{CLOCK}/api/preview", json.dumps(body).encode(),
-                                     {"Content-Type": "application/json", "X-WFD": "1"})
+                                     {"Content-Type": "application/json", "X-WFD": "1", **auth()})
         try:
             with urllib.request.urlopen(req, timeout=5) as r:
                 return r.status
@@ -104,6 +117,14 @@ def test_live_preview_shows_a_frame_and_rejects_junk():
 
 def test_the_drawing_tool_is_served():
     import gzip
-    with urllib.request.urlopen(f"http://{CLOCK}/draw", timeout=5) as r:   # sent gzipped, like a browser wants
+    with get("/draw") as r:   # sent gzipped, like a browser wants
         assert r.status == 200 and r.headers["Content-Encoding"] == "gzip"
         assert b"WFD Grid Animator" in gzip.decompress(r.read())
+
+
+@pytest.mark.skipif(not PASS, reason="set WFD_CLOCK_PASS (the clock's web password) to check it's required")
+def test_reads_need_the_password():
+    for path in ("/api/status", "/api/frames"):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(f"http://{CLOCK}{path}", timeout=5)
+        assert e.value.code == 401, path

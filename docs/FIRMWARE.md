@@ -28,12 +28,19 @@ cuts into an attempt that is still running.
 ## Source layout
 
 All in `wfd-firmware/clock/src/`. Each `.cpp` has a header of the same name with what the
-other files call; state used by more than one file is declared in `clock_state.h`.
+other files call. State used by more than one file is grouped into structs by what owns it,
+one instance each: `disp` (the panel and its settings), `live` (the frame the app sends),
+`standalone` (what runs when the app is off) and `net` (WiFi, the UDP stream, the web password)
+in `clock_state.h`; `wx` (weather and forecast) in `weather_fetch.h`, `alerts` (alarms, timer,
+alert) in `buttons_alerts.h`, `micState` (what the mic task hands over; `volatile`) in
+`microphone.h`, `otaLog` in `ota_update.h` and the `web` server in `web_routes.h`, so a file
+sees only the groups whose headers it includes.
 
 | File | Holds |
 |---|---|
 | `main.cpp` | `setup()`, `loop()`, `WFD_PROTOCOL` and the `FW_BUILD` stamp |
-| `clock_state.h/.cpp` | shared state (`extern` declarations / definitions), `Stamp`, `OtaLog` |
+| `clock_state.h/.cpp` | the shared groups above, `Stamp` |
+| `nvs_store.h/.cpp` | every value saved in flash: one table of NVS key, type and default, used to load them all at boot (`prefsLoad`) and to save one (`prefSave`) |
 | `clock_display.h/.cpp` | TM1680 and DS3231 over I2C, `draw()`, 14‑seg text rendering, brightness/style, the info notice |
 | `serial_cmds.h/.cpp` | the serial command set, `handle()` |
 | `clock_settings.h/.cpp` | the settings table (`setting`/`applySettings`), `configJson`, `stateJson`, `CFG`/`CFGSET` |
@@ -106,8 +113,12 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `POST /api/set` | JSON: change settings |
 | `POST /api/frames` | JSON: store drawn grid frames `{"frames": [[r0..r6], ...], "fps": 8, "frame": false}` (≤ 80) and play them when the app is off |
 
-Anyone on your LAN can reach these pages. Set `WEBPASS` over USB to put `/control`,
-`/update` and `/wifi` behind HTTP basic auth. The first-run setup AP is always open.
+Anyone on your LAN can reach these pages. Set `WEBPASS` over USB to put every page and API
+call behind HTTP basic auth (user `admin`): the pages, `/update`, `/wifi`, `POST /api/set`,
+`/api/preview`, and also the reads `GET /api/status` and `GET /api/frames` (the status names
+your WiFi network, ZIP and alarms). Without the password they answer `401`. The dashboard and
+the animator are served behind the same login, so the browser sends it on their API calls.
+With no password set, and always in the first-run setup AP, everything is open.
 
 In AP (setup) mode the clock is `192.168.4.1` and a DNS captive portal redirects to the
 setup page.
@@ -120,7 +131,9 @@ Same shape as the PC app's API, so one dashboard can talk to either.
 `heap_free`, `time`, `ntp`, `wifi {ssid, ip, rssi}`, `weather {fresh, temp, unit, cond}`,
 `app_connected`, `message` (what the message line shows), `stored_frames`, `grid_rows`
 (the current grid frame, 7 row bytes), `mic {active, level, bass, treble}` and
-`net {host, udp_port, udp_packets, udp_rejected, key_required}`.
+`net {host, udp_port, udp_packets, udp_rejected, key_required}`. When `WEBPASS` is set (and
+the clock isn't in setup-AP mode) it needs the web password like every other call, and
+answers `401` without it; so does `GET /api/frames`.
 
 `POST /api/set` takes a JSON object of settings. It needs the header `X-WFD: 1`, which stops
 other web pages posting to the clock from your browser, plus the web password if `WEBPASS`
@@ -152,7 +165,7 @@ is set. Every key is checked first; if any is bad nothing changes, and you get a
 | `alert` | bool | `false` stops an alarm or timer alert; `true` starts a test alert; reads back whether one is going off |
 
 ```bash
-curl http://<clock-ip>/api/status
+curl http://<clock-ip>/api/status            # with a WEBPASS: curl -u admin:<pass> ...
 curl -X POST -H "X-WFD: 1" -H "Content-Type: application/json" -d '{"standalone_anim":"rain","standalone_fps":12}' http://<clock-ip>/api/set
 ```
 
@@ -270,7 +283,12 @@ own recent fetch it falls back to the 3‑way code (sunny/cloudy/rain) and the l
 
 The clock has its own mic (GPIO32 / ADC1_CH4, behind an op‑amp). A task on core 0 samples it
 at 8 kHz in 32 ms frames while the app is off and something uses it, and `mic_dsp.h` turns each
-frame into:
+frame into the numbers below. The sample clock is hardware timer group 0 / timer 0: its alarm
+wakes the task every 125 µs for one `analogRead`, and the task sleeps in between instead of
+spinning on `micros()`, so core 0 stays free for WiFi and the idle task. (The I2S driver's
+built‑in‑ADC DMA mode would avoid even the per‑sample wake‑ups, but whether its readings match
+`analogRead`'s scale, polarity and sample order, which `mic_dsp.h` is tuned on, depends on code
+that ships only precompiled; it needs checking on the hardware first.) Each frame gives:
 
 - **loudness**, in dB above an adaptive noise floor. The floor settles near the room's quiet
   level (it rises 0.3 dB/s and falls 1.5 dB/s). Nothing shows until a sound is 12 dB above it,
@@ -294,8 +312,26 @@ room, record a new trace and adjust `Loudness` in `mic_dsp.h` until the tests pa
 
 ## Persistent storage (NVS namespace `wfd`)
 
-`style`, `bright`, `clk24`, `webpass`, `micauto`; grid `gaid/gfps/gflag/gauto` + drawn frames `gn` + `ganim` (blob); message line
-`omauto/mmode/mrot/mdwell/mscroll` + `omtext`; WiFi/location `ssid/pass/tz/lat/lon/wunit/zip`.
+All of them are in one table in `src/nvs_store.cpp` (key, type, default, and the range a
+value is clamped to when loaded); clocks in the field depend on these, so they don't change:
+
+| Key | Type | Default | Key | Type | Default |
+|---|---|---|---|---|---|
+| `style` | int | 4 | `micauto` | int | 1 |
+| `bright` | int | 6 | `omauto` | int | 0 |
+| `clk24` | int | 1 | `mmode` | int | 1 (text), clamped 0–4 |
+| `gn` | int | 0, clamped 0–80 | `mrot` | int | 7 |
+| `gfps` | int | 8 | `mdwell` | int | 8 |
+| `gflag` | int | 0 | `mscroll` | int | 350 |
+| `gauto` | int | 0 | `omtext` | string | `WFD CLOCK` |
+| `ganim` | bytes | `gn` × 7 (`gn` → 0 if short) | `tz` | string | `CST6CDT,M3.2.0,M11.1.0` |
+| `gaid` | int | `custom` if frames loaded, else `spin`; clamped | `lat`, `lon` | string | empty |
+| `webpass` | string | empty | `wunit` | int | 0 |
+| `wxsc` | int | −1 (auto), clamped | `zip` | string | empty |
+| `alarms` | bytes | 4 × 4 (all off if short) | `ssid`, `pass` | string | empty |
+| `otalog` | bytes | the last upload's log | | | |
+
+`zip`, `ssid` and `pass` are read from flash when needed; the rest are loaded once at boot.
 Settings survive OTA updates, `wfd-flash.exe` and `flash_usb.py` (the `nvs` partition offset
 is unchanged and they leave it alone on a clock that already runs this firmware). Writing the
 whole `wfd-clock-merged.bin` at 0x0 by hand (esptool, or `flash_usb.py --wipe-settings`)

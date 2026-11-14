@@ -17,6 +17,7 @@
 
 use crate::config::{self, CLOCK_KEYS, PROTOCOL};
 use crate::ctx::{Ctx, UploadJob};
+use crate::link::truthy;
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -388,7 +389,3 @@ fn clock_password(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
     }
 }
 
-/// Is a JSON value "set"? (false, 0, "", [], {} and null are not)
-fn truthy(v: &Value) -> bool {
-    crate::link::truthy(Some(v))
-}
