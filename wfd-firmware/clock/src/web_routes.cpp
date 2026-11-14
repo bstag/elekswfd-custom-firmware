@@ -6,10 +6,14 @@
 #include "clock_state.h"
 #include "clock_display.h"
 #include "clock_settings.h"
+#include "nvs_store.h"
 #include "ota_update.h"
 #include "standalone.h"
+#include "weather_fetch.h"
 #include "web_pages.h"
 #include "web_routes.h"
+
+WebServer web(80);
 
 static String esc(const String &s) {   // HTML-escape text going into a page or attribute
   String o;
@@ -27,11 +31,12 @@ static String esc(const String &s) {   // HTML-escape text going into a page or 
   return o;
 }
 
-// Optional web password (serial: WEBPASS <pass>, empty = open). Guards the pages that change
-// settings or flash firmware once the clock is on your LAN; the first-run setup AP stays open.
+// Optional web password (serial: WEBPASS <pass>, empty = open). Guards every page and API call
+// once the clock is on your LAN (401 without it), including the reads (/api/status,
+// GET /api/frames) that show the WiFi name, ZIP and alarms; the first-run setup AP stays open.
 static bool webAuthed() {
-  if (apMode) return true;
-  if (webPass.length() == 0 || web.authenticate("admin", webPass.c_str())) return true;
+  if (net.apMode) return true;
+  if (net.webPass.length() == 0 || web.authenticate("admin", net.webPass.c_str())) return true;
   web.requestAuthentication();
   return false;
 }
@@ -125,7 +130,7 @@ static void sendSetupPage() {
       int tmp = idx[b]; idx[b] = idx[b - 1]; idx[b - 1] = tmp;
     }
 
-  String current = prefs.getString("ssid", "");
+  String current = prefString(P_SSID);
   HtmlOut o(200, "WFD WiFi Setup");
   o << "<h2>WFD Clock WiFi</h2><form method=POST action=/save>"
        "<label>Choose a network <a href=/rescan style=float:right>↻ Scan again</a></label>";
@@ -158,8 +163,8 @@ static void handleSave() {
   String ssid = web.arg("ssid");
   if (ssid.length() == 0) { ssid = web.arg("other"); ssid.trim(); }   // typed under "Other network…"
   if (ssid.length() == 0) { web.sendHeader("Location", "/wifi"); web.send(303); return; }
-  prefs.putString("ssid", ssid);
-  prefs.putString("pass", web.arg("pass"));
+  prefPutString(P_SSID, ssid);
+  prefPutString(P_PASS, web.arg("pass"));
   sendPage(200, "WFD WiFi Setup",
            "<h2>Saved — connecting…</h2><p>Rejoin your normal WiFi. The clock is restarting.</p>"
            "<p>Then open <b>http://wfd-clock.local</b>. If that doesn't load, hold any button on the clock "
@@ -178,14 +183,14 @@ static void sendStatusPage() {
   HtmlOut o(200, "WFD Clock");
   o << "<h2>WFD Clock</h2><p class=dim>" << esc(FW_BUILD) << "</p>";
   o << "<p>Time: <b>" << tm << "</b></p>";
-  o << "<p>NTP: <b>" << (ntpSynced ? "synced" : "waiting…") << "</b> &nbsp; WiFi: <b>" << esc(WiFi.SSID())
+  o << "<p>NTP: <b>" << (net.ntpSynced ? "synced" : "waiting…") << "</b> &nbsp; WiFi: <b>" << esc(WiFi.SSID())
     << "</b> (" << WiFi.localIP().toString() << ", " << (int)WiFi.RSSI() << " dBm)</p>";
-  const char *cond = wxCode == 1 ? "Sunny" : wxCode == 2 ? "Cloudy" : wxCode == 3 ? "Rain" : "—";
+  const char *cond = wx.code == 1 ? "Sunny" : wx.code == 2 ? "Cloudy" : wx.code == 3 ? "Rain" : "—";
   o << "<p>Weather: <b>";
-  if (wxFresh()) o << wxTemp << (wxUnit ? "C " : "F ") << cond;
+  if (wxFresh()) o << wx.temp << (wx.unit ? "C " : "F ") << cond;
   else o << "—";
   o << "</b> &nbsp; loc ";
-  if (g_lat.length()) o << g_lat << "," << g_lon;
+  if (wx.lat.length()) o << wx.lat << "," << wx.lon;
   else o << "unset";
   o << "</p>";
   o << "<p><a href=/ style=font-weight:600>⚙ Dashboard</a> &nbsp; <a href=/control>Basic controls</a></p>";
@@ -193,59 +198,59 @@ static void sendStatusPage() {
 }
 
 static void sendControlPage() {
-  String zip = prefs.getString("zip", "");
+  String zip = prefString(P_ZIP);
   HtmlOut o(200, "WFD Control");
   o << "<h2>WFD Clock Control</h2><form method=POST action=/control>";
-  o << "<label>Brightness</label><input type=range name=bright min=1 max=16 value=" << brightness << ">";
-  o << "<label>Clock format</label><select name=clk24><option value=1" << (clock24 ? " selected" : "")
-    << ">24-hour</option><option value=0" << (clock24 ? "" : " selected") << ">12-hour</option></select>";
+  o << "<label>Brightness</label><input type=range name=bright min=1 max=16 value=" << disp.brightness << ">";
+  o << "<label>Clock format</label><select name=clk24><option value=1" << (disp.clock24 ? " selected" : "")
+    << ">24-hour</option><option value=0" << (disp.clock24 ? "" : " selected") << ">12-hour</option></select>";
   o << "<label>Weather ZIP</label><input name=zip value='" << esc(zip) << "' placeholder='e.g. 76708'>";
-  o << "<label>Units</label><select name=units><option value=f" << (g_wunit ? "" : " selected")
-    << ">Fahrenheit</option><option value=c" << (g_wunit ? " selected" : "") << ">Celsius</option></select>";
+  o << "<label>Units</label><select name=units><option value=f" << (wx.units ? "" : " selected")
+    << ">Fahrenheit</option><option value=c" << (wx.units ? " selected" : "") << ">Celsius</option></select>";
   o << "<label>Time zone</label><select name=tz>";
   const char *zn[][2] = {{"Eastern", "EST5EDT,M3.2.0,M11.1.0"}, {"Central", "CST6CDT,M3.2.0,M11.1.0"},
                          {"Mountain", "MST7MDT,M3.2.0,M11.1.0"}, {"Arizona", "MST7"},
                          {"Pacific", "PST8PDT,M3.2.0,M11.1.0"}, {"UTC", "UTC0"}};
-  for (auto &z : zn) o << "<option value='" << z[1] << "'" << (g_tz == z[1] ? " selected" : "") << ">" << z[0] << "</option>";
+  for (auto &z : zn) o << "<option value='" << z[1] << "'" << (net.tz == z[1] ? " selected" : "") << ">" << z[0] << "</option>";
   o << "</select>";
-  o << "<div class=row><input type=checkbox name=micauto id=micauto " << (micAuto ? "checked" : "")
+  o << "<div class=row><input type=checkbox name=micauto id=micauto " << (standalone.micAuto ? "checked" : "")
     << "><label for=micauto>Spectrum from the clock's mic when the app is off</label></div>";
   o << "<h3>Grid <small class=dim>when the app is off</small></h3>";
-  o << "<div class=row><input type=checkbox name=gauto id=gauto " << (gaAuto ? "checked" : "")
+  o << "<div class=row><input type=checkbox name=gauto id=gauto " << (standalone.gaAuto ? "checked" : "")
     << "><label for=gauto>Play an animation</label></div>";
   o << "<label>Animation</label><select name=ganim>";
   for (int i = 1; i < grid::N_ANIM; i++) {
     String n = grid::NAMES[i];
     n.setCharAt(0, n[0] - 32);                       // "spin" -> "Spin"
-    o << "<option value=" << i << (gaAnim == i ? " selected" : "") << ">" << n << "</option>";
+    o << "<option value=" << i << (standalone.gaAnim == i ? " selected" : "") << ">" << n << "</option>";
   }
-  o << "<option value=0" << (gaAnim == grid::CUSTOM ? " selected" : "") << (gaN ? "" : " disabled")
-    << ">Drawn in the app (" << gaN << " frames)</option></select>";
+  o << "<option value=0" << (standalone.gaAnim == grid::CUSTOM ? " selected" : "") << (standalone.gaN ? "" : " disabled")
+    << ">Drawn in the app (" << standalone.gaN << " frames)</option></select>";
   o << "<label>Speed <small>(frames per second)</small></label>"
-       "<input type=range name=gfps min=2 max=25 value=" << gaFps << ">";
-  o << "<div class=row><input type=checkbox name=gflag id=gflag " << (gaFlag ? "checked" : "")
+       "<input type=range name=gfps min=2 max=25 value=" << standalone.gaFps << ">";
+  o << "<div class=row><input type=checkbox name=gflag id=gflag " << (standalone.gaFlag ? "checked" : "")
     << "><label for=gflag>Light the border frame</label></div>";
 
   o << "<h3>Message line <small class=dim>when the app is off</small></h3>";
-  o << "<div class=row><input type=checkbox name=omauto id=omauto " << (omAuto ? "checked" : "")
+  o << "<div class=row><input type=checkbox name=omauto id=omauto " << (standalone.omAuto ? "checked" : "")
     << "><label for=omauto>Use these settings (off = temperature only)</label></div>";
   const char *modes[] = {"Temperature", "Text", "Date", "Rotate", "Forecast"};
   o << "<label>Show</label><select name=mmode>";
   for (int i = 0; i < N_SRC; i++)
-    o << "<option value=" << i << (msgMode == i ? " selected" : "") << ">" << modes[i] << "</option>";
+    o << "<option value=" << i << (standalone.msgMode == i ? " selected" : "") << ">" << modes[i] << "</option>";
   o << "</select>";
-  o << "<label>Text</label><input name=omtext maxlength=" << MSG_TEXT_MAX << " value='" << esc(msgText) << "'>";
+  o << "<label>Text</label><input name=omtext maxlength=" << MSG_TEXT_MAX << " value='" << esc(standalone.msgText) << "'>";
   o << "<p class=dim style='margin:4px 0;font-size:13px'>Placeholders: {time} {time12} {date} {day} {temp}</p>";
   o << "<label>Rotate through</label><div class=row style=margin-top:4px>";
   const char *srcs[] = {"Temperature", "Text", "Date", "", "Forecast"};
   for (int i = 0; i < N_SRC; i++)
-    if (i != MODE_ROTATE) o << "<input type=checkbox name=rot" << i << " id=rot" << i << ((msgRot >> i) & 1 ? " checked" : "")
+    if (i != MODE_ROTATE) o << "<input type=checkbox name=rot" << i << " id=rot" << i << ((standalone.msgRot >> i) & 1 ? " checked" : "")
                             << "><label for=rot" << i << ">" << srcs[i] << "</label>";
   o << "</div>";
-  o << "<label>Seconds per item (rotate)</label><input type=number name=mdwell min=2 max=600 value=" << msgDwell << ">";
+  o << "<label>Seconds per item (rotate)</label><input type=number name=mdwell min=2 max=600 value=" << standalone.msgDwell << ">";
   o << "<label>Scroll speed <small>(ms per step, lower = faster)</small></label>"
-       "<input type=range name=mscroll min=100 max=1000 step=50 value=" << msgScroll << ">";
-  o << "<p class=dim style=font-size:13px>Now showing: <b>" << esc(msgShown.length() ? msgShown : String("—")) << "</b></p>";
+       "<input type=range name=mscroll min=100 max=1000 step=50 value=" << standalone.msgScroll << ">";
+  o << "<p class=dim style=font-size:13px>Now showing: <b>" << esc(standalone.msgShown.length() ? standalone.msgShown : String("—")) << "</b></p>";
   o << "<button type=submit>Apply</button></form>";
   o << "<p class=dim><a href=/>Dashboard</a> &middot; <a href=/status>Status</a> &middot; <a href=/update>Firmware update</a></p>";
 }
@@ -258,6 +263,7 @@ static void sendJson(int code, JsonDocument &doc) {
 }
 
 static void handleApiStatus() {
+  if (!webAuthed()) return;                        // names the WiFi, the ZIP, the alarms
   JsonDocument doc;
   stateJson(doc["state"].to<JsonObject>());
   configJson(doc["config"].to<JsonObject>());
@@ -285,9 +291,9 @@ static void handleApiFrames() {
     for (int r = 0; r < 7; r++) rows[i * 7 + r] = r < (int)f.size() ? (uint8_t)f[r].as<int>() : 0;
     i++;
   }
-  storeFrames(rows, n, in["fps"] | gaFps, (in["frame"] | false) ? 1 : 0);
+  storeFrames(rows, n, in["fps"] | standalone.gaFps, (in["frame"] | false) ? 1 : 0);
   out["ok"] = true;
-  out["frames"] = gaN;
+  out["frames"] = standalone.gaN;
   sendJson(200, out);
 }
 
@@ -312,7 +318,7 @@ static void handleControlPost() {
   if (web.hasArg("units")) in["units"] = web.arg("units") == "c" ? "celsius" : "fahrenheit";
   if (web.hasArg("tz")) in["tz"] = web.arg("tz");
   String zip = web.arg("zip"); zip.trim();
-  if (zip.length() && zip != prefs.getString("zip", "")) in["location"] = zip;
+  if (zip.length() && zip != prefString(P_ZIP)) in["location"] = zip;
   if (web.hasArg("omtext")) in["offline_text"] = web.arg("omtext");
   if (web.hasArg("mmode")) {
     in["standalone_msg_mode"] = MSG_MODE_NAMES[constrain(web.arg("mmode").toInt(), 0, N_SRC - 1)];
@@ -351,7 +357,7 @@ void startWebRoutes() {
   if (started) return;
   started = true;
   web.on("/", []() {                            // setup portal in AP mode, else the dashboard
-    if (apMode) return sendSetupPage();
+    if (net.apMode) return sendSetupPage();
     if (!webAuthed()) return;                      // so the browser has the login for the API calls
     web.sendHeader("Content-Encoding", "gzip");
     web.send_P(200, "text/html", (const char *)DASHBOARD_GZ, DASHBOARD_GZ_LEN);
@@ -378,14 +384,15 @@ void startWebRoutes() {
   web.on("/api/set", HTTP_POST, handleApiSet);
   web.on("/api/frames", HTTP_POST, handleApiFrames);
   web.on("/api/frames", HTTP_GET, []() {         // the stored drawing, for the animator to start from
+    if (!webAuthed()) return;
     JsonDocument out;
     JsonArray fr = out["frames"].to<JsonArray>();
-    for (int i = 0; i < gaN; i++) {
+    for (int i = 0; i < standalone.gaN; i++) {
       JsonArray row = fr.add<JsonArray>();
-      for (int r = 0; r < 7; r++) row.add(gaFrames[i * 7 + r]);
+      for (int r = 0; r < 7; r++) row.add(standalone.gaFrames[i * 7 + r]);
     }
-    out["fps"] = gaFps;
-    out["frame"] = (bool)gaFlag;
+    out["fps"] = standalone.gaFps;
+    out["frame"] = (bool)standalone.gaFlag;
     sendJson(200, out);
   });
   web.on("/api/preview", HTTP_POST, []() {       // the animator's live preview: show one frame now
@@ -397,11 +404,11 @@ void startWebRoutes() {
       return sendJson(400, out);
     }
     int r = 0;
-    for (JsonVariantConst v : in["rows"].as<JsonArrayConst>()) if (r < 7) gridRows[r++] = v.as<int>() & 0x7F;
-    while (r < 7) gridRows[r++] = 0;
-    gridFrame = in["frame"].as<int>() ? 1 : 0;
-    gridTime.mark();                               // shows like a live GRID for 1.5 s
-    dirty = true;
+    for (JsonVariantConst v : in["rows"].as<JsonArrayConst>()) if (r < 7) live.gridRows[r++] = v.as<int>() & 0x7F;
+    while (r < 7) live.gridRows[r++] = 0;
+    live.gridFrame = in["frame"].as<int>() ? 1 : 0;
+    live.gridTime.mark();                               // shows like a live GRID for 1.5 s
+    disp.dirty = true;
     out["ok"] = true;
     sendJson(200, out);
   });
@@ -421,7 +428,7 @@ void startWebRoutes() {
     ESP.restart();
   }, handleUpdateUpload);
   web.onNotFound([]() {                          // captive portal: every URL is the setup page
-    if (apMode) sendSetupPage();
+    if (net.apMode) sendSetupPage();
     else web.send(404, "text/plain", "not found");
   });
   web.begin();
