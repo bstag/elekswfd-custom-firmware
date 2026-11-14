@@ -928,12 +928,18 @@ static bool setWeatherZip(const String &zip) {
   if (!http.begin(cli, "http://api.zippopotam.us/us/" + zip)) return false;
   bool ok = false;
   if (http.GET() == 200) {
-    String p = http.getString();
-    int la = p.indexOf("\"latitude\": \"");
-    int lo = p.indexOf("\"longitude\": \"");
-    if (la > 0 && lo > 0) {
-      g_lat = p.substring(la + 13, p.indexOf('"', la + 13));
-      g_lon = p.substring(lo + 14, p.indexOf('"', lo + 14));
+    // {"post code": "76708", ..., "places": [{"place name": "Waco", "longitude": "-97.2", "latitude": "31.5", ...}]}
+    JsonDocument filter, doc;
+    filter["places"][0]["latitude"] = true;      // (an array filter's first element covers every element)
+    filter["places"][0]["longitude"] = true;
+    const char *la = nullptr, *lo = nullptr;
+    if (!deserializeJson(doc, http.getString(), DeserializationOption::Filter(filter))) {
+      la = doc["places"][0]["latitude"];
+      lo = doc["places"][0]["longitude"];
+    }
+    if (la && lo) {                                // both present, as strings
+      g_lat = la;
+      g_lon = lo;
       prefs.putString("lat", g_lat); prefs.putString("lon", g_lon); prefs.putString("zip", zip);
       lastWxFetch = 0;
       ok = true;
@@ -1654,6 +1660,16 @@ static WxResult wxResult;
 static volatile bool wxBusy = false, wxDone = false;
 static TaskHandle_t wxTaskHandle = nullptr;
 
+// The leading numbers of a JSON array, up to n (stops at a null or anything else). 0 if not an array.
+static int numbersOf(JsonVariantConst a, double *out, int n) {
+  int k = 0;
+  for (JsonVariantConst v : a.as<JsonArrayConst>()) {
+    if (k >= n || !v.is<double>()) break;
+    out[k++] = v.as<double>();
+  }
+  return k;
+}
+
 static void weatherFetch(const WxJob &job, WxResult &r) {   // Open-Meteo directly over HTTPS
   r.ok = false;
   r.n = 0;
@@ -1666,26 +1682,33 @@ static void weatherFetch(const WxJob &job, WxResult &r) {   // Open-Meteo direct
                "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto";
   if (!http.begin(cli, url)) return;
   if (http.GET() == 200) {
-    String p = http.getString();
-    int cur = p.indexOf("\"current\":{");       // skip the current_units block
-    int ti = p.indexOf("temperature_2m\":", cur < 0 ? 0 : cur);
-    int ci = p.indexOf("weather_code\":", cur < 0 ? 0 : cur);
-    if (ti > 0 && ci > 0) {
-      r.temp = (int)lroundf(p.substring(ti + 16).toFloat());
-      int code = p.substring(ci + 14).toInt();
+    // {"current":{"temperature_2m":71.6,"weather_code":3,"is_day":1,...},
+    //  "daily":{"weather_code":[3,61,..],"temperature_2m_max":[..],"temperature_2m_min":[..],...}, ...}
+    // The documents keep their data on the heap; the filter drops everything else (units, times).
+    JsonDocument filter, doc;
+    JsonObject fc = filter["current"].to<JsonObject>();
+    fc["temperature_2m"] = true;
+    fc["weather_code"] = true;
+    fc["is_day"] = true;
+    JsonObject fd = filter["daily"].to<JsonObject>();
+    fd["weather_code"] = true;
+    fd["temperature_2m_max"] = true;
+    fd["temperature_2m_min"] = true;
+    JsonObjectConst cur;
+    if (!deserializeJson(doc, http.getString(), DeserializationOption::Filter(filter))) cur = doc["current"];
+    if (cur["temperature_2m"].is<float>() && cur["weather_code"].is<float>()) {   // (is<float>: any number)
+      r.temp = (int)lroundf(cur["temperature_2m"].as<float>());
+      int code = cur["weather_code"].as<int>();
       r.code = code <= 1 ? 1 : (code == 2 || code == 3 || code == 45 || code == 48) ? 2 : 3;
-      int di = p.indexOf("is_day\":", cur < 0 ? 0 : cur);
-      r.scene = grid::sceneFromWmo(code, di < 0 || p.substring(di + 8).toInt() != 0);
-      const char *body = p.c_str(), *daily = strstr(body, "\"daily\":{");
-      if (daily) {
-        double hi[4], lo[4], wc[4];
-        int n = extras::jsonArray(body, daily, "temperature_2m_max", hi, 4);
-        n = min(n, extras::jsonArray(body, daily, "temperature_2m_min", lo, 4));
-        n = min(n, extras::jsonArray(body, daily, "weather_code", wc, 4));
-        if (n >= 2) {
-          for (int d = 0; d < n; d++) { r.hi[d] = (int)lround(hi[d]); r.lo[d] = (int)lround(lo[d]); r.wc[d] = (int)wc[d]; }
-          r.n = n;
-        }
+      r.scene = grid::sceneFromWmo(code, (cur["is_day"] | 1) != 0);   // no is_day: day
+      JsonObjectConst daily = doc["daily"];
+      double hi[4], lo[4], wc[4];
+      int n = numbersOf(daily["temperature_2m_max"], hi, 4);
+      n = min(n, numbersOf(daily["temperature_2m_min"], lo, 4));
+      n = min(n, numbersOf(daily["weather_code"], wc, 4));
+      if (n >= 2) {
+        for (int d = 0; d < n; d++) { r.hi[d] = (int)lround(hi[d]); r.lo[d] = (int)lround(lo[d]); r.wc[d] = (int)wc[d]; }
+        r.n = n;
       }
       r.unit = job.unit;
       r.ok = true;
