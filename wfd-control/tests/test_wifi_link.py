@@ -3,7 +3,17 @@ import re
 import threading
 from pathlib import Path
 
-MAIN_CPP = Path(__file__).resolve().parents[2] / "wfd-firmware" / "clock" / "src" / "main.cpp"
+class _FirmwareSource:
+    """Every *.cpp and *.h in the firmware's src/ (but the generated web pages) as one text: the
+    firmware is split over several files."""
+    dir = Path(__file__).resolve().parents[2] / "wfd-firmware" / "clock" / "src"
+
+    def read_text(self, encoding="utf-8"):
+        return "\n".join(p.read_text(encoding=encoding) for p in sorted(self.dir.iterdir())
+                         if p.suffix in (".cpp", ".h") and p.name != "web_pages.h")
+
+
+MAIN_CPP = _FirmwareSource()
 
 
 def sent_cmds(s):

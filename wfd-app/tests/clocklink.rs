@@ -389,9 +389,24 @@ fn version_is_read_over_usb_and_kept_out_of_settings() {
 
 // ------------------------------------------------------------------ test_protocol.py
 
+/// The firmware source: every `*.cpp` and `*.h` in its `src/` (but the generated web pages),
+/// concatenated, since the firmware is split over several files.
 fn main_cpp() -> String {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../wfd-firmware/clock/src/main.cpp");
-    std::fs::read_to_string(p).unwrap()
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../wfd-firmware/clock/src");
+    let mut paths: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            matches!(p.extension().and_then(|e| e.to_str()), Some("cpp" | "h"))
+                && p.file_name().is_some_and(|n| n != "web_pages.h")
+        })
+        .collect();
+    paths.sort();
+    paths
+        .iter()
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Every `"word"` that follows `marker` in `src`.
