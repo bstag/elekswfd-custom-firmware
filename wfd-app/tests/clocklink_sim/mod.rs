@@ -1,7 +1,7 @@
 //! Port of legacy/python-app/tests/conftest.py: a simulated clock (fake serial port answering
 //! CFG / CFGSET / GANIM / GCOMMIT, fake UDP socket, fake HTTP API) and simulated time, so
-//! ClockLink runs exactly like app.py does under the Python harness. Nothing here touches real
-//! hardware, the network or a real config file.
+//! ClockLink runs exactly like app.py did under the Python harness (which made the golden log).
+//! Nothing here touches real hardware, the network or a real config file.
 #![allow(dead_code)]
 
 use chrono::{NaiveDate, NaiveDateTime, TimeDelta};

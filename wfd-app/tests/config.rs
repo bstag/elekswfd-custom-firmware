@@ -1,5 +1,5 @@
 //! Settings validation and the config file (ports of test_rendering.py / test_api.py cases,
-//! plus parity tables generated from app.py; see tests/fixtures/config_*).
+//! plus regression tables first generated from legacy/python-app/app.py; see tests/fixtures/config_*).
 
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};

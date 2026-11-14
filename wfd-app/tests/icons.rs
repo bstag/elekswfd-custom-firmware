@@ -1,4 +1,4 @@
-//! Parity with app.py ICON / compute_icons.
+//! Regression tests against cases generated from legacy/python-app/app.py ICON / compute_icons.
 //! Fixture: tests/fixtures/icons_cases.json (regenerate with gen_font14_grid_icons.py).
 
 use serde_json::Value;

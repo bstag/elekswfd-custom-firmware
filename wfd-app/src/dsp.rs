@@ -1,6 +1,6 @@
 //! dsp: audio levels (0..NLEV meters) and the 7-band spectrum, ported from app.py
-//! (`ClockLink.audio_levels` and the band block in `audio_reader`). Pure; parity-tested in
-//! tests/dsp.rs against fixtures produced by the Python code.
+//! (`ClockLink.audio_levels` and the band block in `audio_reader`). Pure; regression-tested in
+//! tests/dsp.rs against fixtures first produced by the Python code (legacy/python-app/).
 
 use std::sync::Arc;
 

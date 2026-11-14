@@ -80,7 +80,7 @@ Python app) first.
 cargo test
 ```
 
-182 tests, no clock or network needed. Many compare against fixtures in `tests/fixtures/`:
+About 200 tests, no clock or network needed. Many compare against fixtures in `tests/fixtures/`:
 regression snapshots of this app's own behaviour. They were first generated from the Python app
 it was ported from (the generator scripts are next to them, and still run against
 `legacy/python-app/`), but this app is now the source of truth. The main ones:
