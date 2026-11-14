@@ -295,16 +295,16 @@ impl ClockLink {
                 }
             }
         }
-        if mode == "auto" || mode == "wifi" {
-            if let Some(link) = (self.p.open_wifi)(&self.ctx) {
-                return match self.start_link(link) {
-                    Ok(_) => true,
-                    Err(_) => {
-                        self.drop_link();
-                        false
-                    }
-                };
-            }
+        if (mode == "auto" || mode == "wifi")
+            && let Some(link) = (self.p.open_wifi)(&self.ctx)
+        {
+            return match self.start_link(link) {
+                Ok(_) => true,
+                Err(_) => {
+                    self.drop_link();
+                    false
+                }
+            };
         }
         self.not_clock = None; // nothing else to use: probe that USB port again next time
         if port.is_none() {
