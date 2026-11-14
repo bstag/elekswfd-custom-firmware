@@ -70,10 +70,24 @@ fn only_display_commands_go_over_udp() {
         .insert("location".into(), json!("")); // would get GEO over USB
     s.run();
     // read from the firmware's netPoll(): static const char *ALLOWED[] = {"SPEC", ...};
-    let main = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../wfd-firmware/clock/src/main.cpp"),
-    )
-    .unwrap();
+    // (every *.cpp / *.h of the firmware, concatenated: it is split over several files)
+    let main = {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../wfd-firmware/clock/src");
+        let mut paths: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                matches!(p.extension().and_then(|e| e.to_str()), Some("cpp" | "h"))
+                    && p.file_name().is_some_and(|n| n != "web_pages.h")
+            })
+            .collect();
+        paths.sort();
+        paths
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let start = main.find("ALLOWED[] = {").unwrap();
     let list = &main[start..start + main[start..].find('}').unwrap()];
     let allowed: BTreeSet<&str> = list.split('"').skip(1).step_by(2).collect();

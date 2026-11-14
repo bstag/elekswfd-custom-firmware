@@ -1,7 +1,8 @@
 # Firmware
 
-PlatformIO project in `wfd-firmware/clock/` (Arduino‑ESP32 framework). Single
-`src/main.cpp` plus generated headers `clock_panel.h` (LED map) and `font14_table.h`.
+PlatformIO project in `wfd-firmware/clock/` (Arduino‑ESP32 framework). Sources in
+`src/` (see [Source layout](#source-layout)) plus generated headers `clock_panel.h` (LED
+map), `font14_table.h` and `web_pages.h`.
 
 ## Architecture
 
@@ -11,13 +12,43 @@ driven; stale regions clear. Priorities and sources:
 
 - **Time / weekday** — always, from the DS3231 (kept correct by NTP and/or the app).
 - **Live regions** (spectrum, bars, message, grid, icons, logo, weather) — shown while a
-  corresponding command arrived recently (≈1.5 s window).
+  corresponding command arrived recently (≈1.5 s window). These "last seen" times start
+  as *never* (`Stamp` in `clock_state.h`), so nothing counts as live right after boot.
 - **"App off" fallback** — `appTime` records the last serial command; if none for >2 s
   the PC app is considered off, and the clock plays its own **grid animation** and runs
   its own **message line** (see below). NTP and on‑device weather run regardless.
 
 WiFi/NTP/weather/web run from the same loop (`wifiLoop()`); the HTTPS weather fetch
 blocks briefly every 15 min. `WiFi.setSleep(false)` is required for a stable link.
+Rejoining the saved network is left to the core's auto‑reconnect; `wifiLoop()` only starts
+an attempt itself when the WiFi task has reported nothing for 20 s while the clock is off
+the network (auto‑reconnect gave up, e.g. a failed first join, or DHCP stalled), so it never
+cuts into an attempt that is still running.
+
+## Source layout
+
+All in `wfd-firmware/clock/src/`. Each `.cpp` has a header of the same name with what the
+other files call; state used by more than one file is declared in `clock_state.h`.
+
+| File | Holds |
+|---|---|
+| `main.cpp` | `setup()`, `loop()`, `WFD_PROTOCOL` and the `FW_BUILD` stamp |
+| `clock_state.h/.cpp` | shared state (`extern` declarations / definitions), `Stamp`, `OtaLog` |
+| `clock_display.h/.cpp` | TM1680 and DS3231 over I2C, `draw()`, 14‑seg text rendering, brightness/style, the info notice |
+| `serial_cmds.h/.cpp` | the serial command set, `handle()` |
+| `clock_settings.h/.cpp` | the settings table (`setting`/`applySettings`), `configJson`, `stateJson`, `CFG`/`CFGSET` |
+| `standalone.h/.cpp` | "app off": grid animation choice, stored drawing, the message line engine |
+| `web_routes.h/.cpp` | web pages (sent in pieces by `HtmlOut`) and the JSON API routes |
+| `wifi_link.h/.cpp` | WiFi station / setup AP, NTP, mDNS, the UDP display stream (`netPoll`) |
+| `weather_fetch.h/.cpp` | Open‑Meteo fetch task and the ZIP lookup (ArduinoJson) |
+| `microphone.h/.cpp` | mic sampling task and the `MIC`/`MICLOG` diagnostics |
+| `ota_update.h/.cpp` | `POST /update` upload handler and its log |
+| `buttons_alerts.h/.cpp` | buttons, alarm/timer alerts |
+| `extras.h`, `grid_engine.h`, `mic_dsp.h` | plain C++ logic, also compiled by the host tests |
+| `clock_panel.h`, `font14_table.h`, `web_pages.h` | generated (see below) |
+
+`build_stamp.py` (a pre‑build script) makes `main.cpp` recompile whenever another source
+file changes, so `FW_BUILD` (its `__DATE__ __TIME__`) always dates the build.
 
 ## Serial protocol (115200 8N1)
 
