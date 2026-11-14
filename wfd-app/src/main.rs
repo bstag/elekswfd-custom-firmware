@@ -150,7 +150,9 @@ fn main() {
     if !args.config.exists()
         && let Err(e) = config::save(&args.config, &ctx.cfg())
     {
+        // (stderr still reaches a terminal that started us; the log is what a windowed run has)
         eprintln!("can't write {}: {e}", args.config.display());
+        log(&format!("can't write {}: {e}", args.config.display()));
     }
     on_ctrl_c(Arc::clone(&ctx.stop));
     // where the clock answered last time: tried first, before any lookup by name

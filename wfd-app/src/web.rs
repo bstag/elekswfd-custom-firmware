@@ -57,12 +57,12 @@ pub fn run(ctx: Arc<Ctx>, server: &Server) {
                     .name("http".into())
                     .spawn(move || handle(&ctx, req));
                 if let Err(e) = spawned {
-                    eprintln!("web: can't start a request thread: {e}");
+                    crate::applog::log_once(&format!("web: can't start a request thread: {e}"));
                 }
             }
             Ok(None) => {}
             Err(e) => {
-                eprintln!("web: {e}");
+                crate::applog::log_once(&format!("web: can't receive a request: {e}"));
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
@@ -237,6 +237,10 @@ fn api_set(ctx: &Ctx, body: Map<String, Value>) -> Reply {
         let mut cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
         cfg.extend(clean);
         if let Err(e) = config::save(&ctx.cfg_path, &cfg) {
+            crate::applog::log(&format!(
+                "can't save settings to {}: {e}",
+                ctx.cfg_path.display()
+            ));
             return json_reply(500, json!({"error": format!("can't save settings: {e}")}));
         }
     }

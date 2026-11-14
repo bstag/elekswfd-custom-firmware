@@ -454,7 +454,12 @@ impl ClockLink {
             cfg.insert("clock_pass".into(), Value::String(pw.to_string()));
             cfg.clone()
         };
-        let _ = crate::config::save(&self.ctx.cfg_path, &cfg);
+        if let Err(e) = crate::config::save(&self.ctx.cfg_path, &cfg) {
+            crate::applog::log(&format!(
+                "can't save the clock password to {}: {e}",
+                self.ctx.cfg_path.display()
+            ));
+        }
         self.link_cfg[2] = Value::String(pw.to_string()); // [link, clock_host, clock_pass]
     }
 
