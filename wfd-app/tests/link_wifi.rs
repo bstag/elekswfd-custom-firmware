@@ -342,8 +342,8 @@ fn http_sends_the_marker_auth_and_json() {
     assert_eq!(header(&seen, "content-type"), Some("application/json"));
     assert_eq!(
         seen.body,
-        [r#"{"offline_text":"caf"#, "\\", r#"u00e9"}"#].concat(),
-        "ASCII-only JSON like Python's"
+        "{\"offline_text\":\"caf\u{e9}\"}",
+        "compact UTF-8 JSON, as the clock's own dashboard sends it"
     );
 }
 

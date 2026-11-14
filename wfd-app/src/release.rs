@@ -1,46 +1,31 @@
 //! The firmware this app ships (releases/version.json), the version check against the clock,
 //! and the multipart body for the clock's OTA `/update` upload.
 //!
-//! Port of `load_release`, `firmware_status` and `multipart` in app.py.
+//! Grew out of `load_release`, `firmware_status` and `multipart` in app.py.
 
-use crate::config::{PROTOCOL, py};
-use serde_json::Value;
+use crate::config::PROTOCOL;
 use std::path::Path;
 
 /// Boundary of the OTA upload body (app.py `multipart` default).
 const BOUNDARY: &str = "wfd-clock-ota-7f3a";
 
-/// The firmware build shipped with the app.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+/// The firmware build shipped with the app (releases/version.json: `fw` and `protocol`).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Release {
     pub fw: String,
     pub protocol: u32,
 }
 
+/// The contents of a version.json -> the release, or None if it's malformed: not a JSON
+/// object, `fw` missing or not a string, `protocol` missing or not a whole number 0..2^32.
+/// Other keys are ignored.
+pub fn parse_release(bytes: &[u8]) -> Option<Release> {
+    serde_json::from_slice(bytes).ok()
+}
+
 /// `dir/version.json` -> the shipped release, or None if it's missing or malformed.
-/// Mirrors Python's `str(info["fw"])` / `int(info["protocol"])` conversions.
 pub fn load_release(dir: &Path) -> Option<Release> {
-    let bytes = std::fs::read(dir.join("version.json")).ok()?;
-    let info: Value = serde_json::from_slice(&bytes).ok()?;
-    let info = info.as_object()?;
-    let fw = py::str_value(info.get("fw")?);
-    let protocol = match info.get("protocol")? {
-        Value::Bool(b) => *b as i64,
-        Value::Number(n) => match n.as_i64() {
-            Some(i) => i,
-            None => py::int_from_float(n.as_f64()?).ok()?,
-        },
-        Value::String(s) => {
-            let (neg, digits) = py::int_str(s)?;
-            let v: i64 = digits.parse().ok()?;
-            if neg { -v } else { v }
-        }
-        _ => return None,
-    };
-    Some(Release {
-        fw,
-        protocol: u32::try_from(protocol).ok()?,
-    })
+    parse_release(&std::fs::read(dir.join("version.json")).ok()?)
 }
 
 /// What the dashboard shows about the clock's firmware vs this app:

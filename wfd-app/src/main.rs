@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
-use wfd_app::{applog, audio, clocklink, config, ctx::Ctx, link, metrics, release::Release, usbdriver, weather, web};
+use wfd_app::{applog, audio, clocklink, config, ctx::Ctx, link, metrics, release::{self, Release}, usbdriver, weather, web};
 
 /// The firmware this app ships (wfd-firmware/releases, made by make_release.py).
 const VERSION_JSON: &str = include_str!("../../wfd-firmware/releases/version.json");
@@ -77,18 +77,9 @@ fn default_config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("wfd_config.json"))
 }
 
-/// The shipped release, as app.py `load_release` reads version.json (None if malformed).
+/// The shipped release (None if its version.json is malformed).
 fn embedded_release() -> Option<Release> {
-    let info: Value = serde_json::from_str(VERSION_JSON).ok()?;
-    let fw = match info.get("fw")? {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    };
-    let protocol = info
-        .get("protocol")?
-        .as_u64()
-        .and_then(|p| u32::try_from(p).ok())?;
-    Some(Release { fw, protocol })
+    release::parse_release(VERSION_JSON.as_bytes())
 }
 
 /// A windowed (release) build has no console; if a terminal started us, write to that one.

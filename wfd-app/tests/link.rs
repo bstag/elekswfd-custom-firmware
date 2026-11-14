@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::time::Instant;
 use wfd_app::link::{
     Clock, Datagram, HttpApi, Link, LinkLost, SerialIo, UsbLink, WifiLink, base64, basic_auth,
-    frame_cmd, py_json, truthy,
+    frame_cmd, truthy,
 };
 
 struct FakeClock(Cell<f64>);
@@ -88,20 +88,13 @@ fn obj(v: Value) -> Map<String, Value> {
 }
 
 #[test]
-fn json_is_compact_ascii_with_python_floats() {
+fn cfgset_is_one_line_of_compact_json_in_patch_order() {
+    let patch = obj(json!({"tz": "x\"\u{e9}\u{1F600}\n", "b": [1.0, 0.5, true, null], "a": 1}));
+    let (mut l, w, _, _) = usb(&[r#"CFGOK {}"#]);
+    assert_eq!(l.set_config(&patch).unwrap(), Ok(None));
     assert_eq!(
-        py_json(&json!({"a": 1, "b": [1.0, 0.5, true, null], "c": "x\"\u{e9}\u{1F600}\n"})),
-        [
-            r#"{"a":1,"b":[1.0,0.5,true,null],"c":"x\""#,
-            "\\",
-            "u00e9",
-            "\\",
-            "ud83d",
-            "\\",
-            "ude00",
-            r#"\n"}"#
-        ]
-        .concat()
+        *w.borrow(),
+        ["CFGSET {\"tz\":\"x\\\"\u{e9}\u{1F600}\\n\",\"b\":[1.0,0.5,true,null],\"a\":1}\n"]
     );
 }
 
@@ -186,6 +179,10 @@ fn usb_set_config_replies() {
         l.set_config(&patch).unwrap(),
         Err(json!({"brightness": "busy", "tz": "busy"}))
     );
+
+    let (mut l, _, _, _) = usb(&[r#"CFGERR {}"#]);
+    let refused = "the clock refused the change";
+    assert_eq!(l.set_config(&patch).unwrap(), Err(json!({"brightness": refused, "tz": refused})));
 
     let (mut l, _, _, _) = usb(&[]);
     assert_eq!(

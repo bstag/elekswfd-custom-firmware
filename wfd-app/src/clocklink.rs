@@ -566,12 +566,10 @@ impl ClockLink {
         let geo = {
             let st = self.ctx.state();
             match (&st.geo, &st.clock) {
-                (Some(g), Some(clk)) if !truthy(clk.get("location")) => Some(format!(
-                    "{} {} {}",
-                    crate::config::py::repr_float(g.lat),
-                    crate::config::py::repr_float(g.lon),
-                    g.unit
-                )),
+                // `{:?}` keeps a whole number's ".0" (31.0, as the golden log has it)
+                (Some(g), Some(clk)) if !truthy(clk.get("location")) => {
+                    Some(format!("{:?} {:?} {}", g.lat, g.lon, g.unit))
+                }
                 _ => None,
             }
         };

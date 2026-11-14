@@ -13,7 +13,6 @@
 //!   with `WFD1` (or `WFD1 <password>`); settings, uploads and the health check use the clock's
 //!   HTTP API (`/api/status`, `/api/set`, `/api/frames`).
 
-use crate::config::py;
 use crate::ctx::{ClockReply, Ctx};
 use chrono::NaiveDateTime;
 use serde_json::{Map, Value, json};
@@ -208,71 +207,13 @@ pub fn truthy(v: Option<&Value>) -> bool {
     }
 }
 
-/// `json.dumps(v, separators=(",", ":"))`: compact, ASCII-only, Python float repr.
-/// (Keys come out in serde_json's map order, which is sorted; Python keeps insertion order.
-/// The clock parses the JSON, so only the bytes on the wire differ.)
-pub fn py_json(v: &Value) -> String {
-    let mut out = String::new();
-    dump_compact(v, &mut out);
-    out
-}
-
-fn dump_compact(v: &Value, out: &mut String) {
+/// The text of an error the clock sent: a string as it is, anything else as JSON.
+fn error_text(v: &Value) -> String {
     match v {
-        Value::Null => out.push_str("null"),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Number(n) if n.is_f64() => {
-            out.push_str(&py::repr_float(n.as_f64().unwrap_or(f64::NAN)))
-        }
-        Value::Number(n) => out.push_str(&n.to_string()),
-        Value::String(s) => dump_str(s, out),
-        Value::Array(a) => {
-            out.push('[');
-            for (i, x) in a.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                dump_compact(x, out);
-            }
-            out.push(']');
-        }
-        Value::Object(o) => {
-            out.push('{');
-            for (i, (k, x)) in o.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                dump_str(k, out);
-                out.push(':');
-                dump_compact(x, out);
-            }
-            out.push('}');
-        }
+        Value::String(s) => s.clone(),
+        Value::Null => "the clock refused the change".into(),
+        other => other.to_string(),
     }
-}
-
-/// A JSON string with Python's ensure_ascii escaping.
-fn dump_str(s: &str, out: &mut String) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            ' '..='~' => out.push(c),
-            c => {
-                let mut buf = [0u16; 2];
-                for unit in c.encode_utf16(&mut buf) {
-                    let _ = write!(out, "\\u{unit:04x}");
-                }
-            }
-        }
-    }
-    out.push('"');
 }
 
 /// Standard base64 (for HTTP Basic auth).
@@ -438,7 +379,8 @@ impl Link for UsbLink {
     }
 
     fn set_config(&mut self, patch: &Map<String, Value>) -> Result<ClockReply, LinkLost> {
-        let line = format!("CFGSET {}", py_json(&Value::Object(patch.clone())));
+        // compact JSON (no newline can occur in it: the line ends the command)
+        let line = format!("CFGSET {}", Value::Object(patch.clone()));
         let timeout = if is_slow_patch(patch) { SLOW_REQUEST_TIMEOUT } else { REQUEST_TIMEOUT };
         Ok(match self.request(&line, &["CFGOK", "CFGERR"], timeout)? {
             Some(("CFGOK", mut body)) => Ok(body
@@ -447,10 +389,7 @@ impl Link for UsbLink {
                 .filter(|w| !w.is_null())),
             Some((_, body)) => match body.get("error") {
                 Some(err @ Value::Object(_)) => Err(err.clone()),
-                other => Err(per_key(
-                    patch,
-                    &py::str_value(other.unwrap_or(&Value::Null)),
-                )),
+                other => Err(per_key(patch, &error_text(other.unwrap_or(&Value::Null)))),
             },
             None => Err(per_key(patch, "clock didn't answer")),
         })
@@ -680,7 +619,7 @@ impl Link for WifiLink {
         };
         Ok(Err(match err {
             Value::Object(_) => err,
-            other => per_key(patch, &py::str_value(&other)),
+            other => per_key(patch, &error_text(&other)),
         }))
     }
 
@@ -786,7 +725,7 @@ impl HttpApi for UreqHttp {
             match body {
                 Some(b) => req
                     .header("Content-Type", "application/json")
-                    .send(py_json(b).as_bytes())
+                    .send(b.to_string().as_bytes())
                     .map_err(lost)?,
                 None => req.send_empty().map_err(lost)?,
             }

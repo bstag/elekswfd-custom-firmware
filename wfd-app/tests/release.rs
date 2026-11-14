@@ -1,8 +1,7 @@
 //! Firmware version check and OTA body (ports of test_firmware_update.py cases).
 
-use serde_json::Value;
 use std::path::{Path, PathBuf};
-use wfd_app::release::{Release, firmware_status, load_release, multipart};
+use wfd_app::release::{Release, firmware_status, load_release, multipart, parse_release};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -112,22 +111,33 @@ fn load_release_reads_version_json() {
     let dir = std::env::temp_dir().join(format!("wfd-app-release-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     assert_eq!(load_release(&dir.join("missing")), None);
-    // every version.json shape app.load_release was run on
-    let cases: Vec<Value> =
-        serde_json::from_slice(&std::fs::read(fixture("release_load_cases.json")).unwrap())
-            .unwrap();
-    for c in cases {
-        let content = c["content"].as_str().unwrap();
+    // (version.json, the release it gives; None: malformed)
+    let cases = [
+        (r#"{"fw": "wfd-clock X", "protocol": 3}"#, Some(rel("wfd-clock X", 3))),
+        (r#"{"protocol": 5, "fw": "x", "built": "today"}"#, Some(rel("x", 5))), // extra keys ignored
+        (r#"{"fw": "x", "protocol": 0}"#, Some(rel("x", 0))),
+        (r#"{"fw": "x", "protocol": 4294967295}"#, Some(rel("x", u32::MAX))),
+        (r#"{"fw": "x"}"#, None),
+        (r#"{"protocol": 3}"#, None),
+        (r#"{"fw": 5, "protocol": 3}"#, None),
+        (r#"{"fw": null, "protocol": 3}"#, None),
+        (r#"{"fw": "x", "protocol": "3"}"#, None),
+        (r#"{"fw": "x", "protocol": 2.9}"#, None),
+        (r#"{"fw": "x", "protocol": -1}"#, None),
+        (r#"{"fw": "x", "protocol": 4294967296}"#, None),
+        (r#"{"fw": "x", "protocol": true}"#, None),
+        (r#"{"fw": "x", "protocol": null}"#, None),
+        ("[1, 2]", None),
+        ("\"str\"", None),
+        ("not json", None),
+        ("", None),
+    ];
+    for (content, want) in cases {
         std::fs::write(dir.join("version.json"), content).unwrap();
-        let want = match &c["release"] {
-            Value::Null => None,
-            r => Some(rel(
-                r["fw"].as_str().unwrap(),
-                r["protocol"].as_u64().unwrap() as u32,
-            )),
-        };
         assert_eq!(load_release(&dir), want, "{content}");
+        assert_eq!(parse_release(content.as_bytes()), want, "{content}");
     }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
