@@ -23,7 +23,8 @@ mod usb;
 mod wifi;
 
 pub use find::{
-    avoid_port, find_answering_clock_ip, find_clock_ip, find_port, load_last_ip, open_wifi,
+    Net, RealNet, avoid_port, find_answering_clock_ip, find_answering_clock_ip_with,
+    find_clock_ip, find_clock_ip_with, find_port, load_last_ip, open_wifi, open_wifi_with,
     remember_ip,
 };
 pub use json::{base64, basic_auth, frame_cmd, per_key, py_json, truthy};

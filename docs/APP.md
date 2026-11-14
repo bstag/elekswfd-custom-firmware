@@ -176,7 +176,10 @@ The PC app replaces it with the full UI and feature set.
 ## Tests
 
 The app: `cd wfd-app && cargo test` (see [wfd-app/README.md](../wfd-app/README.md)). No
-clock, network or audio device is needed. Its golden log
+clock, network or audio device is needed: finding the clock runs against a fake network (the
+`link::Net` seam, and `mdns::MdnsSocket` for the name query), and HTTP tests use a server on
+127.0.0.1. The few tests that use the real LAN are `#[ignore]`d; run them with
+`cargo test --test mdns --test clock_ip -- --ignored`. Its golden log
 (`wfd-app/tests/fixtures/clocklink_golden.log`) is a regression snapshot of every line the
 app sends in a busy simulated scenario. If you change what the app sends on purpose, the test
 fails with a diff: `WFD_UPDATE_GOLDEN=1 cargo test --test clocklink` writes the new output to

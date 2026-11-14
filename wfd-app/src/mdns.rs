@@ -96,6 +96,26 @@ const RESEND_AT: [Duration; 3] = [
     Duration::from_millis(1300),
 ];
 
+/// One socket the query goes out on: a non-blocking UDP socket per network adapter in the app,
+/// fakes in tests (so the query logic is tested without sending anything on the LAN).
+pub trait MdnsSocket {
+    /// Send the query to the mDNS group (an adapter that can't send it is skipped).
+    fn send_query(&self, query: &[u8]);
+    /// One packet that has arrived, if any; never blocks. None also for any error (an ICMP
+    /// "unreachable"), which ends this socket's turn.
+    fn try_recv(&self, buf: &mut [u8]) -> Option<usize>;
+}
+
+impl MdnsSocket for UdpSocket {
+    fn send_query(&self, query: &[u8]) {
+        let _ = self.send_to(query, MDNS_ADDR);
+    }
+
+    fn try_recv(&self, buf: &mut [u8]) -> Option<usize> {
+        self.recv_from(buf).ok().map(|(n, _)| n)
+    }
+}
+
 /// IP of `name` (e.g. "wfd-clock.local") via multicast mDNS, or None.
 ///
 /// The query goes out on every network adapter, not just the default one: on a PC with a VPN
@@ -116,6 +136,12 @@ pub fn resolve(name: &str, timeout: Duration) -> Option<Ipv4Addr> {
             Some(s)
         })
         .collect();
+    resolve_on(&socks, name, timeout)
+}
+
+/// [`resolve`] over the given sockets: the query goes out on all of them at 0, 0.5 and 1.3 s;
+/// the first A record that comes back on any of them wins.
+pub fn resolve_on<S: MdnsSocket>(socks: &[S], name: &str, timeout: Duration) -> Option<Ipv4Addr> {
     if socks.is_empty() {
         return None;
     }
@@ -126,13 +152,13 @@ pub fn resolve(name: &str, timeout: Duration) -> Option<Ipv4Addr> {
     while start.elapsed() < timeout {
         if sent < RESEND_AT.len() && start.elapsed() >= RESEND_AT[sent] {
             sent += 1;
-            for s in &socks {
-                let _ = s.send_to(&query, MDNS_ADDR); // an adapter that can't send it: skip
+            for s in socks {
+                s.send_query(&query);
             }
         }
-        for s in &socks {
-            // drain what arrived; any error (nothing yet, an ICMP "unreachable") ends this socket's turn
-            while let Ok((n, _)) = s.recv_from(&mut buf) {
+        for s in socks {
+            // drain what arrived
+            while let Some(n) = s.try_recv(&mut buf) {
                 if let Some(&ip) = parse_a_records(&buf[..n]).first() {
                     return Some(ip);
                 }
