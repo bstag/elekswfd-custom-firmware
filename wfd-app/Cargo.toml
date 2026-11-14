@@ -1,6 +1,6 @@
 [package]
 name = "wfd-app"
-version = "1.4.0"
+version = "1.5.0"
 edition = "2024"
 
 [dev-dependencies]
