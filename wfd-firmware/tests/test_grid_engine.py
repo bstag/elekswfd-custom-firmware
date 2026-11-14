@@ -1,5 +1,6 @@
-"""The firmware's C++ grid engine (grid_engine.h), built on the PC and checked against grid_anim.py
-(and, for "weather", which only the Rust app has, against the Rust app's frames).
+"""The firmware's C++ grid engine (grid_engine.h), built on the PC and checked against oracle/grid_anim.py
+(the retired Python app's engine, kept as a test oracle) and, for "weather", which only the Rust
+app has, against the Rust app's frames.
 
 Needs a C++ compiler: MSVC (found with vswhere) or g++/clang++ on PATH. Skipped if there is none.
 """

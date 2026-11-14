@@ -1,0 +1,4 @@
+# The firmware host tests (pytest + flash_usb.py's serial import). The C++ engines need a
+# C++ compiler too: MSVC (found with vswhere), g++ or clang++; those tests skip without one.
+pytest>=8
+pyserial>=3.5
