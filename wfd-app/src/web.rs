@@ -9,6 +9,8 @@
 //!   `/api/set`, `/api/sync`, `/api/grid_preview`, `/api/grid_save`, `/api/om_save`,
 //!   `/api/update_clock`
 //! - anything else -> 404 {"error": "not found"}
+//! - bound to loopback, a request whose `Host` isn't 127.0.0.1 / localhost / [::1] -> 403
+//!   (see [`host_allowed`])
 //!
 //! Each request runs on its own thread (like ThreadingHTTPServer), so a slow trip to the clock
 //! in `/api/set` doesn't hold up status polling.
@@ -49,13 +51,14 @@ pub fn bind(addr: &str) -> Result<Server, String> {
 
 /// Answer requests on `server` until ctx.stop, each on its own thread.
 pub fn run(ctx: Arc<Ctx>, server: &Server) {
+    let bound = server.server_addr().to_ip();
     while !ctx.stop.load(Ordering::Relaxed) {
         match server.recv_timeout(Duration::from_millis(100)) {
             Ok(Some(req)) => {
                 let ctx = Arc::clone(&ctx);
                 let spawned = std::thread::Builder::new()
                     .name("http".into())
-                    .spawn(move || handle(&ctx, req));
+                    .spawn(move || handle(&ctx, req, bound));
                 if let Err(e) = spawned {
                     crate::applog::log_once(&format!("web: can't start a request thread: {e}"));
                 }
@@ -88,11 +91,48 @@ fn not_found() -> Reply {
     json_reply(404, json!({"error": "not found"}))
 }
 
-fn handle(ctx: &Arc<Ctx>, mut req: Request) {
-    let reply = match req.method() {
-        Method::Get => get(ctx, req.url()),
-        Method::Post => post(ctx, &mut req),
-        _ => Reply(501, b"Unsupported method".to_vec(), "text/plain"),
+/// DNS-rebinding guard: a server bound to a loopback address only answers requests addressed to
+/// a loopback name (`Host` of 127.0.0.1, localhost or [::1], any port, any case), so a web page
+/// whose own name resolves to 127.0.0.1 can't use the user's browser to drive the API. A missing
+/// Host is refused too. Bound to a LAN or unspecified address (`--addr 0.0.0.0:8737`), the user
+/// chose to be reachable by other names, so anything goes.
+pub fn host_allowed(bound: Option<std::net::SocketAddr>, host: Option<&str>) -> bool {
+    if !bound.is_some_and(|a| a.ip().is_loopback()) {
+        return true;
+    }
+    let Some(host) = host.map(str::trim) else {
+        return false;
+    };
+    let name = if host.starts_with('[') {
+        match host.find(']') {
+            // only a port may follow the bracketed address
+            Some(end) if host[end + 1..].is_empty() || host[end + 1..].starts_with(':') => {
+                &host[..=end]
+            }
+            _ => return false,
+        }
+    } else {
+        host.split(':').next().unwrap_or(host)
+    };
+    ["127.0.0.1", "localhost", "[::1]"]
+        .iter()
+        .any(|ok| name.eq_ignore_ascii_case(ok))
+}
+
+fn handle(ctx: &Arc<Ctx>, mut req: Request, bound: Option<std::net::SocketAddr>) {
+    let host = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Host"))
+        .map(|h| h.value.as_str().to_string());
+    let reply = if !host_allowed(bound, host.as_deref()) {
+        Reply(403, b"forbidden: unexpected Host".to_vec(), "text/plain")
+    } else {
+        match req.method() {
+            Method::Get => get(ctx, req.url()),
+            Method::Post => post(ctx, &mut req),
+            _ => Reply(501, b"Unsupported method".to_vec(), "text/plain"),
+        }
     };
     let Reply(code, body, ctype) = reply;
     let resp = Response::from_data(body)

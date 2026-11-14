@@ -653,6 +653,99 @@ fn stops_when_asked() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Send a raw HTTP/1.1 request (so the Host header is exactly `host`, or absent) and return
+/// (status, body).
+fn raw_request(app: &App, method: &str, path: &str, host: Option<&str>, extra: &str) -> (u16, String) {
+    use std::io::{Read, Write};
+    let addr = app.base.trim_start_matches("http://");
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let host_line = host.map(|h| format!("Host: {h}\r\n")).unwrap_or_default();
+    write!(
+        s,
+        "{method} {path} HTTP/1.1\r\n{host_line}{extra}Content-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    let status = out.split(' ').nth(1).unwrap().parse().unwrap();
+    let body = out.split_once("\r\n\r\n").map(|(_, b)| b.to_string()).unwrap_or_default();
+    (status, body)
+}
+
+fn port(app: &App) -> &str {
+    app.base.rsplit(':').next().unwrap()
+}
+
+#[test]
+fn loopback_names_pass_the_host_check() {
+    let app = start();
+    // what ureq sends (Host: 127.0.0.1:<port>)
+    assert_eq!(get(&app, "/api/status").0, 200);
+    let p = port(&app).to_string();
+    for host in [
+        format!("127.0.0.1:{p}"),
+        format!("localhost:{p}"),
+        format!("LocalHost:{p}"),
+        "localhost".to_string(),
+        format!("[::1]:{p}"),
+    ] {
+        assert_eq!(raw_request(&app, "GET", "/api/status", Some(&host), "").0, 200, "{host}");
+    }
+    assert_eq!(
+        raw_request(&app, "POST", "/api/sync", Some(&format!("localhost:{p}")), "X-WFD: 1\r\n").0,
+        200
+    );
+}
+
+#[test]
+fn other_hosts_are_refused() {
+    let app = start();
+    let p = port(&app).to_string();
+    for host in [
+        "evil.example".to_string(),
+        format!("evil.example:{p}"),
+        format!("localhost.evil.example:{p}"),
+        format!("127.0.0.1.nip.io:{p}"),
+        format!("[::1]x:{p}"),
+    ] {
+        let (status, body) = raw_request(&app, "GET", "/", Some(&host), "");
+        assert_eq!(status, 403, "{host}");
+        assert!(body.contains("forbidden"), "{body}");
+        // POSTs too, even with the X-WFD header
+        assert_eq!(raw_request(&app, "POST", "/api/sync", Some(&host), "X-WFD: 1\r\n").0, 403);
+    }
+    assert!(!app.ctx.sync_now.load(Ordering::Relaxed), "no refused POST got through");
+    assert_eq!(raw_request(&app, "GET", "/api/status", None, "").0, 403, "no Host at all");
+    // the X-WFD rule still applies to an allowed Host
+    assert_eq!(
+        raw_request(&app, "POST", "/api/sync", Some(&format!("localhost:{p}")), "").0,
+        403
+    );
+}
+
+#[test]
+fn host_check_only_applies_to_a_loopback_bind() {
+    use wfd_app::web::host_allowed;
+    let lo = Some("127.0.0.1:8737".parse().unwrap());
+    let lo6 = Some("[::1]:8737".parse().unwrap());
+    let any = Some("0.0.0.0:8737".parse().unwrap());
+    let lan = Some("192.168.1.20:8737".parse().unwrap());
+    for bound in [lo, lo6] {
+        assert!(host_allowed(bound, Some("127.0.0.1:8737")));
+        assert!(host_allowed(bound, Some("LOCALHOST")));
+        assert!(host_allowed(bound, Some("[::1]:8737")));
+        assert!(!host_allowed(bound, Some("evil.example")));
+        assert!(!host_allowed(bound, Some("")));
+        assert!(!host_allowed(bound, None));
+    }
+    for bound in [any, lan, None] {
+        assert!(host_allowed(bound, Some("evil.example")));
+        assert!(host_allowed(bound, Some("my-pc:8737")));
+        assert!(host_allowed(bound, None));
+    }
+}
+
 #[test]
 fn clock_password_checks_its_input() {
     let app = start();
