@@ -6,7 +6,7 @@ title, weather) and serves the dashboard at <http://127.0.0.1:8737>.
 
 It was ported from the original Python app, now retired to
 [`../legacy/python-app/`](../legacy/python-app/); this app is the source of truth. It still reads
-that app's `wfd_config.json` format. The dashboard and grid animator come from `../wfd-firmware/clock/web/`, the same files the
+that app's `wfd_config.json`. The dashboard and grid animator come from `../wfd-firmware/clock/web/`, the same files the
 clock itself serves. The release exe has those pages **and the clock's current firmware**
 (`../wfd-firmware/releases/`) built in, so it can update the clock with no other files.
 
@@ -89,8 +89,9 @@ it was ported from (the generator scripts are next to them, and still run agains
   reproduce the golden log `tests/fixtures/clocklink_golden.log` **byte for byte** (4,645
   lines). `WFD_UPDATE_GOLDEN=1 cargo test --test clocklink` writes the new output next to it
   (`.log.new`) when a change is on purpose.
-- Settings validation is checked on 1,534 cases, icons on 6,000, every non-random grid
-  animation frame for frame, and audio levels bit for bit.
+- Settings validation is checked on a hand-written table covering every setting
+  (`tests/config.rs`), icons on 6,000 cases, every non-random grid animation frame for frame,
+  and audio levels bit for bit.
 
 The live tests are opt-in: `cargo test -- --ignored` (mDNS lookup of the clock, live weather),
 `cargo run --example audio_probe`. The firmware's device tests
@@ -106,6 +107,10 @@ Known differences from the Python app:
 
 - **Random grid animations** (rain, sparkle, life) use a different random generator, so their
   frames differ; tests check the behaviour instead.
-- **Bad input:** the app returns clear errors where Python crashed.
+- **Bad input:** the app returns clear errors where Python crashed. Numbers sent to
+  `/api/set` as strings (`"9"`) are refused instead of parsed.
+- **Settings file:** one setting per line (UTF-8, LF line ends) instead of Python's
+  `json.dumps(indent=2)`; a value of the wrong type in it falls back to the default (logged).
+  Python's file still loads.
 - **Weather** follows a ZIP/units change within 30 s instead of 15 min.
 - **Silence:** the meters drop to 0 when nothing plays (WASAPI loopback sends no data then).

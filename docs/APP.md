@@ -84,6 +84,16 @@ Every setting has one owner:
   These persist in the app's `wfd_config.json` (next to `wfd-app.exe`; `--config` picks
   another file).
 
+`wfd_config.json` is plain JSON, one setting per line in a fixed order, for example
+`"grid_fps": 12,` or `"grid_custom": [[8,8,8,127,8,8,8]],`. The app rewrites it whole on every
+change (to a temp file that then replaces it, so a crash never leaves half a file). Files
+written by older versions and by the retired Python app load as they are. When the app reads
+the file, every value is checked like a change from the dashboard: numbers are clamped to their
+range, and a value of the wrong type (or an unknown choice) gives that setting's default and a
+line in `wfd-app.log`. Keys that aren't app settings are ignored. A file that can't be read or
+isn't a JSON object at all is copied to `wfd_config.json.bad` (and logged) before the defaults
+are used, since the next save overwrites it.
+
 The app's UI shows both together. Saving a clock setting while the clock is unplugged fails
 with "clock not connected", and the clock's own error messages (e.g. a bad ZIP) are shown
 as they are. The app's weather uses the clock's ZIP and units. It sends a location to the clock
