@@ -17,6 +17,7 @@
 
 use crate::config::{self, CLOCK_KEYS, PROTOCOL, py};
 use crate::ctx::{Ctx, UploadJob};
+use crate::link::truthy;
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -424,18 +425,6 @@ fn clock_password(ctx: &Ctx, body: &Map<String, Value>) -> Reply {
     match ctx.set_web_password(pw, CLOCK_TIMEOUT) {
         Ok(_) => json_reply(200, json!({"ok": true, "set": !pw.is_empty()})),
         Err(info) => json_reply(400, json!({"error": info})),
-    }
-}
-
-/// Python truthiness of a JSON value.
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|x| x != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
     }
 }
 

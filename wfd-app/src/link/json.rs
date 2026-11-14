@@ -28,15 +28,16 @@ pub fn per_key(patch: &Map<String, Value>, msg: &str) -> Value {
     )
 }
 
-/// Python truthiness of a JSON value (`bool(x)`; a missing value is falsy).
-pub fn truthy(v: Option<&Value>) -> bool {
+/// Python truthiness of a JSON value (`bool(x)`). For a value that may be missing (falsy):
+/// `map.get(key).is_some_and(truthy)`.
+pub fn truthy(v: &Value) -> bool {
     match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64().is_some_and(|x| x != 0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::Object(o)) => !o.is_empty(),
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|x| x != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
     }
 }
 

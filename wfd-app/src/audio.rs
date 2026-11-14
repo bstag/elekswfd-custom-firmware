@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Host, SampleFormat, Stream, StreamConfig};
 
+use crate::ctx::sleep_unless_stopped;
 use crate::dsp::{BandTracker, rms_mono, to_mono};
 
 /// What the capture threads publish. Index 0 = output, 1 = mic.
@@ -64,18 +65,6 @@ pub fn start(shared: Arc<Mutex<AudioShared>>, stop: Arc<AtomicBool>) {
 
 fn lock(shared: &Mutex<AudioShared>) -> std::sync::MutexGuard<'_, AudioShared> {
     shared.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// Sleep up to `d`, waking early when `stop` is set.
-fn sleep_unless_stopped(stop: &AtomicBool, d: Duration) {
-    let end = Instant::now() + d;
-    while !stop.load(Ordering::Relaxed) {
-        let left = end.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            break;
-        }
-        thread::sleep(left.min(POLL));
-    }
 }
 
 fn capture_loop(kind: Kind, shared: &Arc<Mutex<AudioShared>>, stop: &AtomicBool) {

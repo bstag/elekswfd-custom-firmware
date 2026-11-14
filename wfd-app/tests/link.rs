@@ -107,12 +107,24 @@ fn json_is_compact_ascii_with_python_floats() {
 
 #[test]
 fn base64_and_basic_auth() {
-    assert_eq!(base64(b""), "");
-    assert_eq!(base64(b"f"), "Zg==");
-    assert_eq!(base64(b"fo"), "Zm8=");
-    assert_eq!(base64(b"foo"), "Zm9v");
-    assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    // the test vectors of RFC 4648, section 10
+    for (raw, enc) in [
+        (&b""[..], ""),
+        (b"f", "Zg=="),
+        (b"fo", "Zm8="),
+        (b"foo", "Zm9v"),
+        (b"foob", "Zm9vYg=="),
+        (b"fooba", "Zm9vYmE="),
+        (b"foobar", "Zm9vYmFy"),
+    ] {
+        assert_eq!(base64(raw), enc, "{raw:?}");
+    }
+    // every 6-bit value, including the last two characters of the alphabet
+    assert_eq!(base64(&[0x00, 0x10, 0x83, 0x10, 0x51, 0x87]), "ABCDEFGH");
+    assert_eq!(base64(&[0xfb, 0xff, 0xbf]), "+/+/");
+    assert_eq!(base64(&[0xff, 0xfe]), "//4=");
     assert_eq!(basic_auth("hunter2"), "Basic YWRtaW46aHVudGVyMg==");
+    assert_eq!(basic_auth(""), "Basic YWRtaW46");
 }
 
 #[test]
@@ -129,9 +141,9 @@ fn frame_commands_and_truthiness() {
         (json!("x"), true),
         (json!(true), true),
     ] {
-        assert_eq!(truthy(Some(&v)), t, "{v}");
+        assert_eq!(truthy(&v), t, "{v}");
     }
-    assert!(!truthy(None));
+    assert!(!json!({}).get("missing").is_some_and(truthy), "a missing value is falsy");
 }
 
 #[test]

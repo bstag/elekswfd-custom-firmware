@@ -84,7 +84,7 @@ pub fn run(ctx: Arc<Ctx>) {
 
 // cfg accessors with app.py's semantics (`c["key"]`, truthiness, numbers as floats)
 fn flag(c: &Cfg, key: &str) -> bool {
-    truthy(c.get(key))
+    c.get(key).is_some_and(truthy)
 }
 
 fn num(c: &Cfg, key: &str) -> f64 {
@@ -365,7 +365,7 @@ impl ClockLink {
         if !answered {
             return Ok(false);
         }
-        let sync = truthy(self.ctx.cfg.lock().unwrap_or_else(|e| e.into_inner()).get("time_sync"));
+        let sync = self.ctx.cfg.lock().unwrap_or_else(|e| e.into_inner()).get("time_sync").is_some_and(truthy);
         if sync && !self.link().clock_ntp() {
             self.set_time()?;
         }
@@ -595,7 +595,7 @@ impl ClockLink {
         let geo = {
             let st = self.ctx.state();
             match (&st.geo, &st.clock) {
-                (Some(g), Some(clk)) if !truthy(clk.get("location")) => Some(format!(
+                (Some(g), Some(clk)) if !clk.get("location").is_some_and(truthy) => Some(format!(
                     "{} {} {}",
                     crate::config::py::repr_float(g.lat),
                     crate::config::py::repr_float(g.lon),

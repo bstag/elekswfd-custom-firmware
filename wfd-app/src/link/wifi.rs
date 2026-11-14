@@ -175,7 +175,7 @@ impl Link for WifiLink {
 
     fn get_config(&mut self) -> Result<Option<Map<String, Value>>, LinkLost> {
         let (code, body) = self.http.call("GET", "/api/status", None)?;
-        if code != 200 || !truthy(Some(&body)) {
+        if code != 200 || !truthy(&body) {
             return Err(LinkLost(format!("status: HTTP {code}")));
         }
         let (Some(st), Some(Value::Object(config))) = (body.get("state"), body.get("config"))
@@ -183,7 +183,7 @@ impl Link for WifiLink {
             return Err(LinkLost("status: no state/config".into()));
         };
         self.ok_at = self.clock.now();
-        self.clock_ntp = truthy(st.get("ntp"));
+        self.clock_ntp = st.get("ntp").is_some_and(truthy);
         self.pw_set = st.get("net").and_then(|n| n.get("key_required")).and_then(Value::as_bool);
         self.fw = st.get("fw").and_then(Value::as_str).map(str::to_owned);
         self.protocol = st
@@ -207,7 +207,7 @@ impl Link for WifiLink {
             Value::String("wrong clock password (clock_pass)".into())
         } else {
             match body.get("error") {
-                e @ Some(_) if truthy(e) => e.cloned().unwrap_or_default(),
+                Some(e) if truthy(e) => e.clone(),
                 _ => Value::String(format!("HTTP {code}")),
             }
         };
