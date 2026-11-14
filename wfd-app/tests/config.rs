@@ -244,7 +244,7 @@ fn defaults() {
     assert_eq!((d.gain_out, d.scroll_ms, d.rotate_dwell, d.grid_fps), (1.0, 350, 8, 12));
     assert_eq!((d.message_mode, d.icon_mode, d.link), (MessageMode::Weather, IconMode::Off, LinkMode::Auto));
     assert_eq!((d.custom_text.as_str(), d.grid_anim.as_str()), ("HELLO", "spin"));
-    assert_eq!(PROTOCOL, 5);
+    assert_eq!(PROTOCOL, 6);
     assert!(CLOCK_KEYS.iter().all(|k| !Settings::NAMES.contains(k)));
     // every default passes its own validation unchanged
     let mut again = Settings::default();

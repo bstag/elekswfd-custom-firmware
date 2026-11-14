@@ -84,6 +84,7 @@ struct Standalone {
   uint8_t gEngRows[7] = {0};          // current built-in animation frame (audio/mouth read the mic bands)
   // spectrum columns
   int micAuto = 1;                    // spectrum columns from the mic when the app is off
+  int micSpin = 0;                    // how the mic is sampled: 0 = timer (sleeps between samples), 1 = spin (busy-wait)
 };
 extern Standalone standalone;
 inline bool gridReady() { return standalone.gaAnim != grid::CUSTOM || standalone.gaN > 0; }

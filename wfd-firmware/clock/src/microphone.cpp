@@ -42,9 +42,9 @@ static bool micClockBegin() {
 void micTask(void *) {
   static uint16_t buf[mic::N];
   micTaskHandle = xTaskGetCurrentTaskHandle();
-  if (!micClockBegin()) {
-    Serial.println("mic: sample timer failed; mic off");
-    vTaskDelete(nullptr);
+  if (!micClockBegin()) {                       // no sample timer: fall back to spinning
+    Serial.println("mic: sample timer failed; sampling by busy-wait instead");
+    standalone.micSpin = 1;
   }
   for (;;) {
     // Pause during an OTA update: leave core 0 to the WiFi stack then.
@@ -55,17 +55,29 @@ void micTask(void *) {
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
     }
-    // 256 samples at 8 kHz = 32 ms: the first now, then one per timer tick. A tick that arrives
-    // while the task can't run (a higher-priority task on core 0) is counted, and taken late.
-    ulTaskNotifyTake(pdTRUE, 0);                // no ticks left over from the last frame
-    timer_set_counter_value(MIC_TG, MIC_TIMER, 0);
-    timer_start(MIC_TG, MIC_TIMER);
     int got = 0;
-    buf[got++] = analogRead(MIC_PIN);
-    while (got < mic::N && ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(50)))
+    if (standalone.micSpin) {
+      // The "spin" setting: the original pacing, a busy-wait on micros() between samples. It
+      // holds core 0 for the whole frame; kept as a fallback should the timer pacing misbehave.
+      const uint32_t period = 1000000UL / mic::RATE;
+      uint32_t next = micros();
+      for (; got < mic::N; got++) {
+        while ((int32_t)(micros() - next) < 0) {}
+        buf[got] = analogRead(MIC_PIN);
+        next += period;
+      }
+    } else {
+      // 256 samples at 8 kHz = 32 ms: the first now, then one per timer tick. A tick that arrives
+      // while the task can't run (a higher-priority task on core 0) is counted, and taken late.
+      ulTaskNotifyTake(pdTRUE, 0);              // no ticks left over from the last frame
+      timer_set_counter_value(MIC_TG, MIC_TIMER, 0);
+      timer_start(MIC_TG, MIC_TIMER);
       buf[got++] = analogRead(MIC_PIN);
-    timer_pause(MIC_TG, MIC_TIMER);
-    if (got < mic::N) continue;                 // no tick for 50 ms (can't happen with a working timer)
+      while (got < mic::N && ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(50)))
+        buf[got++] = analogRead(MIC_PIN);
+      timer_pause(MIC_TG, MIC_TIMER);
+      if (got < mic::N) continue;               // no tick for 50 ms (can't happen with a working timer)
+    }
     micDsp.process(buf);
     micState.bass = micDsp.colBass;
     micState.treble = micDsp.colTreble;

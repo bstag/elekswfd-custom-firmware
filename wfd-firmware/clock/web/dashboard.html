@@ -142,6 +142,10 @@
     <div class="row"><label for="mic_standalone">Mic spectrum</label>
       <label class="switch"><input type="checkbox" id="mic_standalone"><span class="slider"></span></label>
       <span class="off-note">when the app is off: bass left, treble right</span></div>
+    <div class="row"><label for="mic_sampling">Mic sampling</label>
+      <select id="mic_sampling"><option value="timer">Timer (light on the clock)</option>
+        <option value="spin">Busy-wait (the older way)</option></select>
+      <span class="hint" style="margin:0">switch to busy-wait if the mic spectrum looks wrong</span></div>
     <div class="sub app-only">
       <div class="row"><label for="spectrum">PC audio</label>
         <label class="switch"><input type="checkbox" id="spectrum"><span class="slider"></span></label>
@@ -466,7 +470,7 @@ function check(id, v) { const e = $(id); if (e && v !== undefined) e.checked = !
 function render() {
   val('#brightness', cfg.brightness); $('#brightVal').textContent = cfg.brightness;
   sel('#fmt', cfg.clock_24h ? 1 : 0); sel('#style', cfg.style);
-  check('#mic_standalone', cfg.mic_standalone);
+  check('#mic_standalone', cfg.mic_standalone); val('#mic_sampling', cfg.mic_sampling || 'timer');
   check('#msg_standalone', cfg.msg_standalone); $('#msgBody').hidden = !cfg.msg_standalone; $('#msgOff').hidden = !!cfg.msg_standalone;
   sel('#mode', cfg.standalone_msg_mode); $('#rotRow').hidden = cfg.standalone_msg_mode !== 'rotate';
   val('#offline_text', cfg.offline_text); val('#dwell', cfg.standalone_dwell);
@@ -572,6 +576,7 @@ $('#alertStop').onclick = () => set({ alert: false });
 $('#weather_scene').innerHTML = '<option value="auto">Follow the weather</option>'
   + Object.entries(SCENES).map(([k, name]) => `<option value="${k}">${name}</option>`).join('');
 $('#weather_scene').onchange = e => set({ weather_scene: e.target.value });
+$('#mic_sampling').onchange = e => set({ mic_sampling: e.target.value });
 $('#units').onchange = e => set({ units: e.target.value });
 $('#tz').onchange = e => set({ tz: e.target.value });
 const onEnter = (id, f) => $(id).onkeydown = e => { if (e.key === 'Enter') f(); };

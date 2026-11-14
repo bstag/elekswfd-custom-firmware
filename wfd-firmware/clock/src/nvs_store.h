@@ -12,7 +12,7 @@ enum Pref : uint8_t {
   P_WXSC,                                                      // weather_scene
   P_ALARMS,                                                    // alarms
   P_OTALOG,                                                    // the last upload's log
-  P_MICAUTO,                                                   // mic when the app is off
+  P_MICAUTO, P_MICSPIN,                                        // mic when the app is off, and how it is sampled
   P_OMAUTO, P_MMODE, P_MROT, P_MDWELL, P_MSCROLL, P_OMTEXT,    // message line when the app is off
   P_TZ, P_LAT, P_LON, P_WUNIT,                                 // time zone, weather location and units
   P_ZIP, P_SSID, P_PASS,                                       // only in flash (read when needed)

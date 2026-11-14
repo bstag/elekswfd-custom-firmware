@@ -155,6 +155,7 @@ is set. Every key is checked first; if any is bad nothing changes, and you get a
 | `standalone_dwell` | int 2–600 | seconds per item |
 | `standalone_scroll_ms` | int 50–5000 | ms per scroll step |
 | `mic_standalone` | bool | spectrum columns from the clock's mic when the app is off |
+| `mic_sampling` | `timer` \| `spin` | how the mic is sampled: `timer` (default) sleeps between samples; `spin` is the older busy-wait, kept as a fallback (NVS `micspin`) |
 | `grid_standalone` | bool | play a grid animation when the app is off |
 | `standalone_anim` | name | `spin bounce rain wave pulse sparkle scan life heart audio mouth weather`, or `custom` (needs drawn frames) |
 | `standalone_fps` | int 1–30 | |
@@ -422,7 +423,8 @@ A healthy upload of the ~1.1 MB image is ~790 pieces in ~16 s with pauses under 
 `main.cpp`); `CFG` reports them as `_fw` / `_protocol`, plus the clock's WiFi address as `_ip` (empty when it isn't on WiFi) whether a web password is set as `_pw` and whether it has internet time as `_ntp`, so the app sees them over USB too. Bump
 `WFD_PROTOCOL` together with `PROTOCOL` in `wfd-app/src/config.rs` whenever commands, settings
 or the API change in a way the app depends on. A host test fails if `releases/version.json`
-disagrees with `main.cpp`; the app's constant is not compared automatically (that check was in
-the retired Python app's tests), so bump it by hand.
+disagrees with `main.cpp`; `wfd-app/tests/firmware_sync.rs` fails if the app's constant differs
+from the firmware's, so bump both together.
 Protocol 4 added the `weather` animation and the `weather_scene` setting; protocol 5 the
-`alarms`, `timer` and `alert` settings and the forecast.
+`alarms`, `timer` and `alert` settings and the forecast; protocol 6 the `mic_sampling` setting,
+and `GET /api/status` and `GET /api/frames` asking for the web password when one is set.

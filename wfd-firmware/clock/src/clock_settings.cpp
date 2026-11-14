@@ -94,6 +94,11 @@ static bool setting(const char *k, JsonVariantConst v, bool apply, Pending &pd, 
   } else if (!strcmp(k, "mic_standalone")) {
     if (!boolOf(v, i, err)) return false;
     if (apply && i != standalone.micAuto) { standalone.micAuto = i; prefSave(P_MICAUTO); }
+  } else if (!strcmp(k, "mic_sampling")) {     // timer: sleeps between samples; spin: the older busy-wait
+    const char *m = v.as<const char *>();
+    if (!v.is<const char *>() || (strcmp(m, "timer") && strcmp(m, "spin"))) { err = "expected timer or spin"; return false; }
+    i = !strcmp(m, "spin");
+    if (apply && i != standalone.micSpin) { standalone.micSpin = i; prefSave(P_MICSPIN); }
   } else if (!strcmp(k, "grid_standalone")) {
     if (!boolOf(v, i, err)) return false;
     pd.gauto = i;
@@ -220,6 +225,7 @@ void configJson(JsonObject c) {
   c["standalone_dwell"] = standalone.msgDwell;
   c["standalone_scroll_ms"] = standalone.msgScroll;
   c["mic_standalone"] = (bool)standalone.micAuto;
+  c["mic_sampling"] = standalone.micSpin ? "spin" : "timer";
   c["grid_standalone"] = (bool)standalone.gaAuto;
   c["standalone_anim"] = grid::NAMES[standalone.gaAnim];
   c["standalone_fps"] = standalone.gaFps;

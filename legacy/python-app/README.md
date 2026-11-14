@@ -5,6 +5,10 @@
 > features (it never got the web password setting, the upload log or the forecast), and its
 > tests no longer run in CI. It lived in `wfd-control/` until it was moved here. Don't run both:
 > they share the COM port and port 8737.
+>
+> It speaks firmware protocol 5. The firmware has moved on (protocol 6 added the `mic_sampling`
+> setting and a password on `/api/status`), so the three tests in `tests/test_protocol.py` that
+> compare this app with the current firmware source are expected to fail; the rest still pass.
 
 The original PC app for the custom WFD clock firmware: a local dashboard at
 http://127.0.0.1:8737 plus the background services that feed the clock (time sync, audio

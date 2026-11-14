@@ -14,11 +14,11 @@ use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
 /// Firmware `WFD_PROTOCOL` this app speaks.
-pub const PROTOCOL: u32 = 5;
+pub const PROTOCOL: u32 = 6;
 
 /// Settings owned by the clock (firmware configJson / applySettings). The clock validates them;
 /// the app never stores them in its own file.
-pub const CLOCK_KEYS: [&str; 21] = [
+pub const CLOCK_KEYS: [&str; 22] = [
     "brightness",
     "clock_24h",
     "style",
@@ -32,6 +32,7 @@ pub const CLOCK_KEYS: [&str; 21] = [
     "standalone_dwell",
     "standalone_scroll_ms",
     "mic_standalone",
+    "mic_sampling",
     "grid_standalone",
     "standalone_anim",
     "standalone_fps",

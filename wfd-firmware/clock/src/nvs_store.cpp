@@ -56,6 +56,7 @@ constexpr PrefSpec PREFS[] = {
   B(P_ALARMS,  "alarms",  alerts.alarms, alarmsLen, alarmsLoaded),
   B(P_OTALOG,  "otalog",  &otaLog, otalogLen, otalogLoaded),
   I(P_MICAUTO, "micauto", &standalone.micAuto, 1),
+  I(P_MICSPIN, "micspin", &standalone.micSpin, 0, 0, 1),
   I(P_OMAUTO,  "omauto",  &standalone.omAuto, 0),
   I(P_MMODE,   "mmode",   &standalone.msgMode, SRC_TEXT, 0, N_SRC - 1),
   I(P_MROT,    "mrot",    &standalone.msgRot, 0b111),

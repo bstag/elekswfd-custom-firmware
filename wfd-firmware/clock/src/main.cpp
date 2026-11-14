@@ -22,7 +22,8 @@
 //   1 serial display commands   2 settings over USB (CFG/CFGSET) + JSON API   3 WiFi link (UDP, BYE, /api/frames)
 //   4 "weather" grid animation + weather_scene setting
 //   5 alarms, timer, alert settings + forecast (message source, state.weather.forecast)
-#define WFD_PROTOCOL 5
+//   6 mic_sampling setting; /api/status and GET /api/frames need the web password when one is set
+#define WFD_PROTOCOL 6
 const char *FW_BUILD = "wfd-clock " __DATE__ " " __TIME__;
 const int fwProtocol = WFD_PROTOCOL;
 
