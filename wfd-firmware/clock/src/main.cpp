@@ -1603,6 +1603,15 @@ static bool wifiRejected() {
 }
 static const uint32_t REJECTED_MS = 180000;   // turned away for this long since boot: open the setup network
 
+// Joining the saved network is one mechanism: auto-reconnect (wifiBegin) starts the next attempt
+// from the WiFi task whenever one ends with a disconnect event. It doesn't retry some reasons (a
+// wrong password) and never sees a DHCP that stalls, so when the WiFi task has been quiet for
+// WIFI_STUCK_MS while we're off the network, wifiLoop() starts an attempt itself. Nothing cuts
+// into an attempt that is still in flight (association, handshake or DHCP).
+static volatile uint32_t wifiProgressAt = 0;   // last STA connect/disconnect event, or a pass while connected
+static volatile bool wifiAssoc = false;        // associated (STA_CONNECTED), maybe still waiting for DHCP
+static const uint32_t WIFI_STUCK_MS = 20000;
+
 static void wifiBegin() {
   g_tz = prefs.getString("tz", "CST6CDT,M3.2.0,M11.1.0");   // US Central w/ DST (default)
   g_lat = prefs.getString("lat", ""); g_lon = prefs.getString("lon", ""); g_wunit = prefs.getInt("wunit", 0);
@@ -1612,8 +1621,14 @@ static void wifiBegin() {
     WiFi.setHostname("wfd-clock");
     WiFi.setSleep(false);               // keep radio responsive / stable
     WiFi.setAutoReconnect(true);
-    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) { wifiFailReason = info.wifi_sta_disconnected.reason; },
-                 ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+                   wifiFailReason = info.wifi_sta_disconnected.reason;
+                   wifiAssoc = false;
+                   wifiProgressAt = millis();
+                 }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { wifiAssoc = true; wifiProgressAt = millis(); },
+                 ARDUINO_EVENT_WIFI_STA_CONNECTED);
+    wifiProgressAt = millis();
     WiFi.begin(ssid.c_str(), prefs.getString("pass", "").c_str());
   } else {
     startAP();
@@ -1734,6 +1749,7 @@ static void wifiLoop() {
     return;
   }
   if (WiFi.status() == WL_CONNECTED) {
+    wifiProgressAt = millis();          // a drop starts the WIFI_STUCK_MS wait from here
     if (!ntpInit) {
       configTzTime(g_tz.c_str(), "pool.ntp.org", "time.nist.gov", "time.google.com");
       startWebRoutes();
@@ -1755,10 +1771,12 @@ static void wifiLoop() {
       else if (g_lat.length() == 0) lastWxFetch = millis() | 1;   // no location: nothing to fetch
     }
   } else {
-    static uint32_t lastTry = 0;        // not connected -> keep trying to reconnect
-    if (millis() - lastTry > 8000) {
-      lastTry = millis();
-      WiFi.reconnect();
+    // Not connected, and the WiFi task hasn't reported anything for a while: no attempt is in
+    // flight (auto-reconnect gave up, or the first join and its one retry failed), or DHCP stalled.
+    if (millis() - wifiProgressAt > WIFI_STUCK_MS) {
+      wifiProgressAt = millis();
+      if (wifiAssoc) WiFi.reconnect();  // associated but no address: drop it and join again
+      else WiFi.begin();                // idle: join with the saved network (no disconnect first)
     }
     // Never joined since power-on and the network keeps rejecting us: the saved password is
     // wrong. Open the setup network without waiting for someone to hold a button.
