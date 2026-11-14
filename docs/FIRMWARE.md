@@ -208,9 +208,10 @@ connected, so the line pauses for 2 s after each one.
 
 ## Grid animations (when the app is off)
 
-`grid_engine.h` is a C++ port of the PC app's `grid_anim.py` for the nine animations that
-need no live data. It's plain C++, so the test suite compiles it on the PC (MSVC, g++ or
-clang++) and checks the deterministic ones frame by frame against the Python engine. Pick
+`grid_engine.h` is a C++ port of the original Python app's `grid_anim.py` for the nine animations
+that need no live data. It's plain C++, so the [host tests](#host-tests) compile it on the PC
+(MSVC, g++ or clang++) and check the deterministic ones frame by frame against that Python engine
+(kept as a test oracle, `wfd-firmware/tests/oracle/grid_anim.py`). Pick
 one on the phone page or with `GANIM`; the app's *Save to clock* sends `GANIM` for these, and
 uploads frames only for drawings (`custom`). Audio, CPU and mouth need the PC and stay app‑only.
 
@@ -255,7 +256,7 @@ claps, so a linear meter scaled to recent peaks either lights up in silence or g
 one loud sound. Hence the dB scale.
 
 The thresholds were tuned on a recording from the clock (`MICTRACE`), saved as
-`wfd-control/tests/host/mictrace_room.txt`. The tests replay it through the C++ code (quiet must
+`wfd-firmware/tests/host/mictrace_room.txt`. The tests replay it through the C++ code (quiet must
 stay dark, music and claps must fill the column) and feed it simulated tones (a low tone lights
 the bass column and band 1, a high tone the treble column and band 5). To retune for another
 room, record a new trace and adjust `Loudness` in `mic_dsp.h` until the tests pass.
@@ -281,12 +282,40 @@ spiffs   data spiffs  0x3D0000 0x30000
 
 Two app slots are mandatory for OTA. The app is ~1 MB, well within a 1.875 MB slot.
 
+## Host tests
+
+`wfd-firmware/tests/` checks the firmware on the PC, no clock needed. Run `test.bat` there
+(extra arguments go to pytest), or:
+
+```bash
+cd wfd-firmware/tests && uv run --with-requirements requirements.txt pytest
+```
+
+- **`test_grid_engine.py`**, **`test_mic_dsp.py`**, **`test_extras.py`** compile `grid_engine.h`,
+  `mic_dsp.h` and `extras.h` with the drivers in `tests/host/` (MSVC found with vswhere, or g++ /
+  clang++; skipped if there's no compiler). The grid engine is compared frame by frame with
+  `tests/oracle/grid_anim.py` and, for `weather`, with the Rust app's frames
+  (`wfd-app/tests/fixtures/weather_frames.json`); the mic code is fed simulated tones and the
+  recording in `tests/host/mictrace_room.txt`.
+- **`test_sources.py`**: `src/web_pages.h` holds the current `web/*.html`, `font14_table.h` is
+  generated from `tests/oracle/font14.py`, and `releases/version.json` has the protocol in
+  `main.cpp`.
+- **`test_flash_usb.py`**: `flash_usb.py` keeps a clock's settings when it re-flashes.
+- **`test_device_api.py`** / **`test_device_net.py`** (opt-in) check the JSON API, UDP display
+  packets, frame uploads and mDNS on a real clock, and put back everything they change:
+  `set WFD_CLOCK=<clock ip> && wfd-firmware\tests\test.bat -m device` (and `WFD_CLOCK_PASS` if
+  it has a web password).
+
+`tests/oracle/` holds frozen copies of modules from the retired Python app
+(`legacy/python-app/`): test oracles only, not app code. CI runs this suite on Windows.
+
 ## Regenerating the generated headers
 
 Both headers are committed, so a fresh clone builds as-is.
 
-- `font14_table.h` (C font): run `python wfd-control/font14.py` after changing a glyph there.
-  The Python app and the firmware then share one font.
+- `font14_table.h` (C font): run `python wfd-firmware/tests/oracle/font14.py` after changing a
+  glyph there. The Rust app has the same font (`wfd-app/src/font14.rs`, checked against
+  `wfd-app/tests/fixtures/font14_cases.json`); change it there too.
 - `clock_panel.h` (LED/segment map): hand-assembled from the mapping results in
   `wfd-firmware/tools/` (`panel_map.json`, `segmap.json`). It only changes if you re‑map a
   different panel revision.
@@ -324,7 +353,9 @@ A healthy upload of the ~1.1 MB image is ~790 pieces in ~16 s with pauses under 
 
 `/api/status` reports `state.fw` (the build stamp) and `state.protocol` (`WFD_PROTOCOL` in
 `main.cpp`); `CFG` reports them as `_fw` / `_protocol`, plus the clock's WiFi address as `_ip` (empty when it isn't on WiFi) whether a web password is set as `_pw` and whether it has internet time as `_ntp`, so the app sees them over USB too. Bump
-`WFD_PROTOCOL` together with `PROTOCOL` in `app.py` whenever commands, settings or the API
-change in a way the app depends on. A test fails if they, or `releases/version.json`, disagree.
+`WFD_PROTOCOL` together with `PROTOCOL` in `wfd-app/src/config.rs` whenever commands, settings
+or the API change in a way the app depends on. A host test fails if `releases/version.json`
+disagrees with `main.cpp`; the app's constant is not compared automatically (that check was in
+the retired Python app's tests), so bump it by hand.
 Protocol 4 added the `weather` animation and the `weather_scene` setting; protocol 5 the
 `alarms`, `timer` and `alert` settings and the forecast.

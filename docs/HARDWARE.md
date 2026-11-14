@@ -80,7 +80,8 @@ Panel elements (all mapped in `wfd-firmware/clock/src/clock_panel.h`):
 `a=0x10 b=0x20 c=0x40 d=0x80 e=0x01 f=0x02 g=0x04` (validated). The 14‑segment message
 chars reuse this subset in their low byte, so numbers render with the same font; the
 diagonals (`h,i,j,k,l,m`) are in the high byte. Full font in
-`wfd-control/font14.py` and `wfd-firmware/clock/src/font14_table.h`.
+`wfd-firmware/clock/src/font14_table.h` (generated from `wfd-firmware/tests/oracle/font14.py`)
+and `wfd-app/src/font14.rs`.
 
 ## How the panel was mapped
 
