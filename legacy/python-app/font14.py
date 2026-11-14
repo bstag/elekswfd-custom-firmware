@@ -54,8 +54,9 @@ def c_header():
 
 
 if __name__ == "__main__":
-    # python font14.py  -> regenerates wfd-firmware/clock/src/font14_table.h
+    # python font14.py  -> regenerates wfd-firmware/clock/src/font14_table.h (the firmware tests
+    # check the table against their own copy, wfd-firmware/tests/oracle/font14.py)
     from pathlib import Path
-    out = Path(__file__).resolve().parent.parent / "wfd-firmware/clock/src/font14_table.h"
+    out = Path(__file__).resolve().parents[2] / "wfd-firmware/clock/src/font14_table.h"
     out.write_text(c_header(), newline="\r\n")
     print("wrote", out)

@@ -1,9 +1,10 @@
-"""Generated firmware sources must match what they're generated from.
+"""Generated firmware sources and the shipped release must match what they're made from.
 
-These two checks used to live in the Python app's test_protocol.py (now legacy/python-app/tests);
+These checks used to live in the Python app's test_protocol.py (now legacy/python-app/tests);
 they only look at the firmware, so they run here.
 """
 import gzip
+import json
 import re
 from pathlib import Path
 
@@ -32,3 +33,9 @@ def test_embedded_pages_match_their_source():
 def test_firmware_font_table_is_generated_from_font14():
     assert (SRC / "font14_table.h").read_text(encoding="utf-8") == font14.c_header(), \
         "font14_table.h is stale: run `python wfd-firmware/tests/oracle/font14.py`"
+
+
+def test_shipped_release_speaks_the_source_protocol():
+    fw = int(re.search(r"#define WFD_PROTOCOL (\d+)", (SRC / "main.cpp").read_text(encoding="utf-8")).group(1))
+    shipped = json.loads((ROOT / "wfd-firmware" / "releases" / "version.json").read_text(encoding="utf-8"))
+    assert shipped["protocol"] == fw, "releases/ is stale: run wfd-firmware/make_release.py"
