@@ -22,6 +22,7 @@ EXPECTED_CONFIG = {
     "standalone_msg_mode", "standalone_rotate", "standalone_dwell", "standalone_scroll_ms",
     "mic_standalone", "grid_standalone", "standalone_anim", "standalone_fps", "standalone_frame",
     "weather_scene", "alarms", "timer", "alert",      # protocol 4 and 5
+    "mic_sampling",                                   # protocol 6
 }
 
 
