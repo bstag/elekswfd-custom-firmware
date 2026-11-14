@@ -161,6 +161,91 @@ fn bad_or_missing_file_gives_defaults() {
     }
 }
 
+/// A directory of its own, emptied first.
+fn fresh_dir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("wfd-app-config-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn garbled_file_is_kept_as_bad_copy_and_logged() {
+    let dir = fresh_dir("garbled");
+    wfd_app::applog::init(dir.join("wfd-app.log"));
+    let path = dir.join("wfd_config.json");
+    let garbled = "{\"logo\": tr";
+    std::fs::write(&path, garbled).unwrap();
+    assert_eq!(load(&path), defaults());
+    let bad = config::bad_copy_path(&path);
+    assert_eq!(bad, dir.join("wfd_config.json.bad"));
+    assert_eq!(std::fs::read_to_string(&bad).unwrap(), garbled);
+    // the next save replaces the garbled file but leaves the copy
+    save(&path, &defaults()).unwrap();
+    assert_eq!(std::fs::read_to_string(&bad).unwrap(), garbled);
+    let log = std::fs::read_to_string(dir.join("wfd-app.log")).unwrap();
+    assert!(
+        log.lines().any(|l| l.contains("wfd_config.json isn't valid JSON")
+            && l.contains("wfd_config.json.bad")),
+        "{log}"
+    );
+    // a top level that isn't an object counts as damaged too
+    let other = dir.join("list.json");
+    std::fs::write(&other, "[1, 2]").unwrap();
+    assert_eq!(load(&other), defaults());
+    assert!(dir.join("list.json.bad").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn missing_file_makes_no_bad_copy() {
+    let dir = fresh_dir("missing");
+    let path = dir.join("wfd_config.json");
+    assert_eq!(load(&path), defaults());
+    assert!(names_in(&dir).is_empty(), "{:?}", names_in(&dir));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn wrong_typed_values_are_loaded_as_they_are() {
+    let dir = fresh_dir("wrongtype");
+    let path = dir.join("wfd_config.json");
+    std::fs::write(&path, r#"{"logo": "yes", "grid_fps": [1]}"#).unwrap();
+    let loaded = load(&path);
+    assert_eq!(loaded["logo"], json!("yes"));
+    assert_eq!(loaded["grid_fps"], json!([1]));
+    assert!(!config::bad_copy_path(&path).exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn save_is_atomic_and_leaves_no_temp_file() {
+    let dir = fresh_dir("atomic");
+    let path = dir.join("wfd_config.json");
+    let mut cfg = defaults();
+    cfg.insert("custom_text".into(), json!("FIRST"));
+    save(&path, &cfg).unwrap();
+    cfg.insert("custom_text".into(), json!("SECOND"));
+    save(&path, &cfg).unwrap(); // replaces an existing file
+    assert_eq!(names_in(&dir), ["wfd_config.json"]);
+    assert_eq!(load(&path), cfg);
+    // a save that can't happen (the target is a directory) cleans up after itself
+    let blocked = dir.join("blocked.json");
+    std::fs::create_dir(&blocked).unwrap();
+    assert!(save(&blocked, &cfg).is_err());
+    assert_eq!(names_in(&dir), ["blocked.json", "wfd_config.json"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn save_load_round_trip() {
     let mut cfg = defaults();

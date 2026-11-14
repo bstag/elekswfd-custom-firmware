@@ -5,7 +5,7 @@
 //! ends on Windows, which Python's text-mode `write_text` produces), so both apps can share it.
 
 use serde_json::{Map, Number, Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Firmware `WFD_PROTOCOL` this app speaks.
 pub const PROTOCOL: u32 = 5;
@@ -164,20 +164,48 @@ pub fn coerce(key: &str, v: &Value) -> Result<Value, String> {
 
 /// Defaults plus the app's own settings from the file at `path`. Keys that aren't app settings
 /// (clock settings from older files, `_comment`, ...) are dropped; values aren't validated
-/// (same as Python). A missing or unreadable file gives the defaults.
+/// (same as Python). A missing file gives the defaults. So does a file that can't be read or
+/// isn't a JSON object, but that one is first copied to `<name>.bad` (and a line logged), since
+/// the next save overwrites it.
 pub fn load(path: &Path) -> Map<String, Value> {
     let mut cfg = defaults();
-    if let Ok(Value::Object(file)) = std::fs::read(path)
-        .map_err(|_| ())
-        .and_then(|b| serde_json::from_slice(&b).map_err(|_| ()))
-    {
-        for (k, v) in file {
-            if let Some(slot) = cfg.get_mut(&k) {
-                *slot = v;
+    let why = match std::fs::read(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return cfg,
+        Err(e) => format!("can't be read ({e})"),
+        Ok(b) => match serde_json::from_slice::<Value>(&b) {
+            Ok(Value::Object(file)) => {
+                for (k, v) in file {
+                    if let Some(slot) = cfg.get_mut(&k) {
+                        *slot = v;
+                    }
+                }
+                return cfg;
             }
-        }
-    }
+            Ok(_) => "isn't a JSON object".to_string(),
+            Err(e) => format!("isn't valid JSON ({e})"),
+        },
+    };
+    keep_bad_copy(path, &why);
     cfg
+}
+
+/// `wfd_config.json` -> `wfd_config.json.bad`, next to it.
+pub fn bad_copy_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".bad");
+    path.with_file_name(name)
+}
+
+fn keep_bad_copy(path: &Path, why: &str) {
+    let bad = bad_copy_path(path);
+    let kept = match std::fs::copy(path, &bad) {
+        Ok(_) => format!("a copy is in {}", bad.display()),
+        Err(e) => format!("couldn't keep a copy at {} ({e})", bad.display()),
+    };
+    crate::applog::log(&format!(
+        "settings file {} {why}; using the defaults, {kept}",
+        path.display()
+    ));
 }
 
 /// Write the app settings in `cfg` (DEFAULTS keys only, in DEFAULTS order) like Python's
@@ -190,7 +218,33 @@ pub fn save(path: &Path, cfg: &Map<String, Value>) -> std::io::Result<()> {
     let mut out = String::new();
     py::dump_object(&own, 0, &mut out);
     let nl = if cfg!(windows) { "\r\n" } else { "\n" };
-    std::fs::write(path, out.replace('\n', nl))
+    write_atomic(path, out.replace('\n', nl).as_bytes())
+}
+
+/// Write `data` to a temp file next to `path`, flush it to disk, then rename it over `path`, so
+/// a crash mid-write leaves the old file whole. The temp file is removed if anything fails.
+fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}-{}.tmp",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let tmp = path.with_file_name(name);
+    let res = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
 }
 
 /// Small pieces of Python semantics the port has to reproduce (`float()`, `int()`, `repr()`,
