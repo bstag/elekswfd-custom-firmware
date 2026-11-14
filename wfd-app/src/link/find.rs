@@ -138,7 +138,13 @@ pub fn find_answering_clock_ip(ctx: &Ctx) -> Option<String> {
 }
 
 fn try_wifi(ctx: &Ctx, ip: &str, pw: &str, clock: &Rc<dyn Clock>) -> Option<Box<dyn Link>> {
-    let mut link = WifiLink::new(ip, pw, Rc::clone(clock)).ok()?;
+    let mut link = match WifiLink::new(ip, pw, Rc::clone(clock)) {
+        Ok(link) => link,
+        Err(e) => {
+            crate::applog::log_once(&format!("can't open a UDP socket to reach the clock: {e}"));
+            return None;
+        }
+    };
     if link.get_config().is_err() {
         link.close();
         return None;

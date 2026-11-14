@@ -5,6 +5,7 @@ use super::{
     Clock, Datagram, HTTP_TIMEOUT, HttpApi, Link, LinkLost, UDP_PORT, basic_auth, is_slow_patch,
     per_key, py_json, truthy,
 };
+use crate::applog;
 use crate::config::py;
 use crate::ctx::ClockReply;
 use serde_json::{Map, Value, json};
@@ -16,6 +17,8 @@ use std::time::Duration;
 const SLOW_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 /// No good HTTP answer for this long: the WiFi clock is gone.
 const WIFI_ALIVE: f64 = 15.0;
+/// Display packets failing in a row (about a second of frames) before the socket is replaced.
+const REOPEN_AFTER: u32 = 30;
 
 /// The clock over WiFi: each frame's commands go out as one UDP packet; settings, uploads and
 /// the health check use its HTTP API.
@@ -38,6 +41,9 @@ pub struct WifiLink {
     /// status reads in a row that showed the clock not taking our stream
     deaf_reads: u32,
     problem: Option<String>,
+    /// display packets in a row that didn't go out, and why the last one didn't
+    send_failures: u32,
+    send_error: Option<String>,
 }
 
 impl WifiLink {
@@ -79,6 +85,32 @@ impl WifiLink {
             rejected: None,
             deaf_reads: 0,
             problem: None,
+            send_failures: 0,
+            send_error: None,
+        }
+    }
+
+    /// A display packet didn't go out (e.g. Windows' "no buffer space", os error 10055). That
+    /// frame is dropped and the next one tries again: the link stays up as long as the clock
+    /// answers its status poll ([`Link::alive`]). Sends that keep failing get a fresh socket.
+    fn send_failed(&mut self, e: &io::Error) {
+        applog::log_once(&format!(
+            "can't send the display to the clock ({}): {e}; dropping frames until it works again",
+            self.ip
+        ));
+        self.send_failures += 1;
+        self.send_error = Some(e.to_string());
+        if self.send_failures.is_multiple_of(REOPEN_AFTER) {
+            match self.sock.reopen() {
+                Ok(()) => applog::log_once(&format!(
+                    "display packets to {} kept failing: opened a new socket",
+                    self.ip
+                )),
+                Err(e) => applog::log_once(&format!(
+                    "display packets to {} kept failing, and a new socket can't be opened: {e}",
+                    self.ip
+                )),
+            }
         }
     }
 
@@ -165,8 +197,21 @@ impl Link for WifiLink {
             packet.push('\n');
             packet.push_str(line);
         }
-        self.sock.send_to(packet.as_bytes(), &self.ip, UDP_PORT)?;
+        // A failed send drops this frame only; the link ends when the clock stops answering.
+        let sent = self.sock.send_to(packet.as_bytes(), &self.ip, UDP_PORT);
         self.buf.clear();
+        if let Err(e) = sent {
+            self.send_failed(&e);
+            return Ok(());
+        }
+        if self.send_failures > 0 {
+            applog::log_once(&format!(
+                "display packets reach the clock ({}) again after {} failed",
+                self.ip, self.send_failures
+            ));
+            self.send_failures = 0;
+            self.send_error = None;
+        }
         if self.streaming_since.is_none() {
             self.streaming_since = Some(self.clock.now());
         }
@@ -239,6 +284,12 @@ impl Link for WifiLink {
     }
 
     fn problem(&self) -> Option<String> {
+        if self.send_failures >= REOPEN_AFTER {
+            let why = self.send_error.as_deref().unwrap_or("unknown error");
+            return Some(format!(
+                "the clock answers, but this PC can't send it the live display ({why})"
+            ));
+        }
         self.problem.clone()
     }
 
@@ -258,6 +309,12 @@ impl Datagram for UdpDatagram {
             .as_ref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "socket closed"))?;
         sock.send_to(data, (ip, port)).map(|_| ())
+    }
+
+    fn reopen(&mut self) -> io::Result<()> {
+        // (the old one stays if no new one can be had)
+        self.0 = Some(UdpSocket::bind("0.0.0.0:0")?);
+        Ok(())
     }
 
     fn close(&mut self) {

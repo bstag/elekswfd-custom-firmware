@@ -118,6 +118,13 @@ pub struct SimState {
     pub status_state: Map<String, Value>,
     /// the USB device never answers (another board with the same chip)
     pub usb_silent: bool,
+    /// the next this many UDP sends fail (Windows: "no buffer space", os error 10055)
+    pub udp_fail_next: usize,
+    /// every UDP send fails until the socket is replaced (`Datagram::reopen`)...
+    pub udp_broken: bool,
+    /// ...or even then
+    pub udp_broken_for_good: bool,
+    pub udp_reopens: usize,
 }
 
 /// Drives ClockLink on simulated time. wifi: no USB (until usb_present), the clock answers over
@@ -151,6 +158,10 @@ impl Sim {
             version: version.as_object().unwrap().clone(),
             status_state: Map::new(),
             usb_silent: false,
+            udp_fail_next: 0,
+            udp_broken: false,
+            udp_broken_for_good: false,
+            udp_reopens: 0,
         };
         Sim {
             ctx: Arc::clone(ctx),
@@ -429,6 +440,16 @@ pub struct FakeUdp(Sim);
 
 impl Datagram for FakeUdp {
     fn send_to(&mut self, data: &[u8], _ip: &str, _port: u16) -> io::Result<()> {
+        {
+            let mut s = self.0.st.borrow_mut();
+            if s.udp_broken || s.udp_broken_for_good {
+                return Err(io::Error::other("no buffer space (simulated)"));
+            }
+            if s.udp_fail_next > 0 {
+                s.udp_fail_next -= 1;
+                return Err(io::Error::other("no buffer space (simulated)"));
+            }
+        }
         let text = String::from_utf8_lossy(data).to_string();
         let mut parts = text.split('\n');
         let head = parts.next().unwrap_or("").to_string();
@@ -437,6 +458,13 @@ impl Datagram for FakeUdp {
             self.0.log("WIFI", line);
         }
         self.0.st.borrow_mut().packets.push((head, lines));
+        Ok(())
+    }
+
+    fn reopen(&mut self) -> io::Result<()> {
+        let mut s = self.0.st.borrow_mut();
+        s.udp_reopens += 1;
+        s.udp_broken = false;
         Ok(())
     }
 }

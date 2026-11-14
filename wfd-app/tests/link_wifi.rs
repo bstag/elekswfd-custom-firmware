@@ -401,6 +401,62 @@ fn one_missed_answer_does_not_drop_the_link() {
     assert!(ctx.state().connected);
 }
 
+/// Times (simulated seconds) of the display lines that reached the clock.
+fn wifi_times(s: &Sim) -> Vec<f64> {
+    s.lines()
+        .iter()
+        .filter(|l| l.contains(" WIFI "))
+        .map(|l| l.split_whitespace().next().unwrap().parse().unwrap())
+        .collect()
+}
+
+#[test]
+fn a_few_failed_sends_do_not_drop_the_link() {
+    // one "no buffer space" (os error 10055) used to end the link for good
+    let ctx = app();
+    let s = Sim::new(&ctx, 10.0)
+        .wifi("")
+        .event(3.0, |s| s.st.borrow_mut().udp_fail_next = 5);
+    s.run();
+    assert_eq!(s.st.borrow().wifi_opens, 1, "the link was kept");
+    assert_eq!(s.st.borrow().udp_reopens, 0, "a few failures don't need a new socket");
+    assert!(ctx.state().connected);
+    let times = wifi_times(&s);
+    assert!(times.iter().any(|&t| (3.5..4.0).contains(&t)), "the stream went on at once");
+    assert_eq!(ctx.state().link_problem, None);
+}
+
+#[test]
+fn sends_that_keep_failing_get_a_new_socket() {
+    let ctx = app();
+    let s = Sim::new(&ctx, 12.0)
+        .wifi("")
+        .event(3.0, |s| s.st.borrow_mut().udp_broken = true);
+    s.run();
+    let st = s.st.borrow();
+    assert_eq!(st.udp_reopens, 1);
+    assert_eq!(st.wifi_opens, 1, "the link was kept while the clock answered");
+    assert!(ctx.state().connected);
+    let times = wifi_times(&s);
+    assert!(times.iter().any(|&t| (4.0..5.0).contains(&t)), "streaming again about 1 s later");
+    assert_eq!(ctx.state().link_problem, None);
+}
+
+#[test]
+fn sends_that_fail_for_good_are_reported() {
+    // the clock still answers HTTP, so the link stays up; the dashboard says what's wrong
+    let ctx = app();
+    let s = Sim::new(&ctx, 14.0)
+        .wifi("")
+        .event(3.0, |s| s.st.borrow_mut().udp_broken_for_good = true);
+    s.run();
+    assert!(s.st.borrow().udp_reopens >= 2, "a new socket is tried again now and then");
+    assert_eq!(s.st.borrow().wifi_opens, 1);
+    assert!(ctx.state().connected);
+    let problem = ctx.state().link_problem.clone().unwrap_or_default();
+    assert!(problem.contains("can't send it the live display"), "{problem:?}");
+}
+
 #[test]
 fn a_rejected_stream_is_reported() {
     // the clock answers HTTP but throws our packets away: wrong clock password

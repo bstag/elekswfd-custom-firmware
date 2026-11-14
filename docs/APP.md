@@ -115,8 +115,11 @@ name lookup goes out on every network adapter and is repeated, so a VPN or virtu
 the name, since the router may have given the clock a new address.
 
 Once connected over WiFi, one missed answer doesn't drop the link (the clock is busy for a few
-seconds when it fetches the weather); 15 s of silence does. If the clock answers but isn't
-taking the live display, the dashboard says why: a wrong or missing clock password, or UDP
+seconds when it fetches the weather); 15 s of silence does. A display packet that Windows
+fails to send (say "no buffer space", os error 10055) drops only that frame: the link stays up
+while the clock answers, and if sends keep failing for about a second the app opens a new
+socket (and says so on the dashboard if that doesn't help either). If the clock answers but
+isn't taking the live display, the dashboard says why: a wrong or missing clock password, or UDP
 port 4210 blocked. The display stream stops while "Update clock" uploads firmware.
 
 If the clock is plugged in but Windows has no driver for its USB chip (no COM port), the

@@ -123,6 +123,10 @@ pub trait SerialIo {
 /// The UDP socket `WifiLink` streams the display through.
 pub trait Datagram {
     fn send_to(&mut self, data: &[u8], ip: &str, port: u16) -> io::Result<()>;
+    /// Replace the socket with a fresh one (sends keep failing on this one).
+    fn reopen(&mut self) -> io::Result<()> {
+        Ok(())
+    }
     fn close(&mut self) {}
 }
 
