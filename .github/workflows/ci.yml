@@ -1,5 +1,6 @@
-# Tests on every push and pull request: the Rust app, the Python app (with the firmware's C++
+# Tests on every push and pull request: the Rust app, the firmware's host tests (its C++
 # engines compiled on the runner), and the firmware build. No clock or network device needed.
+# (The retired Python app in legacy/python-app/ is no longer tested here.)
 name: CI
 
 on:
@@ -29,17 +30,17 @@ jobs:
       - name: Test
         run: cargo test
 
-  python:
-    name: Python app + firmware engines (wfd-control)
+  firmware-host:
+    name: Firmware host tests (wfd-firmware/tests)
     runs-on: windows-latest
     defaults:
       run:
-        working-directory: wfd-control
+        working-directory: wfd-firmware/tests
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
       - name: Test
-        run: uv run --with-requirements requirements.txt --with pytest pytest -ra
+        run: uv run --with-requirements requirements.txt pytest -ra
 
   firmware:
     name: Firmware build (wfd-firmware)

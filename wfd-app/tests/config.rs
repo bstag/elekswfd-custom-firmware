@@ -1,5 +1,5 @@
 //! Settings validation and the config file (ports of test_rendering.py / test_api.py cases,
-//! plus parity tables generated from app.py; see tests/fixtures/config_*).
+//! plus regression tables first generated from legacy/python-app/app.py; see tests/fixtures/config_*).
 
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -279,14 +279,17 @@ fn python_written_file_round_trips_exactly() {
     );
 }
 
-/// The user's real settings file (if present next to the Python app) survives a Rust save.
+/// The user's real settings file (if present next to the retired Python app, in
+/// legacy/python-app/ or its old home wfd-control/) survives a Rust save.
 #[test]
 fn real_config_file_round_trips() {
     // WFD_REAL_CONFIG can point at it when testing from a worktree without one
     let real = std::env::var_os("WFD_REAL_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../wfd-control/wfd_config.json")
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+            let new = root.join("legacy/python-app/wfd_config.json");
+            if new.exists() { new } else { root.join("wfd-control/wfd_config.json") }
         });
     let Ok(bytes) = std::fs::read(&real) else {
         return;

@@ -23,7 +23,7 @@ or just flash the result and use it.
 
 > The original vendor tool (`EleksWFD_EN.exe`, `translations/`, `esptool/`, etc.) is
 > still in this folder for reference. Everything **we** built lives in `wfd-firmware/`,
-> `wfd-app/`, `wfd-control/`, and the `docs/` + `*.md` files.
+> `wfd-app/`, `legacy/`, and the `docs/` + `*.md` files.
 
 ---
 
@@ -92,8 +92,8 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 It installs the app for your user, starts it at login and opens the dashboard at
 `http://127.0.0.1:8737`. Nothing else is needed. From a clone, the same script in `wfd-app\`
 builds it first (needs Rust from [rustup.rs](https://rustup.rs)). See
-[docs/APP.md](docs/APP.md). (The original Python app still runs too: `cd wfd-control`,
-`uv run app.py`.)
+[docs/APP.md](docs/APP.md). (The original Python app it replaced is retired, frozen in
+`legacy/python-app/`.)
 
 After step 1, **every future firmware update is wireless**: press **Update clock** in the
 app (Connection & firmware), or open the clock's web page, go to *Firmware update*, and
@@ -109,9 +109,9 @@ upload a new `wfd-clock-firmware.bin`.
 | `wfd-firmware/releases/` | Prebuilt binaries (`-merged.bin` for USB, `-firmware.bin` for OTA) |
 | `wfd-firmware/flash_usb.py` | One‑command USB flasher |
 | `wfd-firmware/tools/` | Reverse‑engineering + mapping tools (LED mapper, segment mapper, fonts) |
+| `wfd-firmware/tests/` | The firmware's host tests: its C++ engines built and checked on the PC |
 | `wfd-app/` | The PC companion app in Rust: one exe, `install.ps1` sets it up at login |
-| `wfd-control/` | The original Python app (reference for the Rust port, and its test suite) |
-| `legacy/` | Superseded code kept for reference (stock-protocol web app, old headless daemon) |
+| `legacy/` | Superseded code kept for reference (the retired Python app, stock-protocol web app, old headless daemon) |
 | `docs/` | Detailed documentation (see below) |
 | `PROTOCOL.md` | The clock's serial command protocol |
 | `firmware-backup/` | A full 4 MB backup of the original stock firmware |

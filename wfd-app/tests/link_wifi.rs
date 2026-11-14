@@ -1,5 +1,5 @@
 //! The app driving the clock over WiFi (WifiLink): UDP for the live display, HTTP for the rest.
-//! Port of wfd-control/tests/test_wifi_link.py, plus the real HTTP seam against a local server.
+//! Port of legacy/python-app/tests/test_wifi_link.py, plus the real HTTP seam against a local server.
 
 #[path = "clocklink_sim/mod.rs"]
 mod sim;

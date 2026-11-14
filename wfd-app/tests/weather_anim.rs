@@ -1,6 +1,6 @@
 //! The "weather" grid animation (src/grid_anim.rs). The clock firmware draws the same frames
 //! (grid_engine.h): both are checked against tests/fixtures/weather_frames.json, this side here
-//! and the C++ side in wfd-control/tests/test_grid_engine.py.
+//! and the C++ side in wfd-firmware/tests/test_grid_engine.py.
 //!
 //! Regenerate the fixture after changing the art (then check the C++ still matches):
 //!     WFD_UPDATE_FIXTURES=1 cargo test --test weather_anim

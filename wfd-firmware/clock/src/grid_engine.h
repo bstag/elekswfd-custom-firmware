@@ -1,7 +1,7 @@
-// 7x7 grid animations: a C++ port of wfd-control/grid_anim.py (all but "cpu", which needs the
+// 7x7 grid animations: a C++ port of legacy/python-app/grid_anim.py (all but "cpu", which needs the
 // PC; "audio" and "mouth" take their 7 bands from the clock's own mic), plus "weather" (pixel
 // scenes for the current weather), which the Rust app (wfd-app/src/grid_anim.rs) draws the same
-// way. Plain C++ with no Arduino dependencies, so wfd-control/tests can compile it on the PC and
+// way. Plain C++ with no Arduino dependencies, so wfd-firmware/tests can compile it on the PC and
 // check it frame-for-frame against the Python engine and the Rust app's weather frames.
 //
 // Rows are bytes: bit c of rows[r] = cell (r, c). Rounding uses rint() (round half to even),

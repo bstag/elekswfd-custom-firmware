@@ -1,5 +1,5 @@
-//! The app's own mDNS lookup (port of test_mdns.py, plus parity with mdns.py on
-//! fuzzed packets from tests/fixtures/mdns_*).
+//! The app's own mDNS lookup (port of legacy/python-app/tests/test_mdns.py, plus regression
+//! fixtures of fuzzed packets first answered by legacy/python-app/mdns.py, tests/fixtures/mdns_*).
 
 use std::collections::BTreeMap;
 use std::net::Ipv4Addr;

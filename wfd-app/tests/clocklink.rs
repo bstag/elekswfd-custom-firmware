@@ -1,5 +1,5 @@
 //! ClockLink on simulated time against a fake serial port: port of
-//! wfd-control/tests/test_clocklink.py, the ClockLink parts of test_protocol.py and
+//! legacy/python-app/tests/test_clocklink.py, the ClockLink parts of test_protocol.py and
 //! test_firmware_update.py, and the golden log parity check.
 
 #[path = "clocklink_sim/mod.rs"]
@@ -69,7 +69,7 @@ fn matches_golden_log() {
     {
         let lo = i.saturating_sub(3);
         panic!(
-            "serial output differs from app.py at line {} ({} lines vs {} golden)\n--- golden\n{}\n--- now\n{}",
+            "serial output differs from the golden log at line {} ({} lines vs {} golden)\n--- golden\n{}\n--- now\n{}",
             i + 1,
             lines.len(),
             expected.len(),

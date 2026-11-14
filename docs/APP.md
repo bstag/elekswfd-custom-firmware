@@ -3,13 +3,12 @@
 A local web app that serves a dashboard **and** runs the background services that feed the
 clock the live, PC‑only data over USB or WiFi.
 
-There are two implementations with the same behaviour, settings file and pages:
+The app is **`wfd-app/` (Rust)**: a single `wfd-app.exe`, installed and started at login by
+`wfd-app\install.ps1`. See [wfd-app/README.md](../wfd-app/README.md).
 
-- **`wfd-app/` (Rust): the one to use.** A single `wfd-app.exe`, installed and started at
-  login by `wfd-app\install.ps1`. See [wfd-app/README.md](../wfd-app/README.md).
-- **`wfd-control/app.py` (Python):** the original, kept as the reference the Rust port is
-  tested against. New features go into the Rust app only. The rest of this page describes
-  features both share, and says where one is Rust-only.
+It was ported from an earlier Python app, which is retired: it's frozen in
+[`legacy/python-app/`](../legacy/python-app/) and no longer tested in CI (see
+[legacy/README.md](../legacy/README.md)).
 
 ![dashboard](assets/dashboard.jpg)
 
@@ -26,18 +25,7 @@ cd wfd-app; cargo run --release -- --no-browser                 # or run it by h
 It installs to `%LOCALAPPDATA%\WFD Clock\` (settings: `wfd_config.json` there). Run the
 installer again after pulling changes.
 
-The Python app:
-
-```bash
-cd wfd-control
-uv run app.py              # uv reads the inline deps; or use a venv:
-# python -m venv .venv && .venv/Scripts/pip install pyserial numpy pyaudiowpatch psutil
-# .venv/Scripts/python app.py
-```
 Dashboard: **http://127.0.0.1:8737**. Add `--no-browser` to not auto‑open.
-
-Dependencies: `pyserial`, `numpy`, `pyaudiowpatch` (WASAPI loopback), `psutil`. The
-drawing tool and fonts use `font14.py` / `grid_anim.py` (in the same folder).
 
 ## What it provides
 
@@ -46,7 +34,7 @@ drawing tool and fonts use `font14.py` / `grid_anim.py` (in the same folder).
   right; five styles; gain sliders
 - **System bars** — live CPU (psutil) / GPU (`nvidia-smi`) / RAM
 - **Weather** — resolves a ZIP or "Town, State" and pushes it; shows condition + temp
-- **Message line** — weather temp / window title / custom text / **date** / **forecast** (Rust app) / rotation; custom text supports `{date} {time} {time12} {day} {temp}` placeholders
+- **Message line** — weather temp / window title / custom text / **date** / **forecast** / rotation; custom text supports `{date} {time} {time12} {day} {temp}` placeholders
 - **Alarms & timer** — up to 4 alarms with weekdays and a countdown timer. They're the
   clock's settings and run on the clock (see FIRMWARE.md); an alert flashes the display until a
   clock button or *Stop* is pressed
@@ -67,8 +55,7 @@ A worker thread connects to the CH340 port (auto‑found by VID/PID `1A86:7523`)
 (offline message text). It reconnects automatically if the clock
 is unplugged.
 
-**It holds the serial port.** Stop the app (`Stop-Process -Name wfd-app`, or end `pythonw.exe`
-for the Python app) before flashing
+**It holds the serial port.** Stop the app (`Stop-Process -Name wfd-app`) before flashing
 over USB or running the old vendor tool. (OTA over WiFi does **not** need the port free.)
 
 ## One dashboard
@@ -94,7 +81,8 @@ Every setting has one owner:
   app never overwrites it.
 - **The app** owns what needs the PC: PC audio spectrum and gains, CPU/GPU/RAM bars, the live
   message line (window title, custom text, rotation), live grid animations, icons and logo.
-  These persist in `wfd-control/wfd_config.json`.
+  These persist in the app's `wfd_config.json` (next to `wfd-app.exe`; `--config` picks
+  another file).
 
 The app's UI shows both together. Saving a clock setting while the clock is unplugged fails
 with "clock not connected", and the clock's own error messages (e.g. a bad ZIP) are shown
@@ -106,9 +94,9 @@ as they are. The app's weather uses the clock's ZIP and units. It sends a locati
 `wfd-app\install.ps1` adds a **WFD Clock** shortcut to your Startup folder (`shell:startup`)
 that runs `wfd-app.exe --no-browser`. To disable, delete the shortcut.
 
-For the Python app, `wfd-control/wfd_control.vbs` launches it hidden with `pythonw.exe`: put a
-copy in Startup (e.g. "WFD Clock Helper.vbs") and point its paths at a **persistent** Python
-env. The Rust installer renames that copy to `.vbs.disabled` so only one app runs.
+If you're upgrading from the retired Python app, the installer also renames its login script
+in Startup (a `.vbs` that started `app.py`) to `.vbs.disabled`, so only one app runs, and on a
+first install it copies that app's `wfd_config.json`.
 
 ## Connection
 
@@ -132,14 +120,14 @@ taking the live display, the dashboard says why: a wrong or missing clock passwo
 port 4210 blocked. The display stream stops while "Update clock" uploads firmware.
 
 If the clock is plugged in but Windows has no driver for its USB chip (no COM port), the
-dashboard says so and links to the driver (Rust app; see
+dashboard says so and links to the driver (see
 [FLASHING.md](FLASHING.md#the-usb-driver-ch340)). `cargo run --example usb_probe` in `wfd-app/`
 lists the USB devices the app sees.
 
 Over WiFi, each frame's display commands go to the clock as one UDP packet, and settings and
 uploads use the clock's web API. The clock is found as `wfd-clock.local`: the app asks over mDNS
 itself, because Windows doesn't always resolve `.local` names. You can also enter an IP
-(`clock_host`). Over USB the clock tells the app its WiFi address (`_ip` in `CFG`), so "Update clock" and a switch to WiFi go straight there; otherwise the app remembers the last address that worked, and forgets it if it stops answering. To set the clock's web password, use *Clock web password* in this section while the clock is on USB: it's sent over USB only, so only someone with the clock in hand can change it, and the app saves it as its own password (`clock_pass`) so WiFi and updates keep working. (Rust app; the Python app doesn't have this.) If the clock already has a web password set some other way
+(`clock_host`). Over USB the clock tells the app its WiFi address (`_ip` in `CFG`), so "Update clock" and a switch to WiFi go straight there; otherwise the app remembers the last address that worked, and forgets it if it stops answering. To set the clock's web password, use *Clock web password* in this section while the clock is on USB: it's sent over USB only, so only someone with the clock in hand can change it, and the app saves it as its own password (`clock_pass`) so WiFi and updates keep working. If the clock already has a web password set some other way
 (serial `WEBPASS`), enter it as the clock password (`clock_pass`). The app never shows it back.
 A clock with internet time (NTP) keeps its own time, over WiFi and over USB (`_ntp` in `CFG`);
 the app sends the PC's time only if the clock hasn't synced, or when you press *Sync now*. The
@@ -164,7 +152,7 @@ USB too). The app then watches the clock until it reports the new build. That ta
 
 If an upload stalls, the app tries once more.
 
-Every attempt is logged (Rust app) as one JSON line in `ota-log.jsonl` next to the settings file:
+Every attempt is logged as one JSON line in `ota-log.jsonl` next to the settings file:
 the app's side (seconds sending, any error, whether the new build came up) and the clock's own
 report of that upload (`state.ota`, see FIRMWARE.md). The dashboard shows the last one under the
 Update button. A stall shows up as a large `max_gap_ms` and `gap_at` says how far in it came.
@@ -184,40 +172,17 @@ The PC app replaces it with the full UI and feature set.
 
 ## Tests
 
-The Rust app: `cd wfd-app && cargo test` (see [wfd-app/README.md](../wfd-app/README.md)).
-The Python suite below also covers the firmware's C++ engines and the device tests.
-GitHub Actions (`.github/workflows/ci.yml`) runs both suites, clippy and the firmware build on
-every push and pull request; the firmware job also fails if `src/web_pages.h` wasn't regenerated
-after a page change.
+The app: `cd wfd-app && cargo test` (see [wfd-app/README.md](../wfd-app/README.md)). No
+clock, network or audio device is needed. Its golden log
+(`wfd-app/tests/fixtures/clocklink_golden.log`) is a regression snapshot of every line the
+app sends in a busy simulated scenario. If you change what the app sends on purpose, the test
+fails with a diff: `WFD_UPDATE_GOLDEN=1 cargo test --test clocklink` writes the new output to
+`clocklink_golden.log.new`; review it, replace the snapshot with it and commit both together.
 
-```bash
-wfd-control/test.bat            # or: cd wfd-control && uv run --with-requirements requirements.txt --with pytest pytest
-```
+The firmware's host tests (its C++ engines built on the PC, its tools, opt-in real-clock tests)
+live in `wfd-firmware/tests/`; see [FIRMWARE.md](FIRMWARE.md#host-tests).
 
-No clock, network or audio device is needed, and your `wfd_config.json` is never read or
-written. The suite covers:
-
-- **`test_clocklink.py`** runs the serial worker against a fake port on simulated time.
-  It compares every line sent in a busy 45 s scenario to `tests/golden/clocklink.log`, and
-  checks specific behaviour (reconnect re-sends settings, uploads, sync, spectrum off).
-- **`test_api.py`** covers the local HTTP API: header check, validation, status, uploads.
-- **`test_rendering.py`** covers settings validation, message scrolling and icons.
-- **`test_protocol.py`** cross-checks against the firmware source: every command the app
-  sends is handled in `main.cpp`, `font14_table.h` matches `font14.py`, and the icon count
-  matches `clock_panel.h`.
-
-- **`test_grid_engine.py`** compiles the firmware's `grid_engine.h` on the PC and checks it
-  against `grid_anim.py` (skipped if there's no C++ compiler).
-- **`test_mic_dsp.py`** compiles the firmware's `mic_dsp.h` and checks it on simulated tones and
-  on a real recording from the clock (`tests/host/mictrace_room.txt`).
-- **`test_wifi_link.py`** drives the app's WiFi link against a simulated clock (UDP packets, HTTP
-  settings and uploads, reconnects, switching to USB); **`test_mdns.py`** checks the lookup.
-- **`test_device_api.py`** / **`test_device_net.py`** (opt‑in) tests the clock's JSON API on a real clock and restores
-  everything it changes: `set WFD_CLOCK=<clock ip> && test.bat -m device`.
-
-If you change what the app sends on purpose, the golden test fails with a diff. Regenerate
-the log, then review its diff in git before committing:
-
-```bash
-cd wfd-control && WFD_UPDATE_GOLDEN=1 uv run --with-requirements requirements.txt --with pytest pytest tests/test_clocklink.py
-```
+GitHub Actions (`.github/workflows/ci.yml`) runs the app's tests and clippy, the firmware host
+tests and the firmware build on every push and pull request; the firmware job also fails if
+`src/web_pages.h` wasn't regenerated after a page change. The retired Python app's own suite
+(`legacy/python-app/tests`) is not run in CI.

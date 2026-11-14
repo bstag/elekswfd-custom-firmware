@@ -1,14 +1,15 @@
-//! clocklink: the ~30 Hz loop that drives the clock (port of `ClockLink` in wfd-control/app.py).
+//! clocklink: the ~30 Hz loop that drives the clock (port of `ClockLink` in legacy/python-app/app.py).
 //!
 //! Owns the connection (USB first unless set to WiFi), keeps the clock's settings in
 //! `state.clock`, answers the web server's clock requests, performs queued flash uploads and
 //! pushes everything the clock shows: spectrum, icons, logo, CPU/GPU/RAM bars, weather, the
 //! message line and the 7x7 grid.
 //!
-//! Parity: driven by the simulated harness in tests/clocklink_sim, this produces the same
-//! command stream, at the same simulated times, as app.py does under tests/conftest.py (see
-//! the golden log). That means keeping the order of every `now()` / `sleep()` and the exact f64
-//! arithmetic of the Python code (e.g. `now - last > 1.0 / max(2, fps)`).
+//! Regression: driven by the simulated harness in tests/clocklink_sim, this produces the command
+//! stream, at the simulated times, recorded in the golden log (tests/fixtures/clocklink_golden.log),
+//! a snapshot of this app's behaviour. The log was first taken from app.py under its Python
+//! harness, so the code keeps the order of every `now()` / `sleep()` and the exact f64 arithmetic
+//! of the Python code (e.g. `now - last > 1.0 / max(2, fps)`); change either only on purpose.
 
 use crate::applog;
 use crate::ctx::{Ctx, UploadJob};

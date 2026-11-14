@@ -17,7 +17,7 @@
 #include "wifi_link.h"
 
 // What the PC app checks before talking to this firmware. Bump WFD_PROTOCOL whenever commands,
-// settings or the JSON API change in a way the app must know about (app.py PROTOCOL).
+// settings or the JSON API change in a way the app must know about (PROTOCOL in wfd-app/src/config.rs).
 //   1 serial display commands   2 settings over USB (CFG/CFGSET) + JSON API   3 WiFi link (UDP, BYE, /api/frames)
 //   4 "weather" grid animation + weather_scene setting
 //   5 alarms, timer, alert settings + forecast (message source, state.weather.forecast)

@@ -8,9 +8,12 @@ wfd-app.exe next to this script; no Rust needed).
 
 - in the repo: builds the release exe (cargo build --release)
 - copies it to %LOCALAPPDATA%\WFD Clock\wfd-app.exe (stops a running copy first)
-- first install only: copies your settings from wfd-control\wfd_config.json if it exists
+- first install only: copies your settings from the retired Python app if it finds them, so
+  an upgrade from it keeps them: legacy\python-app\wfd_config.json, or wfd-control\wfd_config.json
+  (where that app lived before it was moved to legacy\)
 - adds a "WFD Clock" shortcut to your Startup folder (runs wfd-app.exe --no-browser)
-- turns off the old Python app's login script by renaming it to *.vbs.disabled
+- turns off the old Python app's login script (one that runs wfd-control\app.py,
+  legacy\python-app\app.py or the older wfd_daemon) by renaming it to *.vbs.disabled
 - starts the app (unless -NoStart)
 
 Undo: delete the "WFD Clock" shortcut from shell:startup and rename the .vbs.disabled back.
@@ -45,8 +48,11 @@ New-Item -ItemType Directory -Force $dest | Out-Null
 Copy-Item $built $exe -Force
 Write-Host "Installed $exe"
 
-$pyConfig = Join-Path $repo 'wfd-control\wfd_config.json'
-if (-not (Test-Path $config) -and (Test-Path $pyConfig)) {
+# upgrading from the retired Python app: its settings sit in legacy\python-app\ now, or still in
+# wfd-control\ in a checkout from before the move (an untracked file stays where it was)
+$pyConfig = @('legacy\python-app\wfd_config.json', 'wfd-control\wfd_config.json') |
+    ForEach-Object { Join-Path $repo $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not (Test-Path $config) -and $pyConfig) {
     Copy-Item $pyConfig $config
     Write-Host "Copied your settings from $pyConfig"
 }
@@ -61,7 +67,7 @@ $lnk.Save()
 Write-Host "Login shortcut: $(Join-Path $startup 'WFD Clock.lnk')"
 
 Get-ChildItem $startup -Filter '*.vbs' | Where-Object {
-    (Get-Content $_.FullName -Raw) -match 'wfd-control\\app\.py|wfd_daemon'
+    (Get-Content $_.FullName -Raw) -match 'wfd-control\\app\.py|python-app\\app\.py|wfd_daemon'
 } | ForEach-Object {
     Rename-Item $_.FullName ($_.Name + '.disabled')
     Write-Host "Turned off the old Python login script: $($_.Name) -> $($_.Name).disabled"

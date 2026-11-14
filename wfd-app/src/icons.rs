@@ -1,4 +1,4 @@
-//! Top-row icon bitmask, a port of `ICON` / `compute_icons` in wfd-control/app.py.
+//! Top-row icon bitmask, a port of `ICON` / `compute_icons` in legacy/python-app/app.py.
 
 /// Icon bit order; must match the firmware ICON_* arrays (bit i = `ICON_NAMES[i]`).
 pub const ICON_NAMES: [&str; 13] = [

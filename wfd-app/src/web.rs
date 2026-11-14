@@ -1,4 +1,4 @@
-//! web: the local HTTP server (port of `class H` in wfd-control/app.py).
+//! web: the local HTTP server (port of `class H` in legacy/python-app/app.py).
 //!
 //! Serves the pages shared with the clock (built into the binary) and the JSON API the
 //! dashboard and the grid animator use. Same routes, status codes and bodies as app.py:

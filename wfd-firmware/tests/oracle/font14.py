@@ -1,4 +1,9 @@
-"""14-segment font for the EleksWFD message characters.
+"""TEST ORACLE ONLY. A frozen copy of legacy/python-app/font14.py (the retired Python app's
+14-segment font). test_sources.py checks that the firmware's font14_table.h is generated
+from it; after changing a glyph here, regenerate the table with
+`python wfd-firmware/tests/oracle/font14.py`. No app imports this file.
+
+14-segment font for the EleksWFD message characters.
 
 Per-char segment bits (confirmed from the segment map):
   low byte : a=0x10 b=0x20 c=0x40 d=0x80 e=0x01 f=0x02 g=0x04   (g = full middle)
@@ -54,8 +59,8 @@ def c_header():
 
 
 if __name__ == "__main__":
-    # python font14.py  -> regenerates wfd-firmware/clock/src/font14_table.h
+    # python wfd-firmware/tests/oracle/font14.py  -> regenerates wfd-firmware/clock/src/font14_table.h
     from pathlib import Path
-    out = Path(__file__).resolve().parent.parent / "wfd-firmware/clock/src/font14_table.h"
+    out = Path(__file__).resolve().parents[3] / "wfd-firmware/clock/src/font14_table.h"
     out.write_text(c_header(), newline="\r\n")
     print("wrote", out)

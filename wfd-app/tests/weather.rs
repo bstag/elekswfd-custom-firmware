@@ -127,7 +127,7 @@ fn parses_the_forecast() {
 
 #[test]
 fn forecast_text_matches_the_clock() {
-    // the same cases as wfd-control/tests/test_extras.py (firmware extras::forecastText)
+    // the same cases as wfd-firmware/tests/test_extras.py (firmware extras::forecastText)
     let f = [day("Wed", 78, 55), day("Thu", 81, 60)];
     assert_eq!(forecast_text(0, &f, 0).as_deref(), Some("HI 78F"));
     assert_eq!(forecast_text(1, &f, 0).as_deref(), Some("LO 55F"));

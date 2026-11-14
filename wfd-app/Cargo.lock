@@ -2197,6 +2197,7 @@ dependencies = [
  "chrono",
  "cpal",
  "espflash",
+ "regex",
  "rustfft",
  "serde",
  "serde_json",

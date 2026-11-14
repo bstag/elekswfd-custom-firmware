@@ -5,7 +5,7 @@ from pathlib import Path
 
 import font14
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 class _FirmwareSource:
     """Every *.cpp and *.h in the firmware's src/ (but the generated web pages) as one text: the
     firmware is split over several files."""
@@ -112,7 +112,7 @@ def test_app_and_shipped_firmware_speak_the_same_protocol(app):
 
 def test_firmware_font_table_is_generated_from_font14():
     assert FONT_H.read_text(encoding="utf-8") == font14.c_header(), \
-        "font14_table.h is stale: run `python wfd-control/font14.py`"
+        "font14_table.h is stale: run `python wfd-firmware/tests/oracle/font14.py`"
 
 
 def test_icon_count_matches_firmware(app):

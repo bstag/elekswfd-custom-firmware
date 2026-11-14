@@ -1,5 +1,5 @@
 //! link: the two transports to the clock (port of `UsbLink`, `WifiLink`, `LinkLost`,
-//! `find_port`, `open_serial`, `find_clock_ip` and `open_wifi` in wfd-control/app.py).
+//! `find_port`, `open_serial`, `find_clock_ip` and `open_wifi` in legacy/python-app/app.py).
 //!
 //! Both transports implement [`Link`], so the clock loop (`clocklink`) doesn't care which one it
 //! drives. Everything that touches the outside world sits behind a small seam so tests can use

@@ -1,5 +1,5 @@
 // Alarms, the countdown timer and the forecast: the logic as plain C++ (no Arduino), so
-// wfd-control/tests can compile it on the PC and check it. main.cpp does the I/O around it.
+// wfd-firmware/tests can compile it on the PC and check it. main.cpp does the I/O around it.
 #pragma once
 #include <stdint.h>
 #include <stdio.h>

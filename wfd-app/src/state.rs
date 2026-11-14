@@ -1,6 +1,6 @@
 //! Shared app state: what the background threads know, served as `state` by GET /api/status.
 //!
-//! The JSON must keep the exact keys of the Python app's `state` dict (wfd-control/app.py): the
+//! The JSON keeps the keys of the original Python app's `state` dict (legacy/python-app/app.py), because the
 //! shared dashboard (wfd-firmware/clock/web/dashboard.html) reads them, and tells the app apart
 //! from the clock by the presence of `link`.
 use crate::{metrics::Metrics, release::Release, weather::{Geo, Weather}};

@@ -44,8 +44,8 @@ import mdns  # noqa: E402
 
 HERE = Path(__file__).parent
 CONFIG = HERE / "wfd_config.json"
-RELEASES = HERE.parent / "wfd-firmware" / "releases"   # firmware this app ships (make_release.py)
-WEB = HERE.parent / "wfd-firmware" / "clock" / "web"    # pages shared with the clock (dashboard, draw)
+RELEASES = HERE.parents[1] / "wfd-firmware" / "releases"   # firmware this app ships (make_release.py)
+WEB = HERE.parents[1] / "wfd-firmware" / "clock" / "web" # pages shared with the clock (dashboard, draw)
 PROTOCOL = 5                                           # firmware WFD_PROTOCOL this app speaks
 HTTP_ADDR = ("127.0.0.1", 8737)
 CH340_VID, CH340_PID = 0x1A86, 0x7523    # the clock's USB-serial chip

@@ -1,4 +1,5 @@
-//! Parity with wfd-control/font14.py and app.py scroll_frame / clean_omtext.
+//! Regression tests against fixtures generated from legacy/python-app/font14.py and app.py
+//! scroll_frame / clean_omtext (see fixtures/gen_font14_grid_icons.py).
 //! Fixture: tests/fixtures/font14_cases.json (regenerate with gen_font14_grid_icons.py).
 
 use serde_json::Value;

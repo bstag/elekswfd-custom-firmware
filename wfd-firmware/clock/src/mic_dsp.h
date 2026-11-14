@@ -1,6 +1,6 @@
 // Microphone signal processing: 256-sample frames at 8 kHz -> two spectrum columns (bass,
 // treble; 0..12) and 7 bands (0..1) for the grid. Plain C++ with no Arduino dependencies, so
-// wfd-control/tests compiles it on the PC and feeds it synthetic signals.
+// wfd-firmware/tests compiles it on the PC and feeds it synthetic signals.
 //
 // The mic's op-amp output rests near 0 V and swings upward with sound; with the ADC at 11 dB
 // its ~0.1 V dead zone hides much of the room's background hum. Loudness is measured in dB above
