@@ -122,6 +122,17 @@ socket (and says so on the dashboard if that doesn't help either). If the clock 
 isn't taking the live display, the dashboard says why: a wrong or missing clock password, or UDP
 port 4210 blocked. The display stream stops while "Update clock" uploads firmware.
 
+Every request to the clock's web API, its status (`/api/status`) included, carries the app's
+clock password (`clock_pass`) as HTTP Basic auth `admin:<password>` when one is set: a clock
+with a web password answers its status with 401 without it (older firmware, and a clock in its
+setup‑AP mode, answer either way). A 401 doesn't count as "clock not found": the app keeps the
+clock's address and the dashboard says "the clock has a web password: enter it under
+Connection (App uses password)" when the app has no password, or "wrong clock password
+(Connection, App uses password)" when the one it sent was refused. That reason stays while
+connecting keeps getting a 401 and goes once the right password connects (or the clock drops
+its password). **Update clock** fails with the same reason, and checks the new build with the
+password too.
+
 If the clock is plugged in but Windows has no driver for its USB chip (no COM port), the
 dashboard says so and links to the driver (see
 [FLASHING.md](FLASHING.md#the-usb-driver-ch340)). `cargo run --example usb_probe` in `wfd-app/`

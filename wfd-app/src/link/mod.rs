@@ -23,7 +23,7 @@ mod usb;
 mod wifi;
 
 pub use find::{
-    Net, RealNet, avoid_port, find_answering_clock_ip, find_answering_clock_ip_with,
+    Net, NotReached, Reach, RealNet, avoid_port, find_answering_clock_ip, find_answering_clock_ip_with,
     find_clock_ip, find_clock_ip_with, find_port, load_last_ip, open_wifi, open_wifi_with,
     remember_ip,
 };

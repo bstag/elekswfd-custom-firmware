@@ -9,7 +9,7 @@
 
 use crate::applog;
 use crate::ctx::Ctx;
-use crate::link::basic_auth;
+use crate::link::{NotReached, basic_auth};
 use crate::release::multipart;
 use crate::state::Update;
 use serde_json::Value;
@@ -71,16 +71,22 @@ pub fn upload_firmware(host: &str, data: &[u8], password: &str) -> Result<(), Ot
 }
 
 /// Poll the clock's /api/status until it reports build `fw` (true) or `timeout` runs out.
-pub fn wait_for_build(host: &str, fw: &str, timeout: Duration) -> bool {
+/// `password` ("" = none) goes along: a clock with a web password needs it for its status.
+pub fn wait_for_build(host: &str, fw: &str, password: &str, timeout: Duration) -> bool {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(STATUS_TIMEOUT))
         .build()
         .into();
     let url = format!("http://{host}/api/status");
+    let auth = (!password.is_empty()).then(|| basic_auth(password));
     let end = Instant::now() + timeout;
     while Instant::now() < end {
+        let mut req = agent.get(&url);
+        if let Some(a) = &auth {
+            req = req.header("Authorization", a);
+        }
         // errors are normal here: the clock is restarting / rejoining WiFi
-        if let Ok(mut r) = agent.get(&url).call()
+        if let Ok(mut r) = req.call()
             && let Ok(v) = r.body_mut().read_json::<Value>()
             && v["state"]["fw"].as_str() == Some(fw)
         {
@@ -91,12 +97,12 @@ pub fn wait_for_build(host: &str, fw: &str, timeout: Duration) -> bool {
     false
 }
 
-/// `find_clock_ip(ctx)`
-pub type FindIp = Box<dyn Fn(&Ctx) -> Option<String> + Send>;
+/// `find_answering_clock_ip(ctx)`: the address, or why there is none.
+pub type FindIp = Box<dyn Fn(&Ctx) -> Result<String, NotReached> + Send>;
 /// `upload_firmware(host, data, password)`
 pub type Upload = Box<dyn Fn(&str, &[u8], &str) -> Result<(), OtaError> + Send>;
-/// `wait_for_build(host, fw, timeout)`
-pub type WaitForBuild = Box<dyn Fn(&str, &str, Duration) -> bool + Send>;
+/// `wait_for_build(host, fw, password, timeout)`
+pub type WaitForBuild = Box<dyn Fn(&str, &str, &str, Duration) -> bool + Send>;
 
 /// `clock_report(host, password)`: the clock's report of its last upload (`state.ota`), if any.
 pub type ClockReport = Box<dyn Fn(&str, &str) -> Option<Value> + Send>;
@@ -208,8 +214,11 @@ fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
 }
 
 fn job(ctx: &Ctx, hooks: &OtaHooks) -> Result<String, String> {
-    let ip = (hooks.find_clock_ip)(ctx)
-        .ok_or("clock not found on WiFi (updates go over the network)")?;
+    let ip = (hooks.find_clock_ip)(ctx).map_err(|why| match why {
+        NotReached::NotFound => "clock not found on WiFi (updates go over the network)".to_string(),
+        // the clock is there but wants its web password: the same reason the dashboard shows
+        locked => locked.to_string(),
+    })?;
     let data = ctx.firmware;
     let want = match &ctx.release {
         Some(r) if !data.is_empty() => r.fw.clone(),
@@ -240,7 +249,7 @@ fn job(ctx: &Ctx, hooks: &OtaHooks) -> Result<String, String> {
             Err(OtaError::Refused(_)) => false,
             _ => {
                 set_update(ctx, "uploading", "waiting for the clock to restart…");
-                (hooks.wait_for_build)(&ip, &want, RESTART_WAIT)
+                (hooks.wait_for_build)(&ip, &want, &pw, RESTART_WAIT)
             }
         };
         let entry = serde_json::json!({

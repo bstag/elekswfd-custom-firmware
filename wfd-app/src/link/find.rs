@@ -9,6 +9,7 @@
 use super::{CH340_PID, CH340_VID, Clock, HTTP_TIMEOUT, HttpApi, Link, MDNS_TIMEOUT, UreqHttp, WifiLink};
 use crate::ctx::Ctx;
 use serde_json::Value;
+use std::fmt;
 use std::io;
 use std::net::ToSocketAddrs;
 use std::rc::Rc;
@@ -47,6 +48,41 @@ pub fn find_port() -> Option<String> {
 
 // ------------------------------------------------------------------ the network seam
 
+/// What the clock's status page (`GET /api/status`) said at an address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reach {
+    /// The clock answered.
+    Answers,
+    /// Something answered 401: a clock with a web password that wasn't sent, or was wrong.
+    /// (Firmware before the status page needed the password answers 200 either way.)
+    Locked,
+    /// Nothing (that looks like the clock) answered.
+    Silent,
+}
+
+/// Why the clock couldn't be reached over WiFi.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotReached {
+    /// No address answered.
+    NotFound,
+    /// The clock answered, but wants its web password; `sent`: the app sent one (a wrong one).
+    Password { sent: bool },
+}
+
+impl fmt::Display for NotReached {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            NotReached::NotFound => "clock not found on WiFi",
+            NotReached::Password { sent: false } => {
+                "the clock has a web password: enter it under Connection (App uses password)"
+            }
+            NotReached::Password { sent: true } => {
+                "wrong clock password (Connection, App uses password)"
+            }
+        })
+    }
+}
+
 /// The network as finding the clock on WiFi uses it. [`RealNet`] in the app; tests use fakes,
 /// so they neither wait on dead addresses nor depend on what answers on the LAN.
 pub trait Net {
@@ -54,8 +90,9 @@ pub trait Net {
     fn dns(&self, host: &str) -> Option<String>;
     /// A `.local` name asked for over mDNS (see [`crate::mdns::resolve`]).
     fn mdns(&self, name: &str) -> Option<String>;
-    /// Does the clock's web API answer at `ip`?
-    fn answers(&self, ip: &str) -> bool;
+    /// Does the clock's web API answer at `ip`? `password` ("" = none) goes along as HTTP Basic
+    /// auth, which a clock with a web password needs even for its status.
+    fn status(&self, ip: &str, password: &str) -> Reach;
     /// A WiFi link to `ip`, not yet checked (the caller reads the clock's settings over it).
     fn wifi_link(&self, ip: &str, password: &str, clock: Rc<dyn Clock>) -> io::Result<WifiLink>;
 }
@@ -73,11 +110,12 @@ impl Net for RealNet {
         crate::mdns::resolve(name, MDNS_TIMEOUT).map(|ip| ip.to_string())
     }
 
-    fn answers(&self, ip: &str) -> bool {
-        // (its status page needs no password)
-        UreqHttp::new(ip, "", HTTP_TIMEOUT)
-            .call("GET", "/api/status", None)
-            .is_ok_and(|(code, body)| code == 200 && body.get("state").is_some())
+    fn status(&self, ip: &str, password: &str) -> Reach {
+        match UreqHttp::new(ip, password, HTTP_TIMEOUT).call("GET", "/api/status", None) {
+            Ok((200, body)) if body.get("state").is_some() => Reach::Answers,
+            Ok((401, _)) => Reach::Locked,
+            _ => Reach::Silent,
+        }
     }
 
     fn wifi_link(&self, ip: &str, password: &str, clock: Rc<dyn Clock>) -> io::Result<WifiLink> {
@@ -160,28 +198,57 @@ pub fn remember_ip(ctx: &Ctx, ip: &str) {
     }
 }
 
+/// The app's password for the clock (`clock_pass`, "" = none) and the typed-in host.
+fn pass_and_host(ctx: &Ctx) -> (String, String) {
+    let cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
+    let text = |k: &str| cfg.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    (text("clock_pass"), text("clock_host").trim().to_string())
+}
+
 /// The clock's address for "Update clock": like [`find_clock_ip`], but only an address the
 /// clock answers on. A typed-in IP that has gone stale (the router moved the clock) gives way
 /// to the address the clock itself reported or last answered on, then to a lookup by name.
-pub fn find_answering_clock_ip(ctx: &Ctx) -> Option<String> {
+/// An address that only answers 401 (the clock wants its password) is reported as such when no
+/// other address answers.
+pub fn find_answering_clock_ip(ctx: &Ctx) -> Result<String, NotReached> {
     find_answering_clock_ip_with(ctx, &RealNet)
 }
 
 /// [`find_answering_clock_ip`] over the given network.
-pub fn find_answering_clock_ip_with(ctx: &Ctx, net: &dyn Net) -> Option<String> {
+pub fn find_answering_clock_ip_with(ctx: &Ctx, net: &dyn Net) -> Result<String, NotReached> {
+    let (pw, _) = pass_and_host(ctx);
     let mut tried: Vec<String> = Vec::new();
+    let mut locked = false;
+    let mut check = |ip: &str, tried: &mut Vec<String>| {
+        if tried.iter().any(|t| t == ip) {
+            return false;
+        }
+        tried.push(ip.to_string());
+        match net.status(ip, &pw) {
+            Reach::Answers => true,
+            Reach::Locked => {
+                locked = true;
+                false
+            }
+            Reach::Silent => false,
+        }
+    };
     let known = ctx.state().clock_ip.clone();
     for ip in [find_clock_ip_with(ctx, net), known].into_iter().flatten() {
-        if tried.contains(&ip) {
-            continue;
+        if check(&ip, &mut tried) {
+            return Ok(ip);
         }
-        if net.answers(&ip) {
-            return Some(ip);
-        }
-        tried.push(ip);
     }
-    let found = net.mdns(CLOCK_NAME)?;
-    (!tried.contains(&found) && net.answers(&found)).then_some(found)
+    if let Some(found) = net.mdns(CLOCK_NAME)
+        && check(&found, &mut tried)
+    {
+        return Ok(found);
+    }
+    Err(if locked {
+        NotReached::Password { sent: !pw.is_empty() }
+    } else {
+        NotReached::NotFound
+    })
 }
 
 fn try_wifi(
@@ -190,37 +257,46 @@ fn try_wifi(
     ip: &str,
     pw: &str,
     clock: &Rc<dyn Clock>,
-) -> Option<Box<dyn Link>> {
+) -> Result<Box<dyn Link>, NotReached> {
     let mut link = match net.wifi_link(ip, pw, Rc::clone(clock)) {
         Ok(link) => link,
         Err(e) => {
             crate::applog::log_once(&format!("can't open a UDP socket to reach the clock: {e}"));
-            return None;
+            return Err(NotReached::NotFound);
         }
     };
     if link.get_config().is_err() {
+        let locked = link.password_refused();
         link.close();
-        return None;
+        if !locked {
+            return Err(NotReached::NotFound);
+        }
+        // It is the clock, wanting its password: keep its address (no lookups while the
+        // user fixes the password).
+        remember_ip(ctx, ip);
+        return Err(NotReached::Password { sent: !pw.is_empty() });
     }
     remember_ip(ctx, ip);
-    Some(Box::new(link))
+    Ok(Box::new(link))
 }
 
 /// Connect over WiFi: find the clock, check it answers (reads its settings), remember its IP.
-pub fn open_wifi(ctx: &Ctx, clock: Rc<dyn Clock>) -> Option<Box<dyn Link>> {
+/// A clock that wants its web password (401) keeps its remembered address: it was found.
+pub fn open_wifi(ctx: &Ctx, clock: Rc<dyn Clock>) -> Result<Box<dyn Link>, NotReached> {
     open_wifi_with(ctx, clock, &RealNet)
 }
 
 /// [`open_wifi`] over the given network.
-pub fn open_wifi_with(ctx: &Ctx, clock: Rc<dyn Clock>, net: &dyn Net) -> Option<Box<dyn Link>> {
-    let ip = find_clock_ip_with(ctx, net)?;
-    let (pw, host) = {
-        let cfg = ctx.cfg.lock().unwrap_or_else(|e| e.into_inner());
-        let text = |k: &str| cfg.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        (text("clock_pass"), text("clock_host").trim().to_string())
-    };
-    if let Some(link) = try_wifi(ctx, net, &ip, &pw, &clock) {
-        return Some(link);
+pub fn open_wifi_with(
+    ctx: &Ctx,
+    clock: Rc<dyn Clock>,
+    net: &dyn Net,
+) -> Result<Box<dyn Link>, NotReached> {
+    let ip = find_clock_ip_with(ctx, net).ok_or(NotReached::NotFound)?;
+    let (pw, host) = pass_and_host(ctx);
+    match try_wifi(ctx, net, &ip, &pw, &clock) {
+        Err(NotReached::NotFound) => {}
+        done => return done,
     }
     {
         let mut st = ctx.state();
@@ -236,5 +312,5 @@ pub fn open_wifi_with(ctx: &Ctx, clock: Rc<dyn Clock>, net: &dyn Net) -> Option<
             return try_wifi(ctx, net, &found, &pw, &clock);
         }
     }
-    None
+    Err(NotReached::NotFound)
 }

@@ -457,6 +457,76 @@ fn sends_that_fail_for_good_are_reported() {
     assert!(problem.contains("can't send it the live display"), "{problem:?}");
 }
 
+/// The clock on WiFi has the web password "secret"; the app finds it through its own finder.
+fn locked_clock(app_password: &str, seconds: f64) -> (std::sync::Arc<wfd_app::ctx::Ctx>, Sim) {
+    let ctx = app();
+    set_cfg(&ctx, json!({"clock_pass": app_password}));
+    let s = Sim::new(&ctx, seconds).wifi("");
+    {
+        let mut st = s.st.borrow_mut();
+        st.real_find = true;
+        st.clock_web_pass = "secret".into();
+    }
+    (ctx, s)
+}
+
+#[test]
+fn a_clock_with_a_password_the_app_lacks_says_so() {
+    let (ctx, s) = locked_clock("", 6.0);
+    ctx.state().clock_ip = Some("10.0.0.9".into());
+    s.run();
+    let st = ctx.state();
+    assert!(!st.connected);
+    assert_eq!(
+        st.link_problem.as_deref(),
+        Some("the clock has a web password: enter it under Connection (App uses password)")
+    );
+    assert_eq!(st.clock_ip.as_deref(), Some("10.0.0.9"), "the address is kept");
+    assert!(s.st.borrow().packets.is_empty(), "nothing streamed");
+}
+
+#[test]
+fn a_wrong_clock_password_says_so() {
+    let (ctx, s) = locked_clock("nope", 6.0);
+    s.run();
+    let st = ctx.state();
+    assert!(!st.connected);
+    assert_eq!(
+        st.link_problem.as_deref(),
+        Some("wrong clock password (Connection, App uses password)")
+    );
+    assert_eq!(st.clock_ip.as_deref(), Some("10.0.0.9"), "found by name, and kept");
+}
+
+#[test]
+fn the_right_password_connects_and_clears_the_reason() {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let s2 = std::rc::Rc::clone(&seen);
+    let (ctx, s) = locked_clock("nope", 10.0);
+    let s = s
+        .event(4.0, move |s| {
+            *s2.borrow_mut() = s.ctx.state().link_problem.clone();
+            set_cfg(&s.ctx, json!({"clock_pass": "secret"}));
+        });
+    s.run();
+    assert!(seen.borrow().as_deref().is_some_and(|p| p.contains("wrong clock password")));
+    let st = ctx.state();
+    assert!(st.connected && st.link.as_deref() == Some("wifi"));
+    assert_eq!(st.link_problem, None);
+    let heads: BTreeSet<String> = s.st.borrow().packets.iter().map(|(h, _)| h.clone()).collect();
+    assert_eq!(heads, BTreeSet::from(["WFD1 secret".to_string()]));
+}
+
+#[test]
+fn a_clock_that_drops_its_password_clears_the_reason() {
+    let (ctx, s) = locked_clock("", 8.0);
+    let s = s.event(4.0, |s| s.st.borrow_mut().clock_web_pass.clear());
+    s.run();
+    let st = ctx.state();
+    assert!(st.connected);
+    assert_eq!(st.link_problem, None);
+}
+
 #[test]
 fn a_rejected_stream_is_reported() {
     // the clock answers HTTP but throws our packets away: wrong clock password

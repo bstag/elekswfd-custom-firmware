@@ -12,17 +12,20 @@ use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
 use wfd_app::link::{
-    Clock, Datagram, HttpApi, LinkLost, Net, RealClock, WifiLink, find_answering_clock_ip_with,
+    Clock, Datagram, HttpApi, LinkLost, Net, NotReached, Reach, RealClock, WifiLink,
+    find_answering_clock_ip_with,
     find_clock_ip_with, open_wifi, open_wifi_with,
 };
 
-/// A network where the clock answers at `answering` addresses only; the name lookups give
-/// `dns` / `mdns`. Every question asked is recorded in `asked`.
+/// A network where the clock answers at `answering` addresses only, and answers 401 at `locked`
+/// ones (it has a web password the app doesn't send); the name lookups give `dns` / `mdns`.
+/// Every question asked is recorded in `asked`.
 #[derive(Default)]
 struct FakeNet {
     dns: Option<&'static str>,
     mdns: Option<&'static str>,
     answering: Vec<&'static str>,
+    locked: Vec<&'static str>,
     asked: RefCell<Vec<String>>,
 }
 
@@ -41,15 +44,27 @@ impl Datagram for NoUdp {
     }
 }
 
-/// The clock's status page at one address: there, or nothing answering.
-struct Status(bool);
+/// The clock's status page at one address.
+struct Status(Reach);
 
 impl HttpApi for Status {
     fn call(&mut self, _m: &str, _p: &str, _b: Option<&Value>) -> Result<(u16, Value), LinkLost> {
-        if self.0 {
-            Ok((200, json!({"state": {"fw": "F"}, "config": {"brightness": 6}})))
+        match self.0 {
+            Reach::Answers => Ok((200, json!({"state": {"fw": "F"}, "config": {"brightness": 6}}))),
+            Reach::Locked => Ok((401, Value::Null)),
+            Reach::Silent => Err(LinkLost("timed out".into())),
+        }
+    }
+}
+
+impl FakeNet {
+    fn reach(&self, ip: &str) -> Reach {
+        if self.answering.contains(&ip) {
+            Reach::Answers
+        } else if self.locked.contains(&ip) {
+            Reach::Locked
         } else {
-            Err(LinkLost("timed out".into()))
+            Reach::Silent
         }
     }
 }
@@ -65,15 +80,16 @@ impl Net for FakeNet {
         self.mdns.map(str::to_string)
     }
 
-    fn answers(&self, ip: &str) -> bool {
-        self.asked.borrow_mut().push(format!("answers {ip}"));
-        self.answering.contains(&ip)
+    fn status(&self, ip: &str, password: &str) -> Reach {
+        let with = if password.is_empty() { String::new() } else { format!(" with {password}") };
+        self.asked.borrow_mut().push(format!("answers {ip}{with}"));
+        self.reach(ip)
     }
 
     fn wifi_link(&self, ip: &str, password: &str, clock: Rc<dyn Clock>) -> io::Result<WifiLink> {
         self.asked.borrow_mut().push(format!("link {ip}"));
-        let up = self.answering.contains(&ip);
-        Ok(WifiLink::with(ip, password, Box::new(NoUdp), Box::new(Status(up)), clock))
+        let status = Status(self.reach(ip));
+        Ok(WifiLink::with(ip, password, Box::new(NoUdp), Box::new(status), clock))
     }
 }
 
@@ -142,7 +158,7 @@ fn a_stale_address_is_forgotten() {
     let ctx = app();
     ctx.state().clock_ip = Some("192.0.2.1".into()); // nothing answers there
     let net = FakeNet::default();
-    assert!(open_wifi_with(&ctx, real_clock(), &net).is_none());
+    assert_eq!(open_wifi_with(&ctx, real_clock(), &net).err(), Some(NotReached::NotFound));
     assert_eq!(ctx.state().clock_ip, None, "next time: look it up by name");
     assert_eq!(net.asked(), ["link 192.0.2.1"], "a remembered address doesn't fall back to the name");
 }
@@ -173,7 +189,7 @@ fn an_update_skips_addresses_that_do_not_answer() {
     set_cfg(&ctx, json!({"clock_host": "192.0.2.1"}));
     ctx.state().clock_ip = Some("192.0.2.2".into());
     let net = FakeNet { mdns: Some("10.0.0.7"), answering: vec!["10.0.0.7"], ..Default::default() };
-    assert_eq!(find_answering_clock_ip_with(&ctx, &net).as_deref(), Some("10.0.0.7"));
+    assert_eq!(find_answering_clock_ip_with(&ctx, &net), Ok("10.0.0.7".to_string()));
     assert_eq!(
         net.asked(),
         ["answers 192.0.2.1", "answers 192.0.2.2", "mdns wfd-clock.local", "answers 10.0.0.7"]
@@ -181,11 +197,55 @@ fn an_update_skips_addresses_that_do_not_answer() {
 
     // and when nothing answers anywhere, there is no address
     let net = FakeNet { mdns: Some("192.0.2.1"), ..Default::default() };
-    assert_eq!(find_answering_clock_ip_with(&ctx, &net), None);
+    assert_eq!(find_answering_clock_ip_with(&ctx, &net), Err(NotReached::NotFound));
     assert_eq!(
         net.asked(),
         ["answers 192.0.2.1", "answers 192.0.2.2", "mdns wfd-clock.local"],
         "an address already tried isn't asked again"
+    );
+}
+
+#[test]
+fn a_clock_that_wants_its_password_is_found_but_refuses() {
+    // a clock with a web password answers its status with 401 unless the password comes along
+    let ctx = app();
+    set_cfg(&ctx, json!({"clock_host": "10.0.0.9"}));
+    ctx.state().clock_ip = Some("10.0.0.9".into());
+    let net = FakeNet { mdns: Some("10.0.0.7"), locked: vec!["10.0.0.9"], ..Default::default() };
+    assert_eq!(
+        open_wifi_with(&ctx, real_clock(), &net).err(),
+        Some(NotReached::Password { sent: false })
+    );
+    assert_eq!(ctx.state().clock_ip.as_deref(), Some("10.0.0.9"), "the address is kept");
+    assert_eq!(net.asked(), ["link 10.0.0.9"], "no lookup by name: the clock was found");
+
+    set_cfg(&ctx, json!({"clock_pass": "wrong"}));
+    assert_eq!(
+        find_answering_clock_ip_with(&ctx, &net),
+        Err(NotReached::Password { sent: true })
+    );
+    assert!(net.asked().contains(&"answers 10.0.0.9 with wrong".to_string()), "{:?}", net.asked());
+}
+
+#[test]
+fn an_answering_address_beats_a_locked_one() {
+    let ctx = app();
+    set_cfg(&ctx, json!({"clock_host": "192.0.2.1", "clock_pass": "pw"}));
+    let net = FakeNet { mdns: Some("10.0.0.7"), answering: vec!["10.0.0.7"], locked: vec!["192.0.2.1"], ..Default::default() };
+    assert_eq!(find_answering_clock_ip_with(&ctx, &net), Ok("10.0.0.7".to_string()));
+    assert_eq!(net.asked(), ["answers 192.0.2.1 with pw", "mdns wfd-clock.local", "answers 10.0.0.7 with pw"]);
+}
+
+#[test]
+fn the_reasons_read_as_the_dashboard_shows_them() {
+    assert_eq!(NotReached::NotFound.to_string(), "clock not found on WiFi");
+    assert_eq!(
+        NotReached::Password { sent: false }.to_string(),
+        "the clock has a web password: enter it under Connection (App uses password)"
+    );
+    assert_eq!(
+        NotReached::Password { sent: true }.to_string(),
+        "wrong clock password (Connection, App uses password)"
     );
 }
 
@@ -196,6 +256,6 @@ fn an_update_skips_addresses_that_do_not_answer() {
 fn a_stale_address_is_forgotten_on_the_real_network() {
     let ctx = app();
     ctx.state().clock_ip = Some("192.0.2.1".into()); // TEST-NET-1: nothing answers there
-    assert!(open_wifi(&ctx, real_clock()).is_none());
+    assert!(open_wifi(&ctx, real_clock()).is_err());
     assert_eq!(ctx.state().clock_ip, None);
 }

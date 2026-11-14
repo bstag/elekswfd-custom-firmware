@@ -44,6 +44,8 @@ pub struct WifiLink {
     /// display packets in a row that didn't go out, and why the last one didn't
     send_failures: u32,
     send_error: Option<String>,
+    /// the last status read was refused with 401 (the clock wants its web password)
+    password_refused: bool,
 }
 
 impl WifiLink {
@@ -87,7 +89,13 @@ impl WifiLink {
             problem: None,
             send_failures: 0,
             send_error: None,
+            password_refused: false,
         }
+    }
+
+    /// Did the clock refuse the last status read for want of the right web password (401)?
+    pub fn password_refused(&self) -> bool {
+        self.password_refused
     }
 
     /// A display packet didn't go out (e.g. Windows' "no buffer space", os error 10055). That
@@ -220,6 +228,7 @@ impl Link for WifiLink {
 
     fn get_config(&mut self) -> Result<Option<Map<String, Value>>, LinkLost> {
         let (code, body) = self.http.call("GET", "/api/status", None)?;
+        self.password_refused = code == 401;
         if code != 200 || !truthy(&body) {
             return Err(LinkLost(format!("status: HTTP {code}")));
         }
