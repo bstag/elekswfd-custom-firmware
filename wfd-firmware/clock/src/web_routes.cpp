@@ -31,8 +31,9 @@ static String esc(const String &s) {   // HTML-escape text going into a page or 
   return o;
 }
 
-// Optional web password (serial: WEBPASS <pass>, empty = open). Guards the pages that change
-// settings or flash firmware once the clock is on your LAN; the first-run setup AP stays open.
+// Optional web password (serial: WEBPASS <pass>, empty = open). Guards every page and API call
+// once the clock is on your LAN (401 without it), including the reads (/api/status,
+// GET /api/frames) that show the WiFi name, ZIP and alarms; the first-run setup AP stays open.
 static bool webAuthed() {
   if (net.apMode) return true;
   if (net.webPass.length() == 0 || web.authenticate("admin", net.webPass.c_str())) return true;
@@ -262,6 +263,7 @@ static void sendJson(int code, JsonDocument &doc) {
 }
 
 static void handleApiStatus() {
+  if (!webAuthed()) return;                        // names the WiFi, the ZIP, the alarms
   JsonDocument doc;
   stateJson(doc["state"].to<JsonObject>());
   configJson(doc["config"].to<JsonObject>());
@@ -382,6 +384,7 @@ void startWebRoutes() {
   web.on("/api/set", HTTP_POST, handleApiSet);
   web.on("/api/frames", HTTP_POST, handleApiFrames);
   web.on("/api/frames", HTTP_GET, []() {         // the stored drawing, for the animator to start from
+    if (!webAuthed()) return;
     JsonDocument out;
     JsonArray fr = out["frames"].to<JsonArray>();
     for (int i = 0; i < standalone.gaN; i++) {

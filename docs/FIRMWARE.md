@@ -113,8 +113,12 @@ Driven by the PC app; also handy for debugging over a serial monitor.
 | `POST /api/set` | JSON: change settings |
 | `POST /api/frames` | JSON: store drawn grid frames `{"frames": [[r0..r6], ...], "fps": 8, "frame": false}` (≤ 80) and play them when the app is off |
 
-Anyone on your LAN can reach these pages. Set `WEBPASS` over USB to put `/control`,
-`/update` and `/wifi` behind HTTP basic auth. The first-run setup AP is always open.
+Anyone on your LAN can reach these pages. Set `WEBPASS` over USB to put every page and API
+call behind HTTP basic auth (user `admin`): the pages, `/update`, `/wifi`, `POST /api/set`,
+`/api/preview`, and also the reads `GET /api/status` and `GET /api/frames` (the status names
+your WiFi network, ZIP and alarms). Without the password they answer `401`. The dashboard and
+the animator are served behind the same login, so the browser sends it on their API calls.
+With no password set, and always in the first-run setup AP, everything is open.
 
 In AP (setup) mode the clock is `192.168.4.1` and a DNS captive portal redirects to the
 setup page.
@@ -127,7 +131,9 @@ Same shape as the PC app's API, so one dashboard can talk to either.
 `heap_free`, `time`, `ntp`, `wifi {ssid, ip, rssi}`, `weather {fresh, temp, unit, cond}`,
 `app_connected`, `message` (what the message line shows), `stored_frames`, `grid_rows`
 (the current grid frame, 7 row bytes), `mic {active, level, bass, treble}` and
-`net {host, udp_port, udp_packets, udp_rejected, key_required}`.
+`net {host, udp_port, udp_packets, udp_rejected, key_required}`. When `WEBPASS` is set (and
+the clock isn't in setup-AP mode) it needs the web password like every other call, and
+answers `401` without it; so does `GET /api/frames`.
 
 `POST /api/set` takes a JSON object of settings. It needs the header `X-WFD: 1`, which stops
 other web pages posting to the clock from your browser, plus the web password if `WEBPASS`
@@ -159,7 +165,7 @@ is set. Every key is checked first; if any is bad nothing changes, and you get a
 | `alert` | bool | `false` stops an alarm or timer alert; `true` starts a test alert; reads back whether one is going off |
 
 ```bash
-curl http://<clock-ip>/api/status
+curl http://<clock-ip>/api/status            # with a WEBPASS: curl -u admin:<pass> ...
 curl -X POST -H "X-WFD: 1" -H "Content-Type: application/json" -d '{"standalone_anim":"rain","standalone_fps":12}' http://<clock-ip>/api/set
 ```
 
