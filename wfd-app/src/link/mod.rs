@@ -168,6 +168,12 @@ pub trait Link {
     fn flush(&mut self) -> Result<(), LinkLost>;
     /// The clock's own settings; None when it didn't answer (USB).
     fn get_config(&mut self) -> Result<Option<Map<String, Value>>, LinkLost>;
+    /// The regular settings read, made once a frame until it answers. Ok(None): asked, no
+    /// answer yet. A link that can ask without holding up the display does (WiFi); the others
+    /// just read.
+    fn poll_config(&mut self) -> Result<Option<Option<Map<String, Value>>>, LinkLost> {
+        self.get_config().map(Some)
+    }
     /// Change clock settings: Ok(warning) or Err(per-key errors).
     fn set_config(&mut self, patch: &Map<String, Value>) -> Result<ClockReply, LinkLost>;
     /// Store a built-in grid animation for the clock to run itself.

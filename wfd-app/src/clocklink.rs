@@ -366,8 +366,22 @@ impl ClockLink {
 
     /// Read the clock's settings into `state.clock`. Ok(false): it didn't answer (USB).
     fn read_clock_config(&mut self) -> Result<bool, LinkLost> {
+        let config = self.link().get_config()?;
+        Ok(self.take_clock_config(config))
+    }
+
+    /// The regular settings read. Over WiFi it doesn't wait for the clock: it asks, and takes
+    /// the answer on a later frame (until then `last_cfg` stays, so every frame looks again).
+    fn poll_clock_config(&mut self) -> Result<(), LinkLost> {
+        if let Some(config) = self.link().poll_config()? {
+            self.take_clock_config(config);
+        }
+        Ok(())
+    }
+
+    /// Put a settings read into `state.clock`. false: the clock didn't answer (USB).
+    fn take_clock_config(&mut self, config: Option<serde_json::Map<String, serde_json::Value>>) -> bool {
         let link = self.link();
-        let config = link.get_config()?;
         let (fw, protocol) = link.version();
         let ip = link.clock_ip();
         let pw_set = link.web_password_set();
@@ -388,7 +402,7 @@ impl ClockLink {
             }
         }
         self.last_cfg = self.clock.now();
-        Ok(answered)
+        answered
     }
 
     /// Answer the web server's CFGSET requests (then re-read the clock's settings).
@@ -538,7 +552,7 @@ impl ClockLink {
         self.run_clock_requests()?;
         if self.clock.now() - self.last_cfg > 5.0 {
             // pick up changes made on the clock itself
-            if let Err(e) = self.read_clock_config() {
+            if let Err(e) = self.poll_clock_config() {
                 // Over WiFi one missed answer isn't a lost clock (it is busy for seconds when it
                 // fetches the weather): keep going and ask again soon. The link ends itself when
                 // nothing has answered for a while (`alive`).

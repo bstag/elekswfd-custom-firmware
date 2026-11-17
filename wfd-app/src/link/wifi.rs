@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use std::io;
 use std::net::UdpSocket;
 use std::rc::Rc;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
 const SLOW_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -45,6 +46,44 @@ pub struct WifiLink {
     send_error: Option<String>,
     /// the last status read was refused with 401 (the clock wants its web password)
     password_refused: bool,
+    /// reads the status on its own thread for [`Link::poll_config`] (None: read in place)
+    poller: Option<StatusPoller>,
+}
+
+type HttpReply = Result<(u16, Value), LinkLost>;
+
+/// The regular status read on a thread of its own. The clock's web server answers one client at
+/// a time, so a read can wait seconds behind another client (a browser on the clock's page);
+/// waiting for it in the display loop stopped the stream, and after 2 s without it the clock
+/// shows its own display. The thread ends when the link (the `ask` sender) is dropped.
+struct StatusPoller {
+    ask: Sender<()>,
+    answers: Receiver<HttpReply>,
+    /// a read is on its way
+    waiting: bool,
+    /// the read on its way began before a settings change or a newer read: not to be used
+    stale: bool,
+}
+
+impl StatusPoller {
+    fn spawn(mut http: impl HttpApi + Send + 'static) -> io::Result<Self> {
+        let (ask, asked) = mpsc::channel::<()>();
+        let (answer, answers) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("clock-status".into())
+            .spawn(move || {
+                for () in asked {
+                    if answer.send(http.call("GET", "/api/status", None)).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(StatusPoller { ask, answers, waiting: false, stale: false })
+    }
+
+    fn outdated(&mut self) {
+        self.stale = self.waiting;
+    }
 }
 
 impl WifiLink {
@@ -52,13 +91,18 @@ impl WifiLink {
     pub fn new(ip: &str, password: &str, clock: Rc<dyn Clock>) -> io::Result<Self> {
         let sock = UdpDatagram(Some(UdpSocket::bind("0.0.0.0:0")?));
         let http = UreqHttp::new(ip, password, HTTP_TIMEOUT);
-        Ok(Self::with(
-            ip,
-            password,
-            Box::new(sock),
-            Box::new(http),
-            clock,
-        ))
+        Self::with(ip, password, Box::new(sock), Box::new(http), clock)
+            .with_background_status(UreqHttp::new(ip, password, HTTP_TIMEOUT))
+    }
+
+    /// Make the regular status read ([`Link::poll_config`]) over `http` on a thread of its own,
+    /// so the display stream doesn't wait for it.
+    pub fn with_background_status(
+        mut self,
+        http: impl HttpApi + Send + 'static,
+    ) -> io::Result<Self> {
+        self.poller = Some(StatusPoller::spawn(http)?);
+        Ok(self)
     }
 
     /// A link over the given socket and HTTP seams (tests use fakes).
@@ -89,7 +133,33 @@ impl WifiLink {
             send_failures: 0,
             send_error: None,
             password_refused: false,
+            poller: None,
         }
+    }
+
+    /// Take in a status reply: the clock's settings, and what it says about itself and the link.
+    fn take_status(&mut self, reply: HttpReply) -> Result<Option<Map<String, Value>>, LinkLost> {
+        let (code, body) = reply?;
+        self.password_refused = code == 401;
+        if code != 200 || !truthy(&body) {
+            return Err(LinkLost(format!("status: HTTP {code}")));
+        }
+        let (Some(st), Some(Value::Object(config))) = (body.get("state"), body.get("config"))
+        else {
+            return Err(LinkLost("status: no state/config".into()));
+        };
+        self.ok_at = self.clock.now();
+        self.clock_ntp = st.get("ntp").is_some_and(truthy);
+        self.pw_set = st.get("net").and_then(|n| n.get("key_required")).and_then(Value::as_bool);
+        self.fw = st.get("fw").and_then(Value::as_str).map(str::to_owned);
+        self.protocol = st
+            .get("protocol")
+            .and_then(Value::as_u64)
+            .and_then(|p| u32::try_from(p).ok());
+        let config = config.clone();
+        let st = st.clone();
+        self.check_stream(&st);
+        Ok(Some(config))
     }
 
     /// Did the clock refuse the last status read for want of the right web password (401)?
@@ -226,30 +296,40 @@ impl Link for WifiLink {
     }
 
     fn get_config(&mut self) -> Result<Option<Map<String, Value>>, LinkLost> {
-        let (code, body) = self.http.call("GET", "/api/status", None)?;
-        self.password_refused = code == 401;
-        if code != 200 || !truthy(&body) {
-            return Err(LinkLost(format!("status: HTTP {code}")));
+        if let Some(p) = &mut self.poller {
+            p.outdated(); // this read is the newer one
         }
-        let (Some(st), Some(Value::Object(config))) = (body.get("state"), body.get("config"))
-        else {
-            return Err(LinkLost("status: no state/config".into()));
+        let reply = self.http.call("GET", "/api/status", None);
+        self.take_status(reply)
+    }
+
+    fn poll_config(&mut self) -> Result<Option<Option<Map<String, Value>>>, LinkLost> {
+        let Some(p) = &mut self.poller else {
+            return self.get_config().map(Some);
         };
-        self.ok_at = self.clock.now();
-        self.clock_ntp = st.get("ntp").is_some_and(truthy);
-        self.pw_set = st.get("net").and_then(|n| n.get("key_required")).and_then(Value::as_bool);
-        self.fw = st.get("fw").and_then(Value::as_str).map(str::to_owned);
-        self.protocol = st
-            .get("protocol")
-            .and_then(Value::as_u64)
-            .and_then(|p| u32::try_from(p).ok());
-        let config = config.clone();
-        let st = st.clone();
-        self.check_stream(&st);
-        Ok(Some(config))
+        let gone = || LinkLost("the status thread ended".into());
+        if !p.waiting {
+            p.ask.send(()).map_err(|_| gone())?;
+            p.waiting = true;
+            p.stale = false;
+            return Ok(None);
+        }
+        let reply = match p.answers.try_recv() {
+            Ok(reply) => reply,
+            Err(TryRecvError::Empty) => return Ok(None),
+            Err(TryRecvError::Disconnected) => return Err(gone()),
+        };
+        p.waiting = false;
+        if p.stale {
+            return Ok(None); // asked before the settings changed: ask again
+        }
+        self.take_status(reply).map(Some)
     }
 
     fn set_config(&mut self, patch: &Map<String, Value>) -> Result<ClockReply, LinkLost> {
+        if let Some(p) = &mut self.poller {
+            p.outdated();
+        }
         let (code, body) =
             self.http
                 .call("POST", "/api/set", Some(&Value::Object(patch.clone())))?;
@@ -282,6 +362,9 @@ impl Link for WifiLink {
     fn store_frames(&mut self, frames: &[[u8; 7]], fps: u32, frame: bool) -> Result<(), LinkLost> {
         let frames: Vec<&[u8; 7]> = frames.iter().take(80).collect();
         let body = json!({"frames": frames, "fps": fps, "frame": frame});
+        if let Some(p) = &mut self.poller {
+            p.outdated();
+        }
         self.http
             .call("POST", "/api/frames", Some(&body))
             .map(|_| ())

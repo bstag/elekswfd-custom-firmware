@@ -308,3 +308,53 @@ fn wifi_health_and_settings() {
     clock.sleep(15.0);
     assert!(!l.alive(), "no good answer for 15 s: gone");
 }
+
+/// The clock's status as the background reader fetches it: each call waits for the test to
+/// hand over a reply (a clock that is busy with another client).
+struct SlowStatus(std::sync::mpsc::Receiver<Value>);
+
+impl HttpApi for SlowStatus {
+    fn call(&mut self, _m: &str, _p: &str, _b: Option<&Value>) -> Result<(u16, Value), LinkLost> {
+        match self.0.recv() {
+            Ok(body) => Ok((200, body)),
+            Err(_) => Err(LinkLost("test over".into())),
+        }
+    }
+}
+
+/// `poll_config` until it has an answer (the reader thread needs a moment).
+fn poll_until_answer(l: &mut WifiLink) -> Option<Map<String, Value>> {
+    for _ in 0..500 {
+        if let Some(config) = l.poll_config().unwrap() {
+            return config;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    panic!("no status answer");
+}
+
+#[test]
+fn wifi_status_poll_does_not_hold_up_the_display() {
+    let status = |b: u8| json!({"state": {"fw": "A"}, "config": {"brightness": b}});
+    let (reply, replies) = std::sync::mpsc::channel();
+    let (l, sent, _) = wifi("", vec![Ok((200, json!({"ok": true})))]);
+    let mut l = l.with_background_status(SlowStatus(replies)).unwrap();
+
+    // the clock doesn't answer: the poll comes straight back and frames keep going out
+    for _ in 0..3 {
+        assert_eq!(l.poll_config().unwrap(), None);
+        l.send("SPEC 1").unwrap();
+        l.flush().unwrap();
+    }
+    assert_eq!(sent.borrow().len(), 3);
+    reply.send(status(4)).unwrap();
+    assert_eq!(poll_until_answer(&mut l), Some(obj(json!({"brightness": 4}))));
+    assert_eq!(l.version().0, Some("A".into()));
+
+    // a read that began before a settings change is thrown away and made again
+    assert_eq!(l.poll_config().unwrap(), None);
+    assert_eq!(l.set_config(&obj(json!({"brightness": 1}))).unwrap(), Ok(None));
+    reply.send(status(4)).unwrap(); // what the clock had before the change
+    reply.send(status(1)).unwrap();
+    assert_eq!(poll_until_answer(&mut l), Some(obj(json!({"brightness": 1}))));
+}
