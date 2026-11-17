@@ -113,7 +113,7 @@ On first boot with no saved WiFi, the clock hosts an access point **"WFD-Setup"*
   10 minutes without a save the clock restarts and tries the saved network again.
 
 The clock also opens **WFD-Setup** by itself when it has never joined since power-on and
-the saved network has been turning it away for 3 minutes (a wrong password). A network that
+the saved network has been turning it away for 10 minutes (a wrong password). A network that
 simply isn't found (router off, out of range) is retried forever instead, so a power cut
 doesn't push the clock into setup.
 

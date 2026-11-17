@@ -53,13 +53,20 @@ void setup() {
 
 void loop() {
   static uint32_t last = 0;
+  static LoopStat cur;                 // this second so far
+  static uint32_t statAt = 0;
+  const uint32_t t0 = micros();
+  const uint32_t udp0 = net.udpPackets + net.udpRejected;
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n' || c == '\r') { if (line.length()) { handle(line); line = ""; } }
     else if (line.length() < 1024) line += c;   // room for CFGSET {json}
   }
+  const uint32_t t1 = micros();
   wifiLoop();
+  const uint32_t t2 = micros();
   if (net.up) netPoll();
+  const uint32_t t3 = micros();
   checkButtons();
   // advance stored animations only when the app is off
   bool redraw = false;
@@ -90,8 +97,24 @@ void loop() {
     if (!infoOn()) { disp.infoText = ""; redraw = true; }
     else if (disp.infoText.length() > 6 && millis() - disp.infoStepAt >= 350) { disp.infoStepAt = millis(); disp.infoPos++; redraw = true; }
   }
+  const uint32_t t4 = micros();
   if (redraw || disp.dirty) {          // one I2C flush per pass, however many commands arrived
     disp.dirty = false;
     draw();
+  }
+  const uint32_t t5 = micros();
+  cur.hz++;
+  cur.serial = max(cur.serial, t1 - t0);
+  cur.web = max(cur.web, t2 - t1);
+  cur.net = max(cur.net, t3 - t2);
+  cur.work = max(cur.work, t4 - t3);
+  cur.draw = max(cur.draw, t5 - t4);
+  cur.pass = max(cur.pass, t5 - t0);
+  cur.udpPerPass = max(cur.udpPerPass, net.udpPackets + net.udpRejected - udp0);
+  if (millis() - statAt >= 1000) {     // publish the finished second
+    statAt = millis();
+    cur.worstPass = max(loopStat.worstPass, cur.pass);
+    loopStat = cur;
+    cur = LoopStat();
   }
 }

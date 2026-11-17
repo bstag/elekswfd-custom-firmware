@@ -5,6 +5,7 @@
 #include <ESPmDNS.h>
 #include <DNSServer.h>
 #include <time.h>
+#include <esp_wifi.h>
 #include "clock_state.h"
 #include "clock_display.h"
 #include "nvs_store.h"
@@ -13,6 +14,9 @@
 #include "web_routes.h"
 #include "wifi_link.h"
 
+static const wifi_power_t WIFI_TX_POWER = WIFI_POWER_15dBm;
+uint32_t radioRefreshMs = 0;            // a diagnostic (WIFIRADIO refresh <s>): off unless asked for
+uint32_t radioRefreshes = 0;
 static DNSServer dns;
 static bool ntpInit = false;
 static uint32_t lastNtp = 0;
@@ -46,7 +50,10 @@ static bool wifiRejected() {
   return r == WIFI_REASON_AUTH_EXPIRE || r == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
          r == WIFI_REASON_AUTH_FAIL || r == WIFI_REASON_HANDSHAKE_TIMEOUT;
 }
-static const uint32_t REJECTED_MS = 180000;   // turned away for this long since boot: open the setup network
+// Turned away for this long since boot: open the setup network. Long on purpose: a join that
+// keeps failing for other reasons (a weak or busy access point) looks the same to the radio, and
+// opening the setup network takes the clock off WiFi until someone acts or it gives up.
+static const uint32_t REJECTED_MS = 600000;
 
 // Joining the saved network is one mechanism: auto-reconnect (wifiBegin) starts the next attempt
 // from the WiFi task whenever one ends with a disconnect event. It doesn't retry some reasons (a
@@ -72,6 +79,11 @@ void wifiBegin() {
     WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { wifiAssoc = true; wifiProgressAt = millis(); },
                  ARDUINO_EVENT_WIFI_STA_CONNECTED);
     wifiProgressAt = millis();
+    // A mesh has several access points with the same name. By default the radio joins the first
+    // one it hears, which can be the far one (seen here: joined at -70 dBm with a -30 dBm node in
+    // the room, and barely answered). Scan every channel and take the strongest.
+    WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+    WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
     WiFi.begin(ssid.c_str(), prefString(P_PASS).c_str());
   } else {
     startAP();
@@ -95,6 +107,19 @@ void wifiLoop() {
   }
   if (WiFi.status() == WL_CONNECTED) {
     wifiProgressAt = millis();          // a drop starts the WIFI_STUCK_MS wait from here
+    // Transmit below the radio's maximum. At the boot default (19.5 dBm) this clock's link went
+    // bad 4-7 minutes after every boot: 10-50% of packets lost and multi-second replies under
+    // load, until a restart, while the signal stayed strong. At 18 dBm and below it stays clean
+    // (measured over 16+ minutes each way). 15 dBm leaves a margin and is plenty for a clock
+    // in the same house as its access point. Set once per connection: the driver keeps it.
+    static bool powerSet = false;
+    if (!powerSet) powerSet = WiFi.setTxPower(WIFI_TX_POWER);
+    static uint32_t refreshedAt = 0;
+    if (radioRefreshMs && millis() - refreshedAt >= radioRefreshMs) {
+      refreshedAt = millis();
+      int8_t p = 0;                     // writing the same value back makes the PHY set its TX power up again
+      if (esp_wifi_get_max_tx_power(&p) == ESP_OK && esp_wifi_set_max_tx_power(p) == ESP_OK) radioRefreshes++;
+    }
     if (!ntpInit) {
       configTzTime(net.tz.c_str(), "pool.ntp.org", "time.nist.gov", "time.google.com");
       startWebRoutes();

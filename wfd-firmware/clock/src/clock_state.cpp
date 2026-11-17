@@ -2,6 +2,7 @@
 #include "clock_state.h"
 
 Display disp;
+LoopStat loopStat;
 LiveFrame live;
 Standalone standalone;
 Net net;

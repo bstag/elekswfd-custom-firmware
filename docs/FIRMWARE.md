@@ -236,6 +236,30 @@ it would show. `/api/status` reports `state.timer` (seconds left) and `state.ale
 texts, reading the forecast) is `src/extras.h`, compiled and tested on the PC like the other
 engines.
 
+## WiFi radio settings
+
+Two settings matter for a reliable link, both applied by `wifi_link.cpp`:
+
+- **Transmit power is 15 dBm, not the radio's maximum.** At the boot default (19.5 dBm) the
+  clock's link went bad 4-7 minutes after every boot: 10-50% of packets lost and multi-second
+  replies whenever traffic was flowing, until a restart, with the signal still strong and the
+  main loop healthy. One step lower (18 dBm) and below it stayed clean. The cause was found by
+  elimination (it isn't the mic, the channel width, power saving, the access point choice or the
+  firmware version); why the top power step does this on this board isn't known.
+- **The clock joins the strongest access point with the saved name**
+  (`WIFI_ALL_CHANNEL_SCAN` + `WIFI_CONNECT_AP_BY_SIGNAL`). The radio's default is the first one
+  it hears, which on a mesh can be the far node.
+
+If the link misbehaves, `/api/status` helps: `state.wifi` has the access point (`bssid`,
+`channel`, `rssi`, `phy`) and the radio's settings (`ps`, `proto`, `txp` in 0.25 dBm steps), and
+`state.loop` shows how the main loop is keeping up (`hz` passes a second and the worst time one
+pass spent in each part, in microseconds). Over USB, `WIFIRADIO` prints the radio's state, and
+`WIFIRADIO ps|proto|txp|bw <n>` or `WIFIRADIO refresh <seconds>` changes a radio setting until
+the next restart, for trying things on a link that is misbehaving.
+
+A saved network that keeps turning the clock away opens the setup network by itself only after
+10 minutes (it was 3): joins that fail for other reasons look the same to the radio.
+
 ## Buttons
 
 A short press changes the spectrum style (left: previous, middle/right: next), or stops an

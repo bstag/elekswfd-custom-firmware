@@ -1,6 +1,7 @@
 // The serial command set: handle() runs one command line (USB, or a display command from UDP).
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <time.h>
 #include "clock_state.h"
 #include "clock_display.h"
@@ -9,6 +10,7 @@
 #include "nvs_store.h"
 #include "standalone.h"
 #include "weather_fetch.h"
+#include "wifi_link.h"
 #include "serial_cmds.h"
 
 // GCLR / GADD / GCOMMIT: a drawing being uploaded over USB
@@ -140,6 +142,31 @@ void handle(const String &s) {
                   net.apMode ? "AP" : (WiFi.status() == WL_CONNECTED ? "connected" : "connecting"),
                   (int)WiFi.status(), prefString(P_SSID).c_str(),
                   WiFi.localIP().toString().c_str(), WiFi.RSSI(), net.ntpSynced);
+  } else if (cmd == "WIFIRADIO") {              // radio diagnostics: "WIFIRADIO [ps 0|1|2] [proto 1|3|7] [txp n] [bw 20|40]"
+    // (not saved: for trying a radio setting on a link that misbehaves; a restart undoes it)
+    int sp1 = arg.indexOf(' ');
+    String what = sp1 < 0 ? arg : arg.substring(0, sp1);
+    int val = sp1 < 0 ? 0 : arg.substring(sp1 + 1).toInt();
+    esp_err_t e = ESP_OK;
+    if (what == "ps") e = esp_wifi_set_ps((wifi_ps_type_t)constrain(val, 0, 2));
+    else if (what == "proto") e = esp_wifi_set_protocol(WIFI_IF_STA, (uint8_t)constrain(val, 1, 7));
+    else if (what == "txp") e = esp_wifi_set_max_tx_power((int8_t)constrain(val, 8, 84));
+    else if (what == "bw") e = esp_wifi_set_bandwidth(WIFI_IF_STA, val == 40 ? WIFI_BW_HT40 : WIFI_BW_HT20);
+    else if (what == "refresh") radioRefreshMs = (uint32_t)constrain(val, 0, 3600) * 1000;   // seconds; 0 = off
+    wifi_ps_type_t ps = WIFI_PS_NONE;
+    uint8_t proto = 0;
+    int8_t txp = 0;
+    wifi_bandwidth_t bw = WIFI_BW_HT20;
+    wifi_ap_record_t ap = {};
+    esp_wifi_get_ps(&ps);
+    esp_wifi_get_protocol(WIFI_IF_STA, &proto);
+    esp_wifi_get_max_tx_power(&txp);
+    esp_wifi_get_bandwidth(WIFI_IF_STA, &bw);
+    bool have = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
+    Serial.printf("radio refresh=%us x%u ", (unsigned)(radioRefreshMs / 1000), (unsigned)radioRefreshes);
+    Serial.printf("radio err=%d ps=%d proto=%d txp=%d bw=%d | ap %02x:%02x:%02x:%02x:%02x:%02x ch=%d rssi=%d 11n=%d\n",
+                  (int)e, (int)ps, proto, txp, bw == WIFI_BW_HT40 ? 40 : 20, ap.bssid[0], ap.bssid[1], ap.bssid[2],
+                  ap.bssid[3], ap.bssid[4], ap.bssid[5], have ? ap.primary : 0, have ? ap.rssi : 0, have ? ap.phy_11n : 0);
   } else if (cmd == "WIFISET") {                // "WIFISET <ssid>\t<pass>" (tab-separated)
     int tab = arg.indexOf('\t');
     if (tab > 0) {

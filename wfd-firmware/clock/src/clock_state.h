@@ -19,6 +19,16 @@ struct Stamp {
   bool within(uint32_t ms) const { return set && millis() - at < ms; }
 };
 
+// How loop() is keeping up, for diagnosing stalls: passes in the last full second and the
+// longest time one pass spent in each part (microseconds), shown as state.loop in /api/status.
+struct LoopStat {
+  uint32_t hz = 0;                                   // passes in the last full second
+  uint32_t serial = 0, web = 0, net = 0, work = 0, draw = 0, pass = 0;   // worst of that second
+  uint32_t worstPass = 0;                            // the longest pass since boot
+  uint32_t udpPerPass = 0;                           // most UDP packets handled in one pass
+};
+extern LoopStat loopStat;
+
 extern const char *FW_BUILD;          // "wfd-clock <date> <time>" (main.cpp)
 extern const int fwProtocol;          // WFD_PROTOCOL (main.cpp)
 

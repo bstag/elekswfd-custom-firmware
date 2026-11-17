@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <time.h>
 #include <ArduinoJson.h>
+#include <esp_wifi.h>
 #include "clock_state.h"
 #include "clock_display.h"
 #include "buttons_alerts.h"
@@ -11,6 +12,7 @@
 #include "ota_update.h"
 #include "standalone.h"
 #include "weather_fetch.h"
+#include "wifi_link.h"
 #include "clock_settings.h"
 
 // ============================= settings (JSON API + phone form) =============================
@@ -250,6 +252,17 @@ void stateJson(JsonObject s) {
   s["protocol"] = fwProtocol;
   s["uptime_s"] = millis() / 1000;
   s["heap_free"] = ESP.getFreeHeap();
+  s["heap_max_block"] = ESP.getMaxAllocHeap();    // far below heap_free = a fragmented heap
+  JsonObject lp = s["loop"].to<JsonObject>();     // the last full second of loop() (see LoopStat)
+  lp["hz"] = loopStat.hz;
+  lp["serial_us"] = loopStat.serial;
+  lp["web_us"] = loopStat.web;
+  lp["net_us"] = loopStat.net;
+  lp["work_us"] = loopStat.work;
+  lp["draw_us"] = loopStat.draw;
+  lp["pass_us"] = loopStat.pass;
+  lp["worst_pass_us"] = loopStat.worstPass;
+  lp["udp_per_pass"] = loopStat.udpPerPass;
   uint8_t t[7];
   if (rtcRead(t)) {
     char tm[24];
@@ -262,6 +275,25 @@ void stateJson(JsonObject s) {
   w["ssid"] = WiFi.SSID();
   w["ip"] = WiFi.localIP().toString();
   w["rssi"] = WiFi.RSSI();
+  wifi_ap_record_t ap;                            // which access point, and how the radio is set up
+  if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+    char mac[18];
+    snprintf(mac, sizeof mac, "%02x:%02x:%02x:%02x:%02x:%02x", ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5]);
+    w["bssid"] = mac;
+    w["channel"] = ap.primary;
+    w["phy"] = ap.phy_11n ? "n" : ap.phy_11g ? "g" : "b";
+  }
+  wifi_ps_type_t ps = WIFI_PS_NONE;
+  uint8_t proto = 0;
+  int8_t txp = 0;
+  esp_wifi_get_ps(&ps);
+  esp_wifi_get_protocol(WIFI_IF_STA, &proto);
+  esp_wifi_get_max_tx_power(&txp);
+  w["ps"] = (int)ps;                              // 0 none, 1 min modem, 2 max modem
+  w["proto"] = proto;                             // bit 0 11b, bit 1 11g, bit 2 11n
+  w["txp"] = txp;                                 // 0.25 dBm steps
+  w["refresh_s"] = radioRefreshMs / 1000;         // transmit power re-applied this often (0 = never)
+  w["refreshes"] = radioRefreshes;
   JsonObject weather = s["weather"].to<JsonObject>();
   weather["fresh"] = wxFresh();
   weather["temp"] = wx.temp;
