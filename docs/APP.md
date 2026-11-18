@@ -125,7 +125,10 @@ name lookup goes out on every network adapter and is repeated, so a VPN or virtu
 the name, since the router may have given the clock a new address.
 
 Once connected over WiFi, one missed answer doesn't drop the link (the clock is busy for a few
-seconds when it fetches the weather); 15 s of silence does. A display packet that Windows
+seconds when it fetches the weather); 15 s of silence does. The app asks for the clock's status
+every 5 s on a thread of its own, so a slow answer (the clock's web server serves one client at
+a time) doesn't pause the display stream. Saving a setting or a drawing does wait for the clock.
+A display packet that Windows
 fails to send (say "no buffer space", os error 10055) drops only that frame: the link stays up
 while the clock answers, and if sends keep failing for about a second the app opens a new
 socket (and says so on the dashboard if that doesn't help either). If the clock answers but
